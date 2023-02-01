@@ -1,5 +1,3 @@
-let foo = 23
-let bar = 45
-let mat = 2 + 5
-
-foo
+let main = () { 
+    3
+}
