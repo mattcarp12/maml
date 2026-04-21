@@ -1,4 +1,4 @@
-package token
+package lexer
 
 type TokenType string
 
@@ -12,7 +12,6 @@ const (
 	FLOAT  = "FLOAT"
 	STRING = "STRING"
 	BOOL   = "BOOL"
-
 
 	// Operators
 	DECLARE_IMMUTABLE = ":="
@@ -39,16 +38,14 @@ const (
 	GTE               = ">="
 
 	//  Delimiters
-	COMMA     = ","
-	LPAREN    = "("
-	RPAREN    = ")"
-	LBRACE    = "{"
-	RBRACE    = "}"
-	LBRACKET  = "["
-	RBRACKET  = "]"
-	LANGLE	 = "<"
-	RANGLE	 = ">"
-	COMMENT   = "//"
+	COMMA    = ","
+	LPAREN   = "("
+	RPAREN   = ")"
+	LBRACE   = "{"
+	RBRACE   = "}"
+	LBRACKET = "["
+	RBRACKET = "]"
+	COMMENT  = "//"
 
 	// Keywords
 	FN     = "FN"
@@ -60,6 +57,7 @@ const (
 	AWAIT  = "AWAIT"
 	IF     = "IF"
 	ELSE   = "ELSE"
+	NIL    = "NIL"
 )
 
 type Token struct {
@@ -77,6 +75,9 @@ var keywords = map[string]TokenType{
 	"await":  AWAIT,
 	"if":     IF,
 	"else":   ELSE,
+	"true":   BOOL,
+	"false":  BOOL,
+	"nil":    NIL,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -85,4 +86,3 @@ func LookupIdent(ident string) TokenType {
 	}
 	return IDENT
 }
-
