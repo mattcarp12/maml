@@ -15,30 +15,29 @@ func TestNextToken(t *testing.T) {
 		{`add = fn(x, y) { x + y }`, []TokenType{IDENT, UPDATE, FN, LPAREN, IDENT, COMMA, IDENT, RPAREN, LBRACE, IDENT, PLUS, IDENT, RBRACE, EOF}},
 		{`"foobar"`, []TokenType{STRING, EOF}},
 		{`"foo bar"`, []TokenType{STRING, EOF}},
+		{`"unterminated string`, []TokenType{ILLEGAL, EOF}},
 		{`3.14`, []TokenType{FLOAT, EOF}},
 		{`42`, []TokenType{INT, EOF}},
-		{`nil`, []TokenType{NIL, EOF}},
 		{`true false`, []TokenType{BOOL, BOOL, EOF}},
 		{`// this is a comment
 		  x = 5`, []TokenType{IDENT, UPDATE, INT, EOF}},
 		{`id |> fetch_user |> validate`, []TokenType{IDENT, PIPE, IDENT, PIPE, IDENT, EOF}},
 		{`@`, []TokenType{ILLEGAL, EOF}},
 		{
-			`
-    		fn add(x: int, y: int) int {
+			`fn add(x: int, y: int) int {
         		=> x + y
-    		}
-    		`, []TokenType{FN, IDENT, LPAREN, IDENT, COLON, IDENT, COMMA, IDENT, COLON, IDENT, RPAREN, IDENT, LBRACE, YIELD, IDENT, PLUS, IDENT, RBRACE, EOF}},
+    		}`, []TokenType{FN, IDENT, LPAREN, IDENT, COLON, IDENT, COMMA, IDENT, COLON, IDENT, RPAREN, IDENT, LBRACE, NEWLINE, YIELD, IDENT, PLUS, IDENT, NEWLINE, RBRACE, EOF}},
+		
 	}
 
-	for _, tt := range tests {
+	for testNum, tt := range tests {
 		l := New(tt.input)
 
-		for i, expectedType := range tt.exptected {
+		for _, expectedType := range tt.exptected {
 			tok := l.NextToken()
 			if tok.Type != expectedType {
 				t.Fatalf("tests[%d] - token [%v] type wrong. expected=%v, got=%v",
-					i, tok.Literal, expectedType, tok.Type)
+					testNum, tok.Literal, expectedType, tok.Type)
 			}
 		}
 	}

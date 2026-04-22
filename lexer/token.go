@@ -5,6 +5,7 @@ type TokenType string
 const (
 	ILLEGAL = "ILLEGAL"
 	EOF     = "EOF"
+	NEWLINE = "NEWLINE"
 
 	// Identifiers + Literals
 	IDENT  = "IDENT"
@@ -45,7 +46,6 @@ const (
 	RBRACE   = "}"
 	LBRACKET = "["
 	RBRACKET = "]"
-	COMMENT  = "//"
 
 	// Keywords
 	FN     = "FN"
@@ -57,13 +57,7 @@ const (
 	AWAIT  = "AWAIT"
 	IF     = "IF"
 	ELSE   = "ELSE"
-	NIL    = "NIL"
 )
-
-type Token struct {
-	Type    TokenType
-	Literal string
-}
 
 var keywords = map[string]TokenType{
 	"fn":     FN,
@@ -77,7 +71,6 @@ var keywords = map[string]TokenType{
 	"else":   ELSE,
 	"true":   BOOL,
 	"false":  BOOL,
-	"nil":    NIL,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -85,4 +78,12 @@ func LookupIdent(ident string) TokenType {
 		return tok
 	}
 	return IDENT
+}
+
+type Token struct {
+	Type    TokenType
+	Literal string
+	// TODO: Add position info for better error reporting
+	Line    int
+	Col     int
 }
