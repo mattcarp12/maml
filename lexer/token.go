@@ -1,62 +1,63 @@
 package lexer
 
-type TokenType string
+//go:generate stringer -type=TokenType
+type TokenType int
 
 const (
-	ILLEGAL = "ILLEGAL"
-	EOF     = "EOF"
-	NEWLINE = "NEWLINE"
+	ILLEGAL TokenType = iota
+	EOF
+	NEWLINE // \n
 
 	// Identifiers + Literals
-	IDENT  = "IDENT"
-	INT    = "INT"
-	FLOAT  = "FLOAT"
-	STRING = "STRING"
-	BOOL   = "BOOL"
+	IDENT  // e.g., myVar, add, x
+	INT    // e.g., 42, 100
+	FLOAT  // e.g., 3.14, 0.5
+	STRING // e.g., "hello world"
+	BOOL   // true, false
 
 	// Operators
-	DECLARE_IMMUTABLE = ":="
-	DECLARE_MUTABLE   = "~="
-	UPDATE            = "="
-	YIELD             = "=>"
-	SEPARATOR         = "|"
-	PIPE              = "|>"
-	DOT               = "."
-	COLON             = ":"
-	PLUS              = "+"
-	MINUS             = "-"
-	MULTIPLY          = "*"
-	DIVIDE            = "/"
-	MODULO            = "%"
-	AND               = "&&"
-	OR                = "||"
-	NOT               = "!"
-	EQ                = "=="
-	NOT_EQ            = "!="
-	LT                = "<"
-	GT                = ">"
-	LTE               = "<="
-	GTE               = ">="
+	DECLARE_IMMUTABLE // :=
+	DECLARE_MUTABLE   // ~=
+	UPDATE            // =
+	YIELD             // =>
+	SEPARATOR         // |
+	PIPE              // |>
+	DOT               // .
+	COLON             // :
+	PLUS              // +
+	MINUS             // -
+	MULTIPLY          // *
+	DIVIDE            // /
+	MODULO            // %
+	AND               // &&
+	OR                // ||
+	NOT               // !
+	EQ                // ==
+	NOT_EQ            // !=
+	LT                // <
+	GT                // >
+	LTE               // <=
+	GTE               // >=
 
-	//  Delimiters
-	COMMA    = ","
-	LPAREN   = "("
-	RPAREN   = ")"
-	LBRACE   = "{"
-	RBRACE   = "}"
-	LBRACKET = "["
-	RBRACKET = "]"
+	// Delimiters
+	COMMA    // ,
+	LPAREN   // (
+	RPAREN   // )
+	LBRACE   // {
+	RBRACE   // }
+	LBRACKET // [
+	RBRACKET // ]
 
 	// Keywords
-	FN     = "FN"
-	MATCH  = "MATCH"
-	CASE   = "CASE"
-	TYPE   = "TYPE"
-	STRUCT = "STRUCT"
-	ASYNC  = "ASYNC"
-	AWAIT  = "AWAIT"
-	IF     = "IF"
-	ELSE   = "ELSE"
+	FN     // fn
+	MATCH  // match
+	CASE   // case
+	TYPE   // type
+	STRUCT // struct
+	ASYNC  // async
+	AWAIT  // await
+	IF     // if
+	ELSE   // else
 )
 
 var keywords = map[string]TokenType{
@@ -83,7 +84,6 @@ func LookupIdent(ident string) TokenType {
 type Token struct {
 	Type    TokenType
 	Literal string
-	// TODO: Add position info for better error reporting
 	Line    int
 	Col     int
 }
