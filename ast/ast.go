@@ -1,276 +1,113 @@
+// ast.go defines the abstract syntax tree (AST) structures for the MAML language.
+
 package ast
 
-// Node is the base interface for all AST nodes.
+import "fmt"
+
+// The base Node interface
 type Node interface {
 	TokenLiteral() string
 }
 
-// Program represents the entire source file.
+// All statement nodes implement this
+type Statement interface {
+	Node
+	statementNode()
+}
+
+// All expression nodes implement this
+type Expression interface {
+	Node
+	expressionNode()
+}
+
 type Program struct {
-	Declarations []Declaration
+	Statements []Statement
 }
 
 func (p *Program) TokenLiteral() string {
-	if len(p.Declarations) > 0 {
-		return p.Declarations[0].TokenLiteral()
+	if len(p.Statements) > 0 {
+		return p.Statements[0].TokenLiteral()
 	}
 	return ""
 }
 
-// ================================================
-// Declarations (top-level)
-// ================================================
-
-type Declaration interface {
-	Node
-	declNode()
-}
-
-// FnDecl represents a function declaration: `fn name(params) retType { ... }`
-type FnDecl struct {
-	Name    string
-	Params  []Param
-	RetType string // TODO: replace with proper TypeExpr later
-	Body    *Block
-	IsAsync bool
-}
-
-func (fd *FnDecl) TokenLiteral() string { return "fn" }
-func (fd *FnDecl) declNode()            {}
-
-// Param represents a function parameter: `name: type`
-type Param struct {
+type FunctionDecl struct {
 	Name string
-	Type string // TODO: replace with proper TypeExpr later
+	// Parameters []string // TODO: implement parameters
+	ReturnType string
+	Body       *BlockStatement
 }
 
-// TypeDecl represents a type declaration (for ADTs, structs, etc.)
-type TypeDecl struct {
-	Name     string
-	Variants []Variant
+func (fd *FunctionDecl) TokenLiteral() string {
+	return fd.Name
 }
 
-func (td *TypeDecl) TokenLiteral() string { return "type" }
-func (td *TypeDecl) declNode()            {}
+func (fd *FunctionDecl) statementNode() {}
 
-// Variant is used for sum types (e.g., `type Option { Some(T) None }`)
-type Variant struct {
-	Name   string
-	Fields []string
+type BlockStatement struct {
+	Statements []Statement
 }
 
-// ================================================
-// Statements
-// ================================================
-
-type Statement interface {
-	Node
-	stmtNode()
+func (bs *BlockStatement) TokenLiteral() string {
+	if len(bs.Statements) > 0 {
+		return bs.Statements[0].TokenLiteral()
+	}
+	return ""
 }
 
-// DeclareStmt represents immutable (`:=`) or mutable (`~=`) declarations
-type DeclareStmt struct {
+func (bs *BlockStatement) statementNode() {}
+
+type DeclareStatement struct {
 	Name    string
 	Mutable bool
-	Value   Expr
+	Value   Expression
 }
 
-func (ds *DeclareStmt) TokenLiteral() string { return ds.Name }
-func (ds *DeclareStmt) stmtNode()            {}
-func (ds *DeclareStmt) declNode()            {} // can appear at top level
-
-// UpdateStmt represents assignment: `x = value`
-type UpdateStmt struct {
-	Name  string
-	Value Expr
+func (ds *DeclareStatement) TokenLiteral() string {
+	return ds.Name
 }
 
-func (us *UpdateStmt) TokenLiteral() string { return us.Name }
-func (us *UpdateStmt) stmtNode()            {}
+func (ds *DeclareStatement) statementNode() {}
 
-// ExprStmt represents an expression used as a statement (e.g. function calls)
-type ExprStmt struct {
-	Expr Expr
+type ReturnStatement struct {
+	Value Expression
 }
 
-func (es *ExprStmt) TokenLiteral() string { return "" } // or es.Expr.TokenLiteral()
-func (es *ExprStmt) stmtNode()            {}
-
-// ================================================
-// Expressions
-// ================================================
-
-type Expr interface {
-	Node
-	exprNode()
+func (rs *ReturnStatement) TokenLiteral() string {
+	return "return"
 }
 
-// Literals
+func (rs *ReturnStatement) statementNode() {}
+
+type Identifier struct {
+	Value string
+}
+
+func (i *Identifier) TokenLiteral() string {
+	return i.Value
+}
+
+func (i *Identifier) expressionNode() {}
+
 type IntLiteral struct {
 	Value int64
 }
 
-func (il *IntLiteral) TokenLiteral() string { return "INT" }
-func (il *IntLiteral) exprNode()            {}
-
-type FloatLiteral struct {
-	Value float64
+func (il *IntLiteral) TokenLiteral() string {
+	return fmt.Sprintf("%d", il.Value)
 }
 
-func (fl *FloatLiteral) TokenLiteral() string { return "FLOAT" }
-func (fl *FloatLiteral) exprNode()            {}
+func (il *IntLiteral) expressionNode() {}
 
-type StringLiteral struct {
-	Value string
+type InfixExpression struct {
+	Left     Expression
+	Operator string
+	Right    Expression
 }
 
-func (sl *StringLiteral) TokenLiteral() string { return "STRING" }
-func (sl *StringLiteral) exprNode()            {}
-
-type BoolLiteral struct {
-	Value bool
+func (ie *InfixExpression) TokenLiteral() string {
+	return ie.Operator // e.g., "+"
 }
 
-func (bl *BoolLiteral) TokenLiteral() string { return "BOOL" }
-func (bl *BoolLiteral) exprNode()            {}
-
-type NilLiteral struct{}
-
-func (nl *NilLiteral) TokenLiteral() string { return "nil" }
-func (nl *NilLiteral) exprNode()            {}
-
-// Identifier
-type Identifier struct {
-	Name string
-}
-
-func (i *Identifier) TokenLiteral() string { return i.Name }
-func (i *Identifier) exprNode()            {}
-
-// Operators
-type BinaryExpr struct {
-	Left  Expr
-	Op    string
-	Right Expr
-}
-
-func (be *BinaryExpr) TokenLiteral() string { return be.Op }
-func (be *BinaryExpr) exprNode()            {}
-
-type UnaryExpr struct {
-	Op      string
-	Operand Expr
-}
-
-func (ue *UnaryExpr) TokenLiteral() string { return ue.Op }
-func (ue *UnaryExpr) exprNode()            {}
-
-// Function call and method access
-type CallExpr struct {
-	Function Expr   // can be Identifier or FieldAccess for UFCS (foo.bar())
-	Args     []Expr
-}
-
-func (ce *CallExpr) TokenLiteral() string { return "" }
-func (ce *CallExpr) exprNode()            {}
-
-type FieldAccess struct {
-	Object Expr
-	Field  string
-}
-
-func (fa *FieldAccess) TokenLiteral() string { return "." }
-func (fa *FieldAccess) exprNode()            {}
-
-// Control flow expressions
-type IfExpr struct {
-	Condition Expr
-	Then      *Block
-	Else      *Block
-}
-
-func (ie *IfExpr) TokenLiteral() string { return "if" }
-func (ie *IfExpr) exprNode()            {}
-
-type MatchExpr struct {
-	Subject Expr
-	Cases   []*MatchCase
-}
-
-func (me *MatchExpr) TokenLiteral() string { return "match" }
-func (me *MatchExpr) exprNode()            {}
-
-type MatchCase struct {
-	Pattern Pattern
-	Body    *Block
-}
-
-type YieldExpr struct { // =>
-	Value Expr
-}
-
-func (ye *YieldExpr) TokenLiteral() string { return "=>" }
-func (ye *YieldExpr) exprNode()            {}
-
-type AwaitExpr struct {
-	Value Expr
-}
-
-func (ae *AwaitExpr) TokenLiteral() string { return "await" }
-func (ae *AwaitExpr) exprNode()            {}
-
-type PipeExpr struct {
-	Left  Expr
-	Right Expr
-}
-
-func (pe *PipeExpr) TokenLiteral() string { return "|>" }
-func (pe *PipeExpr) exprNode()            {}
-
-// Block of statements (used in functions, if, match, etc.)
-type Block struct {
-	Statements []Statement
-}
-
-func (b *Block) TokenLiteral() string {
-	if len(b.Statements) > 0 {
-		return b.Statements[0].TokenLiteral()
-	}
-	return ""
-}
-
-// ================================================
-// Patterns (for match expressions)
-// ================================================
-
-type Pattern interface {
-	Node
-	patternNode()
-}
-
-type WildcardPattern struct{} // _
-
-func (wp *WildcardPattern) TokenLiteral() string { return "_" }
-func (wp *WildcardPattern) patternNode()         {}
-
-type LiteralPattern struct {
-	Value Expr
-}
-
-func (lp *LiteralPattern) TokenLiteral() string { return "literal" }
-func (lp *LiteralPattern) patternNode()         {}
-
-type IdentPattern struct {
-	Name string
-}
-
-func (ip *IdentPattern) TokenLiteral() string { return ip.Name }
-func (ip *IdentPattern) patternNode()         {}
-
-type ConstructorPattern struct {
-	Name   string
-	Fields []Pattern
-}
-
-func (cp *ConstructorPattern) TokenLiteral() string { return cp.Name }
-func (cp *ConstructorPattern) patternNode()         {}
+func (ie *InfixExpression) expressionNode() {}

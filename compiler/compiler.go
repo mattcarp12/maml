@@ -1,0 +1,120 @@
+package compiler
+
+import (
+	"fmt"
+
+	"github.com/llir/llvm/ir"
+	"github.com/llir/llvm/ir/constant"
+	"github.com/llir/llvm/ir/types"
+	"github.com/llir/llvm/ir/value"
+	"github.com/mattcarp12/maml/ast"
+)
+
+type Compiler struct {
+	module *ir.Module
+
+	// The current block of code we are writing LLVM instructions to
+	currentBlock *ir.Block
+
+	// Our "Symbol Table". It maps a MAML variable name (like "x")
+	// to an LLVM memory pointer.
+	env map[string]value.Value
+}
+
+func New() *Compiler {
+	return &Compiler{
+		module: ir.NewModule(),
+		env:    make(map[string]value.Value),
+	}
+}
+
+// Compile is the entry point. It takes the root AST node and walks the tree.
+func (c *Compiler) Compile(node ast.Node) error {
+	switch n := node.(type) {
+	case *ast.Program:
+		for _, stmt := range n.Statements {
+			if err := c.Compile(stmt); err != nil {
+				return err
+			}
+		}
+
+	case *ast.FunctionDecl:
+		// 1. Create the LLVM function returning an i32 (integer)
+		funcType := ir.NewFunc(n.Name, types.I32)
+		c.module.Funcs = append(c.module.Funcs, funcType)
+
+		// 2. Create the first "Basic Block" (the entry point of the function)
+		c.currentBlock = funcType.NewBlock("entry")
+
+		// 3. Compile the body of the function
+		if err := c.Compile(n.Body); err != nil {
+			return err
+		}
+
+	case *ast.BlockStatement:
+		for _, stmt := range n.Statements {
+			if err := c.Compile(stmt); err != nil {
+				return err
+			}
+		}
+
+	case *ast.DeclareStatement:
+		// For our tracer bullet, evaluate the right side (should be an IntLiteral)
+		val, err := c.evaluateExpression(n.Value)
+		if err != nil {
+			return err
+		}
+
+		// Allocate memory for an i32
+		alloc := c.currentBlock.NewAlloca(types.I32)
+
+		// Store the value into that memory
+		c.currentBlock.NewStore(val, alloc)
+
+		// Save the memory pointer in our symbol table so we can find 'x' later!
+		c.env[n.Name] = alloc
+
+	case *ast.ReturnStatement:
+		val, err := c.evaluateExpression(n.Value)
+		if err != nil {
+			return err
+		}
+		c.currentBlock.NewRet(val)
+	}
+
+	return nil
+}
+
+// String outputs the final LLVM IR text
+func (c *Compiler) String() string {
+	return c.module.String()
+}
+
+func (c *Compiler) evaluateExpression(expr ast.Expression) (value.Value, error) {
+	switch e := expr.(type) {
+	case *ast.IntLiteral:
+		// Convert MAML int to LLVM i32 constant
+		return constant.NewInt(types.I32, e.Value), nil
+
+	case *ast.Identifier:
+		// Look up the pointer in our symbol table
+		ptr, ok := c.env[e.Value]
+		if !ok {
+			return nil, fmt.Errorf("undefined variable: %s", e.Value)
+		}
+		// In LLVM, you can't just use a pointer; you have to Load the value from memory
+		load := c.currentBlock.NewLoad(types.I32, ptr)
+		return load, nil
+
+	case *ast.InfixExpression:
+		left, _ := c.evaluateExpression(e.Left)
+		right, _ := c.evaluateExpression(e.Right)
+
+		if e.Operator == "+" {
+			// Generate the LLVM 'add' instruction
+			return c.currentBlock.NewAdd(left, right), nil
+		}
+		return nil, fmt.Errorf("unsupported operator: %s", e.Operator)
+	}
+	return nil, fmt.Errorf("unsupported expression: %T", expr)
+}
