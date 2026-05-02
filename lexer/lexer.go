@@ -1,15 +1,17 @@
 package lexer
 
+import "github.com/mattcarp12/maml/token"
+
 // Lexer turns source code (string) into a stream of Token objects.
 type Lexer struct {
-	input            string // the source code being tokenized
-	position         int    // points to the current character (l.ch)
-	readPosition     int    // points to the next character to read
-	ch               byte   // current character under examination
-	line             int    // current line number (1-based)
-	col              int    // current column number (1-based)
-	lastEmittedToken TokenType // Tracks the last token to power ASI
-	bracketDepth     int       // Tracks open (), [], {} for ASI
+	input            string          // the source code being tokenized
+	position         int             // points to the current character (l.ch)
+	readPosition     int             // points to the next character to read
+	ch               byte            // current character under examination
+	line             int             // current line number (1-based)
+	col              int             // current column number (1-based)
+	lastEmittedToken token.TokenType // Tracks the last token to power ASI
+	bracketDepth     int             // Tracks open (), [], {} for ASI
 }
 
 // New creates and initializes a new Lexer.
@@ -24,130 +26,130 @@ func New(input string) *Lexer {
 }
 
 // NextToken returns the next token from the input.
-func (l *Lexer) NextToken() Token {
+func (l *Lexer) NextToken() token.Token {
 	l.skipWhitespace()
 
 	// Capture the start position of this token
 	startLine := l.line
 	startCol := l.col
 
-	var tok Token
+	var tok token.Token
 
 	switch l.ch {
 	// === Two-character operators ===
 	case '=':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(EQ, startLine, startCol)
+			tok = l.twoCharToken(token.EQ, startLine, startCol)
 		} else if l.peekChar() == '>' {
-			tok = l.twoCharToken(YIELD, startLine, startCol)
+			tok = l.twoCharToken(token.YIELD, startLine, startCol)
 		} else {
-			tok = l.newToken(UPDATE, l.ch, startLine, startCol)
+			tok = l.newToken(token.UPDATE, l.ch, startLine, startCol)
 		}
 	case '~':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(DECLARE_MUTABLE, startLine, startCol)
+			tok = l.twoCharToken(token.DECLARE_MUTABLE, startLine, startCol)
 		} else {
-			tok = l.newToken(ILLEGAL, l.ch, startLine, startCol)
+			tok = l.newToken(token.ILLEGAL, l.ch, startLine, startCol)
 		}
 	case ':':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(DECLARE_IMMUTABLE, startLine, startCol)
+			tok = l.twoCharToken(token.DECLARE_IMMUTABLE, startLine, startCol)
 		} else {
-			tok = l.newToken(COLON, l.ch, startLine, startCol)
+			tok = l.newToken(token.COLON, l.ch, startLine, startCol)
 		}
 	case '|':
 		if l.peekChar() == '>' {
-			tok = l.twoCharToken(PIPE, startLine, startCol)
+			tok = l.twoCharToken(token.PIPE, startLine, startCol)
 		} else if l.peekChar() == '|' {
-			tok = l.twoCharToken(OR, startLine, startCol)
+			tok = l.twoCharToken(token.OR, startLine, startCol)
 		} else {
-			tok = l.newToken(SEPARATOR, l.ch, startLine, startCol)
+			tok = l.newToken(token.SEPARATOR, l.ch, startLine, startCol)
 		}
 	case '&':
 		if l.peekChar() == '&' {
-			tok = l.twoCharToken(AND, startLine, startCol)
+			tok = l.twoCharToken(token.AND, startLine, startCol)
 		} else {
-			tok = l.newToken(ILLEGAL, l.ch, startLine, startCol)
+			tok = l.newToken(token.ILLEGAL, l.ch, startLine, startCol)
 		}
 	case '!':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(NOT_EQ, startLine, startCol)
+			tok = l.twoCharToken(token.NOT_EQ, startLine, startCol)
 		} else {
-			tok = l.newToken(NOT, l.ch, startLine, startCol)
+			tok = l.newToken(token.NOT, l.ch, startLine, startCol)
 		}
 	case '<':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(LTE, startLine, startCol)
+			tok = l.twoCharToken(token.LTE, startLine, startCol)
 		} else {
-			tok = l.newToken(LT, l.ch, startLine, startCol)
+			tok = l.newToken(token.LT, l.ch, startLine, startCol)
 		}
 	case '>':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(GTE, startLine, startCol)
+			tok = l.twoCharToken(token.GTE, startLine, startCol)
 		} else {
-			tok = l.newToken(GT, l.ch, startLine, startCol)
+			tok = l.newToken(token.GT, l.ch, startLine, startCol)
 		}
 
 	// === Single-character tokens & Delimiters ===
 	case '+':
-		tok = l.newToken(PLUS, l.ch, startLine, startCol)
+		tok = l.newToken(token.PLUS, l.ch, startLine, startCol)
 	case '-':
-		tok = l.newToken(MINUS, l.ch, startLine, startCol)
+		tok = l.newToken(token.MINUS, l.ch, startLine, startCol)
 	case '*':
-		tok = l.newToken(MULTIPLY, l.ch, startLine, startCol)
+		tok = l.newToken(token.MULTIPLY, l.ch, startLine, startCol)
 	case '/':
 		if l.peekChar() == '/' {
 			l.skipComment()
 			return l.NextToken() // Recurse to get the next meaningful token
 		}
-		tok = l.newToken(DIVIDE, l.ch, startLine, startCol)
+		tok = l.newToken(token.DIVIDE, l.ch, startLine, startCol)
 	case '%':
-		tok = l.newToken(MODULO, l.ch, startLine, startCol)
+		tok = l.newToken(token.MODULO, l.ch, startLine, startCol)
 	case '.':
-		tok = l.newToken(DOT, l.ch, startLine, startCol)
+		tok = l.newToken(token.DOT, l.ch, startLine, startCol)
 	case ',':
-		tok = l.newToken(COMMA, l.ch, startLine, startCol)
-		
+		tok = l.newToken(token.COMMA, l.ch, startLine, startCol)
+
 	// Track Bracket Depth for ASI
 	case '{':
 		l.bracketDepth++
-		tok = l.newToken(LBRACE, l.ch, startLine, startCol)
+		tok = l.newToken(token.LBRACE, l.ch, startLine, startCol)
 	case '}':
 		l.bracketDepth--
-		tok = l.newToken(RBRACE, l.ch, startLine, startCol)
+		tok = l.newToken(token.RBRACE, l.ch, startLine, startCol)
 	case '(':
 		l.bracketDepth++
-		tok = l.newToken(LPAREN, l.ch, startLine, startCol)
+		tok = l.newToken(token.LPAREN, l.ch, startLine, startCol)
 	case ')':
 		l.bracketDepth--
-		tok = l.newToken(RPAREN, l.ch, startLine, startCol)
+		tok = l.newToken(token.RPAREN, l.ch, startLine, startCol)
 	case '[':
 		l.bracketDepth++
-		tok = l.newToken(LBRACKET, l.ch, startLine, startCol)
+		tok = l.newToken(token.LBRACKET, l.ch, startLine, startCol)
 	case ']':
 		l.bracketDepth--
-		tok = l.newToken(RBRACKET, l.ch, startLine, startCol)
+		tok = l.newToken(token.RBRACKET, l.ch, startLine, startCol)
 
 	// === Special cases ===
 	case '"':
 		str := l.readString()
-		typ := STRING
+		typ := token.STRING
 		if l.ch != '"' {
-			typ = ILLEGAL // unterminated string
+			typ = token.ILLEGAL // unterminated string
 		}
-		tok = Token{Type: TokenType(typ), Literal: str, Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.TokenType(typ), Literal: str, Line: startLine, Col: startCol}
 
 	case '\n':
-		tok = Token{Type: NEWLINE, Literal: "\\n", Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.NEWLINE, Literal: "\\n", Line: startLine, Col: startCol}
 
 	case 0: // end of input
-		tok = Token{Type: EOF, Literal: "", Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.EOF, Literal: "", Line: startLine, Col: startCol}
 
 	default:
 		if isLetter(l.ch) {
 			literal := l.readIdentifier()
-			tok = Token{
-				Type:    LookupIdent(literal),
+			tok = token.Token{
+				Type:    token.LookupIdent(literal),
 				Literal: literal,
 				Line:    startLine,
 				Col:     startCol,
@@ -156,7 +158,7 @@ func (l *Lexer) NextToken() Token {
 			return tok
 		} else if isDigit(l.ch) {
 			literal, typ := l.readNumber()
-			tok = Token{
+			tok = token.Token{
 				Type:    typ,
 				Literal: literal,
 				Line:    startLine,
@@ -165,7 +167,7 @@ func (l *Lexer) NextToken() Token {
 			l.lastEmittedToken = tok.Type // Store before early return
 			return tok
 		} else {
-			tok = l.newToken(ILLEGAL, l.ch, startLine, startCol)
+			tok = l.newToken(token.ILLEGAL, l.ch, startLine, startCol)
 		}
 	}
 
@@ -175,11 +177,11 @@ func (l *Lexer) NextToken() Token {
 }
 
 // twoCharToken consumes the current character + the next one and returns a token.
-func (l *Lexer) twoCharToken(tokenType TokenType, startLine, startCol int) Token {
+func (l *Lexer) twoCharToken(tokenType token.TokenType, startLine, startCol int) token.Token {
 	first := l.ch
 	l.readChar() // consume the second character
 	literal := string(first) + string(l.ch)
-	return Token{
+	return token.Token{
 		Type:    tokenType,
 		Literal: literal,
 		Line:    startLine,
@@ -188,8 +190,8 @@ func (l *Lexer) twoCharToken(tokenType TokenType, startLine, startCol int) Token
 }
 
 // newToken creates a single-character token.
-func (l *Lexer) newToken(tokenType TokenType, ch byte, startLine, startCol int) Token {
-	return Token{
+func (l *Lexer) newToken(tokenType token.TokenType, ch byte, startLine, startCol int) token.Token {
+	return token.Token{
 		Type:    tokenType,
 		Literal: string(ch),
 		Line:    startLine,
@@ -266,7 +268,7 @@ func (l *Lexer) readIdentifier() string {
 }
 
 // readNumber reads integers or floats.
-func (l *Lexer) readNumber() (string, TokenType) {
+func (l *Lexer) readNumber() (string, token.TokenType) {
 	position := l.position
 	for isDigit(l.ch) {
 		l.readChar()
@@ -276,9 +278,9 @@ func (l *Lexer) readNumber() (string, TokenType) {
 		for isDigit(l.ch) {
 			l.readChar()
 		}
-		return l.input[position:l.position], FLOAT
+		return l.input[position:l.position], token.FLOAT
 	}
-	return l.input[position:l.position], INT
+	return l.input[position:l.position], token.INT
 }
 
 // readString reads the content inside "...".
@@ -302,9 +304,9 @@ func isDigit(ch byte) bool {
 }
 
 // canEndStatement determines if the current token type legally ends a statement.
-func canEndStatement(typ TokenType) bool {
+func canEndStatement(typ token.TokenType) bool {
 	switch typ {
-	case IDENT, INT, FLOAT, STRING, BOOL, RPAREN, RBRACE, RBRACKET:
+	case token.IDENT, token.INT, token.FLOAT, token.STRING, token.BOOL, token.RPAREN, token.RBRACE, token.RBRACKET:
 		return true
 	default:
 		return false

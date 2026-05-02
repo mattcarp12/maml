@@ -1,13 +1,17 @@
 package parser
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mattcarp12/maml/ast"
 	"github.com/mattcarp12/maml/lexer"
 )
 
-// Helper to catch and print parser errors
+// -----------------------------------------------------------------------------
+// Core Helpers
+// -----------------------------------------------------------------------------
+
 func checkParserErrors(t *testing.T, p *Parser) {
 	errors := p.Errors()
 	if len(errors) == 0 {
@@ -21,172 +25,224 @@ func checkParserErrors(t *testing.T, p *Parser) {
 	t.FailNow()
 }
 
-func TestDeclareStatements(t *testing.T) {
-	input := `
-	x := 20
-	y ~= 22
-	`
-
-	l := lexer.New(input)
+// parseFunctionBody is a critical helper. Since MAML requires statements to be
+// inside a function, this wraps our test inputs in a dummy function and extracts
+// the body so we can test statements directly.
+func parseFunctionBody(t *testing.T, input string) []ast.Stmt {
+	fullInput := "fn test() int {\n" + input + "\n}"
+	l := lexer.New(fullInput)
 	p := New(l)
 	program := p.ParseProgram()
 	checkParserErrors(t, p)
 
-	if program == nil {
-		t.Fatalf("ParseProgram() returned nil")
-	}
-	if len(program.Statements) != 2 {
-		t.Fatalf("program.Statements does not contain 2 statements. got=%d", len(program.Statements))
+	if len(program.Decls) != 1 {
+		t.Fatalf("program.Decls does not contain 1 declaration. got=%d", len(program.Decls))
 	}
 
-	tests := []struct {
-		expectedIdentifier string
-		expectedMutable    bool
-	}{
-		{"x", false},
-		{"y", true},
+	fn, ok := program.Decls[0].(*ast.FnDecl)
+	if !ok {
+		t.Fatalf("decl is not FnDecl. got=%T", program.Decls[0])
 	}
 
-	for i, tt := range tests {
-		stmt := program.Statements[i]
-		testDeclareStatement(t, stmt, tt.expectedIdentifier, tt.expectedMutable)
-	}
+	return fn.Body.Statements
 }
 
-func testDeclareStatement(t *testing.T, s ast.Statement, name string, mutable bool) bool {
-	declStmt, ok := s.(*ast.DeclareStatement)
-	if !ok {
-		t.Errorf("s not *ast.DeclareStatement. got=%T", s)
-		return false
+// -----------------------------------------------------------------------------
+// Statement Tests
+// -----------------------------------------------------------------------------
+
+func TestDeclareStatements(t *testing.T) {
+	tests := []struct {
+		input         string
+		expectedName  string
+		expectedMut   bool
+		expectedValue interface{}
+	}{
+		{"x := 5", "x", false, 5},
+		{"y ~= 10", "y", true, 10},
+		{"foobar := y", "foobar", false, "y"},
 	}
 
-	if declStmt.Name != name {
-		t.Errorf("declStmt.Name not '%s'. got=%s", name, declStmt.Name)
-		return false
-	}
+	for _, tt := range tests {
+		stmts := parseFunctionBody(t, tt.input)
+		if len(stmts) != 1 {
+			t.Fatalf("expected 1 statement, got %d", len(stmts))
+		}
 
-	if declStmt.Mutable != mutable {
-		t.Errorf("declStmt.Mutable not '%t'. got=%t", mutable, declStmt.Mutable)
-		return false
-	}
+		stmt := stmts[0]
+		declStmt, ok := stmt.(*ast.DeclareStmt)
+		if !ok {
+			t.Fatalf("stmt is not ast.DeclareStmt. got=%T", stmt)
+		}
 
-	return true
+		if declStmt.Name != tt.expectedName {
+			t.Errorf("declStmt.Name not '%s'. got=%s", tt.expectedName, declStmt.Name)
+		}
+		if declStmt.Mutable != tt.expectedMut {
+			t.Errorf("declStmt.Mutable not '%t'. got=%t", tt.expectedMut, declStmt.Mutable)
+		}
+
+		testLiteralExpression(t, declStmt.Value, tt.expectedValue)
+	}
 }
 
 func TestReturnStatements(t *testing.T) {
-	input := `
-	=> 5
-	=> x
-	`
-
-	l := lexer.New(input)
-	p := New(l)
-	program := p.ParseProgram()
-	checkParserErrors(t, p)
-
-	if len(program.Statements) != 2 {
-		t.Fatalf("program.Statements does not contain 2 statements. got=%d", len(program.Statements))
-	}
-
-	for _, stmt := range program.Statements {
-		returnStmt, ok := stmt.(*ast.ReturnStatement)
-		if !ok {
-			t.Errorf("stmt not *ast.ReturnStatement. got=%T", stmt)
-			continue
-		}
-		if returnStmt.TokenLiteral() != "return" {
-			t.Errorf("returnStmt.TokenLiteral not 'return', got %q", returnStmt.TokenLiteral())
-		}
-	}
-}
-
-func TestParsingInfixExpressions(t *testing.T) {
-	infixTests := []struct {
-		input      string
-		leftValue  string
-		operator   string
-		rightValue string
+	tests := []struct {
+		input         string
+		expectedValue interface{}
 	}{
-		{"x + y", "x", "+", "y"},
-		{"5 + 5", "5", "+", "5"},
+		{"=> 5", 5},
+		{"=> x", "x"},
 	}
 
-	for _, tt := range infixTests {
-		l := lexer.New(tt.input)
-		p := New(l)
-		expression := p.parseExpression(LOWEST)
-		checkParserErrors(t, p)
-
-		if expression == nil {
-			t.Fatalf("Failed to parse expression: %s", tt.input)
+	for _, tt := range tests {
+		stmts := parseFunctionBody(t, tt.input)
+		if len(stmts) != 1 {
+			t.Fatalf("expected 1 statement, got %d", len(stmts))
 		}
 
-		infixExp, ok := expression.(*ast.InfixExpression)
+		returnStmt, ok := stmts[0].(*ast.ReturnStmt)
 		if !ok {
-			t.Fatalf("expression is not *ast.InfixExpression. got=%T", expression)
+			t.Fatalf("stmt is not ast.ReturnStmt. got=%T", stmts[0])
 		}
 
-		if infixExp.Operator != tt.operator {
-			t.Errorf("Operator is not '%s'. got=%s", tt.operator, infixExp.Operator)
-		}
-
+		testLiteralExpression(t, returnStmt.Value, tt.expectedValue)
 	}
 }
 
-// The Grand Finale: Testing the Tracer Bullet
-func TestTracerBulletProgram(t *testing.T) {
-	input := `
-	fn main() int {
-		x := 20
-		y := 22
-		=> x + y
-	}
-	`
+// -----------------------------------------------------------------------------
+// Top-Level Declaration Tests
+// -----------------------------------------------------------------------------
+
+func TestFunctionDeclarations(t *testing.T) {
+	input := `fn add() int { => 5 }`
 
 	l := lexer.New(input)
 	p := New(l)
 	program := p.ParseProgram()
 	checkParserErrors(t, p)
 
-	if len(program.Statements) != 1 {
-		t.Fatalf("program.Statements does not contain 1 statements. got=%d", len(program.Statements))
+	if len(program.Decls) != 1 {
+		t.Fatalf("program.Decls does not contain 1 declaration. got=%d", len(program.Decls))
 	}
 
-	funcDecl, ok := program.Statements[0].(*ast.FunctionDecl)
+	fn, ok := program.Decls[0].(*ast.FnDecl)
 	if !ok {
-		t.Fatalf("program.Statements[0] is not ast.FunctionDecl. got=%T", program.Statements[0])
+		t.Fatalf("decl is not FnDecl. got=%T", program.Decls[0])
 	}
 
-	if funcDecl.Name != "main" {
-		t.Errorf("funcDecl.Name is not 'main'. got=%s", funcDecl.Name)
+	if fn.Name != "add" {
+		t.Errorf("fn.Name not 'add'. got=%s", fn.Name)
 	}
 
-	if funcDecl.ReturnType != "int" {
-		t.Errorf("funcDecl.ReturnType is not 'int'. got=%s", funcDecl.ReturnType)
-	}
-
-	if len(funcDecl.Body.Statements) != 3 {
-		t.Fatalf("funcDecl.Body does not contain 3 statements. got=%d", len(funcDecl.Body.Statements))
-	}
-
-	// 1. x := 20
-	testDeclareStatement(t, funcDecl.Body.Statements[0], "x", false)
-
-	// 2. y := 22
-	testDeclareStatement(t, funcDecl.Body.Statements[1], "y", false)
-
-	// 3. => x + y
-	retStmt, ok := funcDecl.Body.Statements[2].(*ast.ReturnStatement)
+	returnType, ok := fn.ReturnType.(*ast.NamedType)
 	if !ok {
-		t.Fatalf("statements[2] is not ReturnStatement. got=%T", funcDecl.Body.Statements[2])
+		t.Fatalf("fn.ReturnType is not NamedType. got=%T", fn.ReturnType)
+	}
+	if returnType.Name != "int" {
+		t.Errorf("returnType.Name not 'int'. got=%s", returnType.Name)
 	}
 
-	infix, ok := retStmt.Value.(*ast.InfixExpression)
+	if len(fn.Body.Statements) != 1 {
+		t.Fatalf("fn.Body.Statements has wrong length. got=%d", len(fn.Body.Statements))
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Expression & Math Tests (Pratt Parser Validation)
+// -----------------------------------------------------------------------------
+
+func TestOperatorPrecedenceParsing(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			"a + b",
+			"(a + b)",
+		},
+		{
+			"a + b + c",
+			"((a + b) + c)",
+		},
+		{
+			"a + b - c",
+			"((a + b) - c)",
+		},
+		// NOTE: Once you add multiplication (*), division (/), and parenthesis ()
+		// to your infix/prefix maps, you can uncomment these to test them!
+		// {
+		// 	"a + b * c",
+		// 	"(a + (b * c))",
+		// },
+		// {
+		// 	"a * b + c",
+		// 	"((a * b) + c)",
+		// },
+		// {
+		// 	"5 + (2 * 3)",
+		// 	"(5 + (2 * 3))",
+		// },
+	}
+
+	for _, tt := range tests {
+		// stmts := parseFunctionBody(t, tt.input)
+		// We expect the math to be parsed as a floating expression (which currently causes an error
+		// in our strict stmt block because we only allow := and =>).
+		// For exhaustive testing, you usually create a dummy "ExpressionStatement" in the AST
+		// just so floating math can exist, OR we wrap it in a return statement for this test:
+
+		inputWrapped := fmt.Sprintf("=> %s", tt.input)
+		stmtsWrapped := parseFunctionBody(t, inputWrapped)
+
+		retStmt := stmtsWrapped[0].(*ast.ReturnStmt)
+		actual := retStmt.Value.String()
+
+		if actual != tt.expected {
+			t.Errorf("expected=%q, got=%q", tt.expected, actual)
+		}
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Expression Type Assertions (The "SOTA" Generic Checkers)
+// -----------------------------------------------------------------------------
+
+func testLiteralExpression(t *testing.T, exp ast.Expr, expected interface{}) bool {
+	switch v := expected.(type) {
+	case int:
+		return testIntegerLiteral(t, exp, int64(v))
+	case int64:
+		return testIntegerLiteral(t, exp, v)
+	case string:
+		return testIdentifier(t, exp, v)
+	}
+	t.Errorf("type of exp not handled. got=%T", exp)
+	return false
+}
+
+func testIntegerLiteral(t *testing.T, il ast.Expr, value int64) bool {
+	integ, ok := il.(*ast.IntLiteral)
 	if !ok {
-		t.Fatalf("retStmt.Value is not InfixExpression. got=%T", retStmt.Value)
+		t.Errorf("il not *ast.IntLiteral. got=%T", il)
+		return false
 	}
+	if integ.Value != value {
+		t.Errorf("integ.Value not %d. got=%d", value, integ.Value)
+		return false
+	}
+	return true
+}
 
-	if infix.Operator != "+" {
-		t.Errorf("infix.Operator is not '+'. got=%s", infix.Operator)
+func testIdentifier(t *testing.T, exp ast.Expr, value string) bool {
+	ident, ok := exp.(*ast.Identifier)
+	if !ok {
+		t.Errorf("exp not *ast.Identifier. got=%T", exp)
+		return false
 	}
+	if ident.Value != value {
+		t.Errorf("ident.Value not %s. got=%s", value, ident.Value)
+		return false
+	}
+	return true
 }

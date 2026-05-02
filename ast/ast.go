@@ -1,113 +1,45 @@
-// ast.go defines the abstract syntax tree (AST) structures for the MAML language.
-
 package ast
 
 import "fmt"
 
-// The base Node interface
+// Position tracks where exactly a node lives in the source code
+type Position struct {
+	Line int
+	Col int
+	// File string 
+}
+
+func (p Position) String() string {
+	return fmt.Sprintf("%d:%d", p.Line, p.Col)
+}
+
+// Node is the base contract for everything in the AST.
 type Node interface {
-	TokenLiteral() string
+	Pos() Position
+	End() Position
+	String() string
 }
 
-// All statement nodes implement this
-type Statement interface {
+// -----------------------------------------------------------------------------
+// Core Classifications
+// -----------------------------------------------------------------------------
+
+// Decl represents a top-level declaraton (Functions, Structs, Types).
+// Declarations introduce names into the package scope.
+type Decl interface {
 	Node
-	statementNode()
+	declNode()
 }
 
-// All expression nodes implement this
-type Expression interface {
+// Stmt represents an action within a block (Assignment, Return, Ifs)
+// Statements do not evaluate to a value
+type Stmt interface {
 	Node
-	expressionNode()
+	stmtNode()
 }
 
-type Program struct {
-	Statements []Statement
+// Expr represents a computation that evaluates to a value (Math, Variables, Function calls)
+type Expr interface {
+	Node 
+	exprNode()
 }
-
-func (p *Program) TokenLiteral() string {
-	if len(p.Statements) > 0 {
-		return p.Statements[0].TokenLiteral()
-	}
-	return ""
-}
-
-type FunctionDecl struct {
-	Name string
-	// Parameters []string // TODO: implement parameters
-	ReturnType string
-	Body       *BlockStatement
-}
-
-func (fd *FunctionDecl) TokenLiteral() string {
-	return fd.Name
-}
-
-func (fd *FunctionDecl) statementNode() {}
-
-type BlockStatement struct {
-	Statements []Statement
-}
-
-func (bs *BlockStatement) TokenLiteral() string {
-	if len(bs.Statements) > 0 {
-		return bs.Statements[0].TokenLiteral()
-	}
-	return ""
-}
-
-func (bs *BlockStatement) statementNode() {}
-
-type DeclareStatement struct {
-	Name    string
-	Mutable bool
-	Value   Expression
-}
-
-func (ds *DeclareStatement) TokenLiteral() string {
-	return ds.Name
-}
-
-func (ds *DeclareStatement) statementNode() {}
-
-type ReturnStatement struct {
-	Value Expression
-}
-
-func (rs *ReturnStatement) TokenLiteral() string {
-	return "return"
-}
-
-func (rs *ReturnStatement) statementNode() {}
-
-type Identifier struct {
-	Value string
-}
-
-func (i *Identifier) TokenLiteral() string {
-	return i.Value
-}
-
-func (i *Identifier) expressionNode() {}
-
-type IntLiteral struct {
-	Value int64
-}
-
-func (il *IntLiteral) TokenLiteral() string {
-	return fmt.Sprintf("%d", il.Value)
-}
-
-func (il *IntLiteral) expressionNode() {}
-
-type InfixExpression struct {
-	Left     Expression
-	Operator string
-	Right    Expression
-}
-
-func (ie *InfixExpression) TokenLiteral() string {
-	return ie.Operator // e.g., "+"
-}
-
-func (ie *InfixExpression) expressionNode() {}

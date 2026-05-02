@@ -1,4 +1,4 @@
-package lexer
+package token
 
 //go:generate stringer -type=TokenType
 type TokenType int

@@ -1,4 +1,4 @@
-package compiler
+package codegen
 
 import (
 	"fmt"
@@ -32,13 +32,14 @@ func New() *Compiler {
 func (c *Compiler) Compile(node ast.Node) error {
 	switch n := node.(type) {
 	case *ast.Program:
-		for _, stmt := range n.Statements {
-			if err := c.Compile(stmt); err != nil {
+		// Program now holds Decls, not Statements
+		for _, decl := range n.Decls {
+			if err := c.Compile(decl); err != nil {
 				return err
 			}
 		}
 
-	case *ast.FunctionDecl:
+	case *ast.FnDecl: // Renamed from FunctionDecl
 		// 1. Create the LLVM function returning an i32 (integer)
 		funcType := ir.NewFunc(n.Name, types.I32)
 		c.module.Funcs = append(c.module.Funcs, funcType)
@@ -51,15 +52,15 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 
-	case *ast.BlockStatement:
+	case *ast.BlockStmt: // Renamed from BlockStatement
 		for _, stmt := range n.Statements {
 			if err := c.Compile(stmt); err != nil {
 				return err
 			}
 		}
 
-	case *ast.DeclareStatement:
-		// For our tracer bullet, evaluate the right side (should be an IntLiteral)
+	case *ast.DeclareStmt: // Renamed from DeclareStatement
+		// Evaluate the right side
 		val, err := c.evaluateExpression(n.Value)
 		if err != nil {
 			return err
@@ -71,10 +72,10 @@ func (c *Compiler) Compile(node ast.Node) error {
 		// Store the value into that memory
 		c.currentBlock.NewStore(val, alloc)
 
-		// Save the memory pointer in our symbol table so we can find 'x' later!
+		// Save the memory pointer in our symbol table so we can find it later
 		c.env[n.Name] = alloc
 
-	case *ast.ReturnStatement:
+	case *ast.ReturnStmt: // Renamed from ReturnStatement
 		val, err := c.evaluateExpression(n.Value)
 		if err != nil {
 			return err
@@ -90,7 +91,8 @@ func (c *Compiler) String() string {
 	return c.module.String()
 }
 
-func (c *Compiler) evaluateExpression(expr ast.Expression) (value.Value, error) {
+// evaluateExpression now takes the new ast.Expr interface
+func (c *Compiler) evaluateExpression(expr ast.Expr) (value.Value, error) {
 	switch e := expr.(type) {
 	case *ast.IntLiteral:
 		// Convert MAML int to LLVM i32 constant
@@ -100,21 +102,40 @@ func (c *Compiler) evaluateExpression(expr ast.Expression) (value.Value, error) 
 		// Look up the pointer in our symbol table
 		ptr, ok := c.env[e.Value]
 		if !ok {
+			// Note: The Semantic Pass should have caught this already!
 			return nil, fmt.Errorf("undefined variable: %s", e.Value)
 		}
 		// In LLVM, you can't just use a pointer; you have to Load the value from memory
 		load := c.currentBlock.NewLoad(types.I32, ptr)
 		return load, nil
 
-	case *ast.InfixExpression:
-		left, _ := c.evaluateExpression(e.Left)
-		right, _ := c.evaluateExpression(e.Right)
-
-		if e.Operator == "+" {
-			// Generate the LLVM 'add' instruction
-			return c.currentBlock.NewAdd(left, right), nil
+	case *ast.InfixExpr: // Renamed from InfixExpression
+		// Actually check the errors returned by the recursive calls
+		left, err := c.evaluateExpression(e.Left)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("unsupported operator: %s", e.Operator)
+		
+		right, err := c.evaluateExpression(e.Right)
+		if err != nil {
+			return nil, err
+		}
+
+		// Map MAML operators to LLVM IR instructions
+		switch e.Operator {
+		case "+":
+			return c.currentBlock.NewAdd(left, right), nil
+		case "-":
+			return c.currentBlock.NewSub(left, right), nil
+		case "*":
+			return c.currentBlock.NewMul(left, right), nil
+		case "/":
+			// SDiv is "Signed Division"
+			return c.currentBlock.NewSDiv(left, right), nil
+		default:
+			return nil, fmt.Errorf("unsupported operator: %s", e.Operator)
+		}
 	}
+	
 	return nil, fmt.Errorf("unsupported expression: %T", expr)
 }
