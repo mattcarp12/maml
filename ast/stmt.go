@@ -63,3 +63,16 @@ func (r *ReturnStmt) String() string {
 	return fmt.Sprintf(token.RETURN.String()+" %s", r.Value.String())
 }
 func (r *ReturnStmt) stmtNode() {}
+
+// YieldStmt represents yielding a value out of a block using '=>'
+type YieldStmt struct {
+	Value Expr
+	Pos_  Position
+}
+
+func (ys *YieldStmt) Pos() Position  { return ys.Pos_ }
+func (ys *YieldStmt) End() Position  { return ys.Value.End() }
+func (ys *YieldStmt) String() string { 
+	return fmt.Sprintf("=> %s", ys.Value.String()) 
+}
+func (ys *YieldStmt) stmtNode()      {}

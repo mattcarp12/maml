@@ -16,37 +16,37 @@ const (
 	BOOL   // true, false
 
 	// Operators
-	DECLARE_IMMUTABLE // :=
-	DECLARE_MUTABLE   // ~=
-	UPDATE            // =
-	YIELD             // =>
-	SEPARATOR         // |
-	PIPE              // |>
-	DOT               // .
-	COLON             // :
-	PLUS              // +
-	MINUS             // -
-	MULTIPLY          // *
-	DIVIDE            // /
-	MODULO            // %
-	AND               // &&
-	OR                // ||
-	NOT               // !
-	EQ                // ==
-	NOT_EQ            // !=
-	LT                // <
-	GT                // >
-	LTE               // <=
-	GTE               // >=
+	DECLARE   // :=
+	ASSIGN    // =
+	YIELD     // =>
+	SEPARATOR // |
+	PIPE      // |>
+	DOT       // .
+	COLON     // :
+	PLUS      // +
+	MINUS     // -
+	MULTIPLY  // *
+	DIVIDE    // /
+	MODULO    // %
+	AND       // &&
+	OR        // ||
+	NOT       // !
+	EQ        // ==
+	NOT_EQ    // !=
+	LT        // <
+	GT        // >
+	LTE       // <=
+	GTE       // >=
 
 	// Delimiters
-	COMMA    // ,
-	LPAREN   // (
-	RPAREN   // )
-	LBRACE   // {
-	RBRACE   // }
-	LBRACKET // [
-	RBRACKET // ]
+	COMMA     // ,
+	LPAREN    // (
+	RPAREN    // )
+	LBRACE    // {
+	RBRACE    // }
+	LBRACKET  // [
+	RBRACKET  // ]
+	SEMICOLON // ;
 
 	// Keywords
 	FN     // fn
@@ -58,6 +58,8 @@ const (
 	AWAIT  // await
 	IF     // if
 	ELSE   // else
+	MUT    // mut
+	RETURN // return
 )
 
 var keywords = map[string]TokenType{
@@ -72,6 +74,8 @@ var keywords = map[string]TokenType{
 	"else":   ELSE,
 	"true":   BOOL,
 	"false":  BOOL,
+	"mut":    MUT,
+	"return": RETURN,
 }
 
 func LookupIdent(ident string) TokenType {

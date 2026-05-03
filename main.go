@@ -17,7 +17,7 @@ func main() {
 	fn main() int {
 		x := 20
 		y := 22
-		=> x + y
+		return x + y
 	}
 	`
 

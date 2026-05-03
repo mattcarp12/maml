@@ -44,12 +44,19 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 		p.errors = append(p.errors, fmt.Sprintf("could not parse %q as integer", p.curToken.Literal))
 		return nil
 	}
-	
+
 	return &ast.IntLiteral{
 		Value: value,
 		Pos_:  pos,
 		// End_ could be calculated by adding the string length of the token literal
-		End_:  ast.Position{Line: pos.Line, Col: pos.Col + len(p.curToken.Literal)},
+		End_: ast.Position{Line: pos.Line, Col: pos.Col + len(p.curToken.Literal)},
+	}
+}
+
+func (p *Parser) parseBooleanLiteral() ast.Expr {
+	return &ast.BoolLiteral{
+		Value: p.curToken.Literal == "true",
+		Pos_:  p.curPos(),
 	}
 }
 
@@ -64,4 +71,59 @@ func (p *Parser) parseInfixExpression(left ast.Expr) ast.Expr {
 	expression.Right = p.parseExpression(precedence)
 
 	return expression
+}
+
+func (p *Parser) parseGroupedExpression() ast.Expr {
+	p.nextToken() // skip the '('
+
+	// Parse the expression inside the parentheses starting at the lowest precedence
+	exp := p.parseExpression(LOWEST)
+
+	// Ensure the expression is properly closed
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+
+	return exp
+}
+
+func (p *Parser) parseIfExpression() ast.Expr {
+	pos := p.curPos()
+
+	p.nextToken() // skip the 'if' keyword
+
+	// 1. Parse the condition (e.g., x > 5)
+	condition := p.parseExpression(LOWEST)
+	if condition == nil {
+		return nil
+	}
+
+	// 2. We expect a block to follow the condition
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	// 3. Parse the 'true' block
+	consequence := p.parseBlockStmt()
+
+	var alternative *ast.BlockStmt
+
+	// 4. Check if there is an 'else' block attached
+	if p.peekToken.Type == token.ELSE {
+		p.nextToken() // move onto 'else'
+
+		if !p.expectPeek(token.LBRACE) {
+			return nil
+		}
+
+		// Parse the 'false' block
+		alternative = p.parseBlockStmt()
+	}
+
+	return &ast.IfExpr{
+		Condition:   condition,
+		Consequence: consequence,
+		Alternative: alternative,
+		Pos_:        pos,
+	}
 }

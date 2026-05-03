@@ -11,10 +11,11 @@ func TestNextToken(t *testing.T) {
 		input    string
 		expected []token.TokenType
 	}{
-		{`:= ~= = => == != < > <= >= + - * / % && || ! |> |`, []token.TokenType{token.DECLARE_IMMUTABLE, token.DECLARE_MUTABLE, token.UPDATE, token.YIELD, token.EQ, token.NOT_EQ, token.LT, token.GT, token.LTE, token.GTE, token.PLUS, token.MINUS, token.MULTIPLY, token.DIVIDE, token.MODULO, token.AND, token.OR, token.NOT, token.PIPE, token.SEPARATOR, token.EOF}},
+		{`:= = => == != < > <= >= + - * / % && || ! |> |`, []token.TokenType{token.DECLARE, token.ASSIGN, token.YIELD, token.EQ, token.NOT_EQ, token.LT, token.GT, token.LTE, token.GTE, token.PLUS, token.MINUS, token.MULTIPLY, token.DIVIDE, token.MODULO, token.AND, token.OR, token.NOT, token.PIPE, token.SEPARATOR, token.EOF}},
+		{`fn match case type struct async await if else true false mut return`, []token.TokenType{token.FN, token.MATCH, token.CASE, token.TYPE, token.STRUCT, token.ASYNC, token.AWAIT, token.IF, token.ELSE, token.BOOL, token.BOOL, token.MUT, token.RETURN}},
 		{`( ) { } [ ] . , :`, []token.TokenType{token.LPAREN, token.RPAREN, token.LBRACE, token.RBRACE, token.LBRACKET, token.RBRACKET, token.DOT, token.COMMA, token.COLON, token.EOF}},
-		{`five = 5 ten = 10`, []token.TokenType{token.IDENT, token.UPDATE, token.INT, token.IDENT, token.UPDATE, token.INT, token.EOF}},
-		{`add = fn(x, y) { x + y }`, []token.TokenType{token.IDENT, token.UPDATE, token.FN, token.LPAREN, token.IDENT, token.COMMA, token.IDENT, token.RPAREN, token.LBRACE, token.IDENT, token.PLUS, token.IDENT, token.RBRACE, token.EOF}},
+		{`five = 5 ten = 10`, []token.TokenType{token.IDENT, token.ASSIGN, token.INT, token.IDENT, token.ASSIGN, token.INT, token.EOF}},
+		{`add = fn(x, y) { x + y }`, []token.TokenType{token.IDENT, token.ASSIGN, token.FN, token.LPAREN, token.IDENT, token.COMMA, token.IDENT, token.RPAREN, token.LBRACE, token.IDENT, token.PLUS, token.IDENT, token.RBRACE, token.EOF}},
 		{`"foobar"`, []token.TokenType{token.STRING, token.EOF}},
 		{`"foo bar"`, []token.TokenType{token.STRING, token.EOF}},
 		{`"unterminated string`, []token.TokenType{token.ILLEGAL, token.EOF}},
@@ -22,13 +23,13 @@ func TestNextToken(t *testing.T) {
 		{`42`, []token.TokenType{token.INT, token.EOF}},
 		{`true false`, []token.TokenType{token.BOOL, token.BOOL, token.EOF}},
 		{`// this is a comment
-		  x = 5`, []token.TokenType{token.IDENT, token.UPDATE, token.INT, token.EOF}}, // Newline skipped: previous state (start) can't end a statement
+		  x = 5`, []token.TokenType{token.IDENT, token.ASSIGN, token.INT, token.EOF}}, // Newline skipped: previous state (start) can't end a statement
 		{`id |> fetch_user |> validate`, []token.TokenType{token.IDENT, token.PIPE, token.IDENT, token.PIPE, token.IDENT, token.EOF}},
 		{`@`, []token.TokenType{token.ILLEGAL, token.EOF}},
 		{
 			`fn add(x: int, y: int) int {
-        		=> x + y
-    		}`, []token.TokenType{token.FN, token.IDENT, token.LPAREN, token.IDENT, token.COLON, token.IDENT, token.COMMA, token.IDENT, token.COLON, token.IDENT, token.RPAREN, token.IDENT, token.LBRACE, token.YIELD, token.IDENT, token.PLUS, token.IDENT, token.RBRACE, token.EOF}}, // Newlines inside {} are skipped!
+        		return x + y
+    		}`, []token.TokenType{token.FN, token.IDENT, token.LPAREN, token.IDENT, token.COLON, token.IDENT, token.COMMA, token.IDENT, token.COLON, token.IDENT, token.RPAREN, token.IDENT, token.LBRACE, token.RETURN, token.IDENT, token.PLUS, token.IDENT, token.NEWLINE, token.RBRACE, token.EOF}},
 	}
 
 	for testNum, tt := range tests {
@@ -80,11 +81,13 @@ z := 42.5
 		// Line 2: tab + comment + \n -> skipped entirely
 
 		// Line 3: tab + =>
-		{token.YIELD, 3, 2, "=>"}, // col 2 because of leading \t
+		{token.YIELD, 3, 2, "=>"}, // Note: You're still using => here instead of return, which is fine for the Lexer test!
 		{token.IDENT, 3, 5, "x"},
 		{token.PLUS, 3, 7, "+"},
 		{token.IDENT, 3, 9, "y"},
-		// The \n after y is skipped due to bracketDepth > 0
+
+		// ASI correctly catches the newline after the identifier 'y'
+		{token.NEWLINE, 3, 10, "\\n"},
 
 		// Line 4: }
 		{token.RBRACE, 4, 1, "}"},
@@ -97,7 +100,7 @@ z := 42.5
 		// Line 6
 		// {IDENT, 6, 1, "let"},
 		{token.IDENT, 6, 1, "z"},
-		{token.DECLARE_IMMUTABLE, 6, 3, ":="},
+		{token.DECLARE, 6, 3, ":="},
 		{token.FLOAT, 6, 6, "42.5"},
 		// FLOAT can end a statement, so the final \n IS emitted!
 		{token.NEWLINE, 6, 10, "\\n"},

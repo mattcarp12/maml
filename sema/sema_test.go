@@ -35,20 +35,20 @@ func TestValidPrograms(t *testing.T) {
 			fn main() int {
 				x := 5
 				y := 10
-				=> x + y
+				return x + y
 			}`,
 		},
 		{
 			name: "Function calling (Pass 1 Resolution)",
 			input: `
 			fn helper() int {
-				=> 42
+				return 42
 			}
 			fn main() int {
 				// We haven't implemented function call AST nodes yet, 
 				// but this ensures multiple functions parse without scope collision.
 				x := 5
-				=> x
+				return x
 			}`,
 		},
 	}
@@ -82,7 +82,7 @@ func TestVariableShadowing(t *testing.T) {
 			name: "Duplicate mixed declaration",
 			input: `
 			fn main() int {
-				y ~= 5
+				mut y := 5
 				y := 10
 			}`,
 			expectedError: "variable 'y' is already declared in this block",
@@ -113,7 +113,7 @@ func TestUndefinedVariables(t *testing.T) {
 			name: "Returning an undeclared variable",
 			input: `
 			fn main() int {
-				=> x
+				return x
 			}`,
 			expectedError: "undefined variable 'x'",
 		},
@@ -122,7 +122,7 @@ func TestUndefinedVariables(t *testing.T) {
 			input: `
 			fn main() int {
 				y := 10
-				=> x + y
+				return x + y
 			}`,
 			expectedError: "undefined variable 'x'",
 		},
@@ -156,11 +156,11 @@ func TestScopeIsolation(t *testing.T) {
 	input := `
 	fn first() int {
 		secret := 42
-		=> secret
+		return secret
 	}
 
 	fn second() int {
-		=> secret
+		return secret
 	}
 	`
 

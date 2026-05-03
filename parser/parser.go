@@ -11,13 +11,24 @@ import (
 const (
 	_ int = iota
 	LOWEST
-	SUM     // + or -
-	PRODUCT // * or /
+	EQUALS      // == or !=
+	LESSGREATER // > or < or >= or <=
+	SUM         // + or -
+	PRODUCT     // * or / or %
 )
 
 var precedences = map[token.TokenType]int{
-	token.PLUS:  SUM,
-	token.MINUS: SUM,
+	token.EQ:       EQUALS,
+	token.NOT_EQ:   EQUALS,
+	token.LT:       LESSGREATER,
+	token.LTE:      LESSGREATER,
+	token.GT:       LESSGREATER,
+	token.GTE:      LESSGREATER,
+	token.PLUS:     SUM,
+	token.MINUS:    SUM,
+	token.MULTIPLY: PRODUCT,
+	token.DIVIDE:   PRODUCT,
+	token.MODULO:   PRODUCT,
 }
 
 type (
@@ -49,11 +60,22 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns = make(map[token.TokenType]prefixParseFn)
 	p.prefixParseFns[token.IDENT] = p.parseIdentifier
 	p.prefixParseFns[token.INT] = p.parseIntegerLiteral
+	p.prefixParseFns[token.BOOL] = p.parseBooleanLiteral
+	p.prefixParseFns[token.LPAREN] = p.parseGroupedExpression
+	p.prefixParseFns[token.IF] = p.parseIfExpression
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression
 	p.infixParseFns[token.MINUS] = p.parseInfixExpression
-
+	p.infixParseFns[token.EQ] = p.parseInfixExpression
+	p.infixParseFns[token.NOT_EQ] = p.parseInfixExpression
+	p.infixParseFns[token.LT] = p.parseInfixExpression
+	p.infixParseFns[token.LTE] = p.parseInfixExpression
+	p.infixParseFns[token.GT] = p.parseInfixExpression
+	p.infixParseFns[token.GTE] = p.parseInfixExpression
+	p.infixParseFns[token.MULTIPLY] = p.parseInfixExpression
+	p.infixParseFns[token.DIVIDE] = p.parseInfixExpression
+	p.infixParseFns[token.MODULO] = p.parseInfixExpression
 }
 
 // curPos captures the exact line and column of the token currently being parsed.
@@ -98,7 +120,19 @@ func (p *Parser) curPrecedence() int {
 }
 
 func (p *Parser) skipNewlines() {
-    for p.curToken.Type == token.NEWLINE {
-        p.nextToken()
-    }
+	for p.curToken.Type == token.NEWLINE {
+		p.nextToken()
+	}
+}
+
+// expectStatementEnd checks if the statement properly terminates.
+// It allows NEWLINE, EOF, or a closing RBRACE (for one-liner blocks).
+func (p *Parser) expectStatementEnd() {
+	if p.peekToken.Type == token.NEWLINE || p.peekToken.Type == token.EOF || p.peekToken.Type == token.RBRACE {
+		if p.peekToken.Type == token.NEWLINE {
+			p.nextToken() // Consume the newline
+		}
+		return
+	}
+	p.errors = append(p.errors, fmt.Sprintf("expected end of statement (newline), got %s at line %d", p.peekToken.Type, p.peekToken.Line))
 }

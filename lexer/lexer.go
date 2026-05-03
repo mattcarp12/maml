@@ -12,6 +12,7 @@ type Lexer struct {
 	col              int             // current column number (1-based)
 	lastEmittedToken token.TokenType // Tracks the last token to power ASI
 	bracketDepth     int             // Tracks open (), [], {} for ASI
+	
 }
 
 // New creates and initializes a new Lexer.
@@ -43,17 +44,11 @@ func (l *Lexer) NextToken() token.Token {
 		} else if l.peekChar() == '>' {
 			tok = l.twoCharToken(token.YIELD, startLine, startCol)
 		} else {
-			tok = l.newToken(token.UPDATE, l.ch, startLine, startCol)
-		}
-	case '~':
-		if l.peekChar() == '=' {
-			tok = l.twoCharToken(token.DECLARE_MUTABLE, startLine, startCol)
-		} else {
-			tok = l.newToken(token.ILLEGAL, l.ch, startLine, startCol)
+			tok = l.newToken(token.ASSIGN, l.ch, startLine, startCol)
 		}
 	case ':':
 		if l.peekChar() == '=' {
-			tok = l.twoCharToken(token.DECLARE_IMMUTABLE, startLine, startCol)
+			tok = l.twoCharToken(token.DECLARE, startLine, startCol)
 		} else {
 			tok = l.newToken(token.COLON, l.ch, startLine, startCol)
 		}
@@ -112,10 +107,10 @@ func (l *Lexer) NextToken() token.Token {
 
 	// Track Bracket Depth for ASI
 	case '{':
-		l.bracketDepth++
+		// l.bracketDepth++
 		tok = l.newToken(token.LBRACE, l.ch, startLine, startCol)
 	case '}':
-		l.bracketDepth--
+		// l.bracketDepth--
 		tok = l.newToken(token.RBRACE, l.ch, startLine, startCol)
 	case '(':
 		l.bracketDepth++

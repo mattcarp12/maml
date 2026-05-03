@@ -15,55 +15,70 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 
 	p.nextToken() // skip '{'
 
+	// Skip any leading newlines inside the block
+	for p.curToken.Type == token.NEWLINE {
+		p.nextToken()
+	}
+
 	for p.curToken.Type != token.RBRACE && p.curToken.Type != token.EOF {
 		stmt := p.parseStmt()
 		if stmt != nil {
 			block.Statements = append(block.Statements, stmt)
 		}
-		p.skipNewlines()
 		p.nextToken()
+
+		// Skip any extra blank lines between statements
+		for p.curToken.Type == token.NEWLINE {
+			p.nextToken()
+		}
 	}
 
-	block.End_ = p.curPos() // Capture where the '}' is
+	block.End_ = p.curPos()
 	return block
 }
 
 func (p *Parser) parseStmt() ast.Stmt {
-	p.skipNewlines()
 	switch p.curToken.Type {
-	case token.IDENT:
-		if p.peekToken.Type == token.DECLARE_IMMUTABLE || p.peekToken.Type == token.DECLARE_MUTABLE {
-			return p.parseDeclareStmt()
-		}
-		fallthrough
-	case token.YIELD:
+	case token.MUT, token.IDENT:
+		return p.parseDeclareStmt()
+	case token.RETURN:
 		return p.parseReturnStmt()
+	case token.YIELD:
+		return p.parseYieldStmt()
 	default:
-		err := fmt.Sprintf("unrecognized statement inside block - %+v", p.curToken)
-		p.errors = append(p.errors, err)
+		p.errors = append(p.errors, fmt.Sprintf("unrecognized statement inside block: %s", p.curToken.Literal))
 		return nil
 	}
 }
 
 func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 	pos := p.curPos()
+	mutable := false
+
+	// Check if this is a mutable declaration (starts with 'mut')
+	if p.curToken.Type == token.MUT {
+		mutable = true
+		if !p.expectPeek(token.IDENT) {
+			return nil
+		}
+	}
+
 	name := p.curToken.Literal
 
-	p.nextToken() // skip variable name
-
-	if p.curToken.Type != token.DECLARE_IMMUTABLE && p.curToken.Type != token.DECLARE_MUTABLE {
-		p.errors = append(p.errors, "expected := or ~= after identifier")
+	// We expect := for declarations. (We will handle standard = for updates later)
+	if !p.expectPeek(token.DECLARE) {
 		return nil
 	}
 
-	mutable := p.curToken.Type == token.DECLARE_MUTABLE
-
-	p.nextToken() // skip the := or ~= operator
+	p.nextToken() // skip ':='
 
 	value := p.parseExpression(LOWEST)
 	if value == nil {
 		return nil
 	}
+
+	// Consume the newline terminating this statement
+	p.expectStatementEnd()
 
 	return &ast.DeclareStmt{
 		Name:    name,
@@ -76,6 +91,25 @@ func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 	pos := p.curPos()
 
+	p.nextToken() // skip 'return'
+
+	value := p.parseExpression(LOWEST)
+	if value == nil {
+		return nil
+	}
+
+	// Consume the newline terminating this statement
+	p.expectStatementEnd()
+
+	return &ast.ReturnStmt{
+		Value: value,
+		Pos_:  pos,
+	}
+}
+
+func (p *Parser) parseYieldStmt() *ast.YieldStmt {
+	pos := p.curPos()
+
 	p.nextToken() // skip '=>'
 
 	value := p.parseExpression(LOWEST)
@@ -83,7 +117,10 @@ func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 		return nil
 	}
 
-	return &ast.ReturnStmt{
+	// Consume the newline terminating this statement
+	p.expectStatementEnd()
+
+	return &ast.YieldStmt{
 		Value: value,
 		Pos_:  pos,
 	}
