@@ -1,0 +1,5 @@
+fn main() int {
+    x := 20
+    y := 22
+    return x + y
+}

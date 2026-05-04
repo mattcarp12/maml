@@ -15,6 +15,7 @@ const (
 	LESSGREATER // > or < or >= or <=
 	SUM         // + or -
 	PRODUCT     // * or / or %
+	CALL        // Highest precedence!
 )
 
 var precedences = map[token.TokenType]int{
@@ -29,6 +30,9 @@ var precedences = map[token.TokenType]int{
 	token.MULTIPLY: PRODUCT,
 	token.DIVIDE:   PRODUCT,
 	token.MODULO:   PRODUCT,
+	token.LPAREN:   CALL,
+	token.LBRACE:   CALL,
+	token.DOT:      CALL,
 }
 
 type (
@@ -76,6 +80,9 @@ func (p *Parser) setParseFns() {
 	p.infixParseFns[token.MULTIPLY] = p.parseInfixExpression
 	p.infixParseFns[token.DIVIDE] = p.parseInfixExpression
 	p.infixParseFns[token.MODULO] = p.parseInfixExpression
+	p.infixParseFns[token.LPAREN] = p.parseCallExpression
+	p.infixParseFns[token.LBRACE] = p.parseStructLiteral
+	p.infixParseFns[token.DOT] = p.parseFieldAccess
 }
 
 // curPos captures the exact line and column of the token currently being parsed.

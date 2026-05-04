@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mattcarp12/maml/ast"
@@ -45,6 +46,14 @@ func parseFunctionBody(t *testing.T, input string) []ast.Stmt {
 	}
 
 	return fn.Body.Statements
+}
+
+func parseProgram(t *testing.T, input string) *ast.Program {
+	l := lexer.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+	return program
 }
 
 // -----------------------------------------------------------------------------
@@ -308,7 +317,7 @@ func TestIfExpressionParsing(t *testing.T) {
 		{
 			// Note the newlines and exact syntax
 			"if x > 5 {\n\t=> true\n}",
-			"if (x > 5) {\n\t=> true\n}", 
+			"if (x > 5) {\n\t=> true\n}",
 		},
 		{
 			"if x == y {\n\t=> 10\n} else {\n\t=> 20\n}",
@@ -326,6 +335,70 @@ func TestIfExpressionParsing(t *testing.T) {
 
 		if actual != tt.expected {
 			t.Errorf("\nexpected:\n%q\n\ngot:\n%q", tt.expected, actual)
+		}
+	}
+}
+
+func TestCallExpressionParsing(t *testing.T) {
+	input := `add(5, x + 2)`
+	// Wrap in a dummy block
+	inputWrapped := fmt.Sprintf("return %s", input)
+	stmts := parseFunctionBody(t, inputWrapped)
+
+	retStmt := stmts[0].(*ast.ReturnStmt)
+	if retStmt.Value.String() != "add(5, (x + 2))" {
+		t.Errorf("Expected 'add(5, (x + 2))', got '%s'", retStmt.Value.String())
+	}
+}
+
+func TestTypeDeclaration(t *testing.T) {
+	input := `
+	type Point = {
+		x int,
+		y int
+	}
+	`
+	// Assuming parseProgram parses top-level declarations
+	program := parseProgram(t, input)
+	expected := "type Point = { x int, y int }"
+	actual := strings.TrimSpace(program.String())
+	if actual != expected {
+		t.Errorf("Mismatch. Got: %q", actual)
+	}
+}
+
+func TestStructLiteralParsing(t *testing.T) {
+	input := `Point{x: 5, y: 10 + 2}`
+
+	inputWrapped := fmt.Sprintf("return %s", input)
+	stmts := parseFunctionBody(t, inputWrapped)
+
+	retStmt := stmts[0].(*ast.ReturnStmt)
+	actual := retStmt.Value.String()
+
+	if actual != "Point{x: 5, y: (10 + 2)}" {
+		t.Errorf("Mismatch. Got: %s", actual)
+	}
+}
+
+func TestFieldAccessParsing(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"p.x + 5", "((p.x) + 5)"},
+		{"user.address.zipcode", "((user.address).zipcode)"},
+	}
+
+	for _, tt := range tests {
+		inputWrapped := fmt.Sprintf("return %s", tt.input)
+		stmts := parseFunctionBody(t, inputWrapped)
+
+		retStmt := stmts[0].(*ast.ReturnStmt)
+		actual := retStmt.Value.String()
+
+		if actual != tt.expected {
+			t.Errorf("Mismatch for %q. Got: %s", tt.input, actual)
 		}
 	}
 }

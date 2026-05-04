@@ -160,8 +160,6 @@ IfStmt          = "if" Expr Block [ "else" (Block | IfStmt) ] ;
 
 ForStmt         = "for" [ SimpleStmt ] ";" [ Expr ] ";" [ SimpleStmt ] Block ;
 
-WhileStmt       = "while" Expr Block ;
-
 SimpleStmt      = VarDecl
                 | AssignStmt
                 | ExprStmt ;
@@ -293,6 +291,15 @@ SEMANTIC / DESIGN NOTES (NOT GRAMMAR)
 8. Globals
    - No global mutable variables.
    - Global immutable constants may exist.
+
+9. Cloud Native Features
+   - Automatic OTel insertion
+   - One-step "containerize" command to build binary into distroless container
+      -- Ballerina: Generates Kubernetes YAML services and deployments directly from network listener definitions.
+   - Native SBOM generation
+   - WebAssembly (Wasm) Component Model Support
+   - Reproducible & Hermetic Builds
+   - Remote Build Execution (RBE) Protocol
 
 ============================================================
 END DOCUMENT

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,16 +14,23 @@ import (
 
 func main() {
 	// 1. The Target Program
-	input := `
-	fn main() int {
-		x := 20
-		y := 22
-		return x + y
+	filePath := flag.String("file", "", "path to the maml program")
+	output := flag.String("out", "maml_app", "filename of output binary file")
+	keep := flag.Bool("keep", false, "keep the output binary file")
+	printIR := flag.Bool("printir", false, "print the LLVM IR")
+
+	// Parse command-line arguments
+	flag.Parse()
+
+	// Read the entire file content
+	input, err := os.ReadFile(*filePath)
+	if err != nil {
+		fmt.Printf("Error reading file: %v\n", err)
+		return
 	}
-	`
 
 	// 2. The Frontend
-	l := lexer.New(input)
+	l := lexer.New(string(input))
 	p := parser.New(l)
 	program := p.ParseProgram()
 
@@ -36,14 +44,24 @@ func main() {
 
 	// 3. The Backend
 	c := codegen.New()
-	err := c.Compile(program)
+	err = c.Compile(program)
 	if err != nil {
 		fmt.Println("Compiler Error:", err)
 		return
 	}
 
+	if *printIR {
+		fmt.Printf("%s\n", c.String())
+	}
+
 	// 4. The Native Toolchain
-	buildExecutable(c.String(), "maml_app")
+	buildExecutable(c.String(), *output)
+
+	// 5. Cleanup
+	if !*keep {
+		os.Remove(*output)
+	}
+
 }
 
 func buildExecutable(llvmIR string, outputName string) {

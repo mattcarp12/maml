@@ -5,8 +5,8 @@ import "fmt"
 // Position tracks where exactly a node lives in the source code
 type Position struct {
 	Line int
-	Col int
-	// File string 
+	Col  int
+	// File string
 }
 
 func (p Position) String() string {
@@ -40,6 +40,6 @@ type Stmt interface {
 
 // Expr represents a computation that evaluates to a value (Math, Variables, Function calls)
 type Expr interface {
-	Node 
+	Node
 	exprNode()
 }

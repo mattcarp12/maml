@@ -65,7 +65,7 @@ func (f *FnDecl) String() string {
 	for _, p := range f.Params {
 		params = append(params, p.String())
 	}
-	
+
 	prefix := "fn"
 	if f.IsAsync {
 		prefix = "async fn"
@@ -75,3 +75,35 @@ func (f *FnDecl) String() string {
 		prefix, f.Name, strings.Join(params, ", "), f.ReturnType.String(), f.Body.String())
 }
 func (f *FnDecl) declNode() {}
+
+// TypeDecl represents: type Name = TypeRhs
+type TypeDecl struct {
+	Name *NamedType
+	Rhs  TypeExpr // An interface that ProductType, SumType, etc. will implement
+	Pos_ Position
+}
+
+func (td *TypeDecl) Pos() Position { return td.Pos_ }
+func (td *TypeDecl) End() Position { return td.Rhs.End() }
+func (td *TypeDecl) String() string {
+	return fmt.Sprintf("type %s = %s", td.Name.String(), td.Rhs.String())
+}
+func (td *TypeDecl) declNode() {}
+
+// ProductType represents the struct body: { field1 type1, field2 type2 }
+type ProductType struct {
+	Fields []Param // We can reuse your Param struct since it's just Name + Type!
+	Pos_   Position
+	End_   Position
+}
+
+func (pt *ProductType) Pos() Position { return pt.Pos_ }
+func (pt *ProductType) End() Position { return pt.End_ }
+func (pt *ProductType) String() string {
+	var fields []string
+	for _, f := range pt.Fields {
+		fields = append(fields, fmt.Sprintf("%s %s", f.Name, f.Type.String()))
+	}
+	return fmt.Sprintf("{ %s }", strings.Join(fields, ", "))
+}
+func (pt *ProductType) typeNode() {} // Ensure TypeRhs interfaces match

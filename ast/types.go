@@ -46,6 +46,6 @@ func (g *GenericType) String() string {
 	for _, p := range g.Params {
 		params = append(params, p.String())
 	}
-	return fmt.Sprintf("%s<%s>", g.Name, strings.Join(params, ", "))
+	return fmt.Sprintf("%s[%s]", g.Name, strings.Join(params, ", "))
 }
 func (g *GenericType) typeNode() {}

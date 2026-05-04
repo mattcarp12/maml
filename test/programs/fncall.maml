@@ -1,0 +1,9 @@
+fn add(x int, y int) int {
+    return x + y
+}
+
+fn main() int {
+    mut a := 20
+    mut b := 22
+    return add(a, b)
+}

@@ -3,6 +3,7 @@ package ast
 import (
 	"bytes"
 	"fmt"
+	"strings"
 )
 
 // -----------------------------------------------------------------------------
@@ -48,9 +49,56 @@ func (b *BoolLiteral) End() Position {
 func (b *BoolLiteral) String() string { return fmt.Sprintf("%t", b.Value) }
 func (b *BoolLiteral) exprNode()      {}
 
+// StructField represents a single field assignment:  x: 10
+type StructField struct {
+	Name  *Identifier
+	Value Expr
+}
+
+// StructLiteral represents: Point{x: 10, y: 20}
+type StructLiteral struct {
+	Type   *Identifier
+	Fields []StructField
+	Pos_   Position
+	End_   Position
+}
+
+func (sl *StructLiteral) Pos() Position { return sl.Pos_ }
+func (sl *StructLiteral) End() Position { return sl.End_ }
+func (sl *StructLiteral) String() string {
+	var fields []string
+	for _, f := range sl.Fields {
+		fields = append(fields, fmt.Sprintf("%s: %s", f.Name.String(), f.Value.String()))
+	}
+	return fmt.Sprintf("%s{%s}", sl.Type.String(), strings.Join(fields, ", "))
+}
+func (sl *StructLiteral) exprNode() {}
+
 // -----------------------------------------------------------------------------
 // Operations
 // -----------------------------------------------------------------------------
+
+type CallExpr struct {
+	Function  Expr
+	Arguments []Expr
+	Pos_      Position
+}
+
+func (ce *CallExpr) Pos() Position { return ce.Pos_ }
+func (ce *CallExpr) End() Position {
+	if len(ce.Arguments) > 0 {
+		return ce.Arguments[len(ce.Arguments)-1].End() // Rough estimation
+	}
+	return ce.Function.End()
+}
+func (ce *CallExpr) String() string {
+	var args []string
+	for _, a := range ce.Arguments {
+		args = append(args, a.String())
+	}
+	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
+}
+func (ce *CallExpr) exprNode() {}
 
 type InfixExpr struct {
 	Left     Expr
@@ -64,6 +112,20 @@ func (ie *InfixExpr) String() string {
 	return fmt.Sprintf("(%s %s %s)", ie.Left.String(), ie.Operator, ie.Right.String())
 }
 func (ie *InfixExpr) exprNode() {}
+
+// FieldAccess represents: object.field
+type FieldAccess struct {
+	Object Expr        // Can be an Identifier (p), or another FieldAccess (user.address)
+	Field  *Identifier // Must be an Identifier (x)
+	Pos_   Position
+}
+
+func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
+func (fa *FieldAccess) End() Position { return fa.Field.End() }
+func (fa *FieldAccess) String() string {
+	return fmt.Sprintf("(%s.%s)", fa.Object.String(), fa.Field.String())
+}
+func (fa *FieldAccess) exprNode() {}
 
 // -----------------------------------------------------------------------------
 // Control Flow

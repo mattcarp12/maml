@@ -1,0 +1,4 @@
+fn main() int {
+    mut val := if true { => 10 } else { => 20 }
+    return val
+}

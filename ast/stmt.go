@@ -70,9 +70,9 @@ type YieldStmt struct {
 	Pos_  Position
 }
 
-func (ys *YieldStmt) Pos() Position  { return ys.Pos_ }
-func (ys *YieldStmt) End() Position  { return ys.Value.End() }
-func (ys *YieldStmt) String() string { 
-	return fmt.Sprintf("=> %s", ys.Value.String()) 
+func (ys *YieldStmt) Pos() Position { return ys.Pos_ }
+func (ys *YieldStmt) End() Position { return ys.Value.End() }
+func (ys *YieldStmt) String() string {
+	return fmt.Sprintf("=> %s", ys.Value.String())
 }
-func (ys *YieldStmt) stmtNode()      {}
+func (ys *YieldStmt) stmtNode() {}

@@ -12,7 +12,7 @@ type Lexer struct {
 	col              int             // current column number (1-based)
 	lastEmittedToken token.TokenType // Tracks the last token to power ASI
 	bracketDepth     int             // Tracks open (), [], {} for ASI
-	
+
 }
 
 // New creates and initializes a new Lexer.
