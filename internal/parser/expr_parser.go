@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mattcarp12/maml/ast"
-	"github.com/mattcarp12/maml/token"
+	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/token"
 )
 
 func (p *Parser) parseExpression(precedence int) ast.Expr {
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
-		p.errors = append(p.errors, fmt.Sprintf("no prefix parse function for %s found", p.curToken.Type))
+		p.AddError(fmt.Sprintf("no prefix parse function for %s found", p.curToken.Type))
 		return nil
 	}
 
@@ -41,7 +41,7 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	pos := p.curPos()
 	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
 	if err != nil {
-		p.errors = append(p.errors, fmt.Sprintf("could not parse %q as integer", p.curToken.Literal))
+		p.AddError(fmt.Sprintf("could not parse %q as integer", p.curToken.Literal))
 		return nil
 	}
 
@@ -219,14 +219,14 @@ func (p *Parser) parseStructField() *ast.StructField {
 	}
 
 	if !p.expectPeek(token.COLON) {
-		p.errors = append(p.errors, "a ':' is required between the struct field identifier and its value")
+		p.AddError("a ':' is required between the struct field identifier and its value")
 		return nil
 	}
 	p.nextToken() // step onto value expression
 
 	valExpr := p.parseExpression(LOWEST)
 	if valExpr == nil {
-		p.errors = append(p.errors, "unable to parse struct field value expression")
+		p.AddError("unable to parse struct field value expression")
 	}
 
 	sf.Value = valExpr
@@ -241,7 +241,7 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 	}
 
 	if !p.expectPeek(token.IDENT) {
-		p.errors = append(p.errors, "expected identifier")
+		p.AddError("expected identifier")
 		return nil
 	}
 
@@ -251,4 +251,8 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 	}
 
 	return fa
+}
+
+func (p *Parser) parseStringLiteral() ast.Expr {
+    return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
 }

@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/ast"
-	"github.com/mattcarp12/maml/token"
+	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/token"
 )
 
 func (p *Parser) parseBlockStmt() *ast.BlockStmt {
@@ -46,7 +46,7 @@ func (p *Parser) parseStmt() ast.Stmt {
 	case token.YIELD:
 		return p.parseYieldStmt()
 	default:
-		p.errors = append(p.errors, fmt.Sprintf("unrecognized statement inside block: %s", p.curToken.Literal))
+		p.AddError(fmt.Sprintf("unrecognized statement inside block: %s", p.curToken.Literal))
 		return nil
 	}
 }

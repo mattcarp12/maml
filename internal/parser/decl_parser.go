@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/ast"
-	"github.com/mattcarp12/maml/token"
+	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/token"
 )
 
 func (p *Parser) ParseProgram() *ast.Program {
@@ -35,7 +35,7 @@ func (p *Parser) parseDecl() ast.Decl {
 		return p.parseTypeDecl()
 	default:
 		err := fmt.Sprintf("found %+v. only function declarations are supported at the top level for now", p.curToken)
-		p.errors = append(p.errors, err)
+		p.AddError(err)
 		return nil
 	}
 }
@@ -151,7 +151,7 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 		td.Rhs = p.parseProductType()
 	default:
 		err := fmt.Sprintf("found %+v. only product types are supported for now", p.curToken)
-		p.errors = append(p.errors, err)
+		p.AddError(err)
 		return nil
 	}
 	p.skipNewlines()

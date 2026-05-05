@@ -74,6 +74,20 @@ func (sl *StructLiteral) String() string {
 }
 func (sl *StructLiteral) exprNode() {}
 
+// StringLiteral represents: "hello world"
+type StringLiteral struct {
+	Value string
+	Pos_  Position
+}
+
+func (sl *StringLiteral) Pos() Position { return sl.Pos_ }
+func (sl *StringLiteral) End() Position {
+	// Rough estimate: length of string + 2 for the quotes
+	return Position{Line: sl.Pos_.Line, Col: sl.Pos_.Col + len(sl.Value) + 2}
+}
+func (sl *StringLiteral) String() string { return fmt.Sprintf(`"%s"`, sl.Value) }
+func (sl *StringLiteral) exprNode()      {}
+
 // -----------------------------------------------------------------------------
 // Operations
 // -----------------------------------------------------------------------------

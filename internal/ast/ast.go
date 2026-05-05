@@ -43,3 +43,8 @@ type Expr interface {
 	Node
 	exprNode()
 }
+
+type TypeExpr interface {
+	Node
+	typeNode()
+}

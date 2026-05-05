@@ -5,10 +5,7 @@ import (
 	"strings"
 )
 
-type TypeExpr interface {
-	Node
-	typeNode()
-}
+
 
 // -----------------------------------------------------------------------------
 // Type Nodes

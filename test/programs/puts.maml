@@ -1,0 +1,4 @@
+fn main() int {
+    puts("Hello, World from MAML!")
+    return 0
+}

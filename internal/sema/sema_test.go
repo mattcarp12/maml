@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/lexer"
-	"github.com/mattcarp12/maml/parser"
+	"github.com/mattcarp12/maml/internal/lexer"
+	"github.com/mattcarp12/maml/internal/parser"
 )
 
 // testHelper parses the input and runs the semantic analyzer.
@@ -183,5 +183,17 @@ func TestScopeIsolation(t *testing.T) {
 	}
 }
 
-// NOTE: Once the parser supports Strings or Booleans, we will add a
-// TestTypeMismatch suite here to verify that `5 + "hello"` throws an error.
+func TestSemanticTypeChecking(t *testing.T) {
+	input := `
+	fn add(x int, y int) int { return x + y }
+	
+	fn main() int {
+		// This should trigger a semantic error!
+		return add(5, true) 
+	}
+	`
+	errors := analyzeInput(t, input)
+	if len(errors) == 0 {
+		t.Errorf("Expected semantic error for passing 'bool' to 'int' parameter, but got none.")
+	}
+}

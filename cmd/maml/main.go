@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mattcarp12/maml/codegen"
-	"github.com/mattcarp12/maml/lexer"
-	"github.com/mattcarp12/maml/parser"
+	"github.com/mattcarp12/maml/internal/codegen"
+	"github.com/mattcarp12/maml/internal/lexer"
+	"github.com/mattcarp12/maml/internal/parser"
 )
 
 func main() {

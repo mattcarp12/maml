@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/ast"
-	"github.com/mattcarp12/maml/lexer"
+	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/lexer"
 )
 
 // -----------------------------------------------------------------------------
@@ -400,5 +400,18 @@ func TestFieldAccessParsing(t *testing.T) {
 		if actual != tt.expected {
 			t.Errorf("Mismatch for %q. Got: %s", tt.input, actual)
 		}
+	}
+}
+
+func TestStringLiteralParsing(t *testing.T) {
+	input := `"hello world"`
+	inputWrapped := fmt.Sprintf("return %s", input)
+	stmts := parseFunctionBody(t, inputWrapped)
+
+	retStmt := stmts[0].(*ast.ReturnStmt)
+	actual := retStmt.Value.(*ast.StringLiteral).Value
+
+	if actual != "hello world" {
+		t.Errorf("Mismatch. Got: %s", actual)
 	}
 }

@@ -3,13 +3,14 @@ package sema
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/ast"
+	"github.com/mattcarp12/maml/internal/ast"
 )
 
 type Scope struct {
-	parent  *Scope
-	symbols map[string]*Symbol
-	types   map[string]ast.TypeExpr
+	parent    *Scope
+	symbols   map[string]*Symbol
+	types     map[string]ast.TypeExpr
+	functions map[string]*ast.FnDecl
 }
 
 type Symbol struct {
@@ -40,6 +41,8 @@ func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) 
 func (a *Analyzer) Analyze(program *ast.Program) []string {
 	a.pushScope() // Push the Global Scope
 
+	a.injectLibraryFunctions()
+
 	// PASS 1: Register all top-level functions so they can call each other
 	for _, decl := range program.Decls {
 		if fn, ok := decl.(*ast.FnDecl); ok {
@@ -66,8 +69,9 @@ func (a *Analyzer) Analyze(program *ast.Program) []string {
 
 func (a *Analyzer) pushScope() {
 	a.scope = &Scope{
-		parent:  a.scope,
-		symbols: make(map[string]*Symbol),
+		parent:    a.scope,
+		symbols:   make(map[string]*Symbol),
+		functions: make(map[string]*ast.FnDecl),
 	}
 }
 
@@ -85,6 +89,16 @@ func (a *Analyzer) resolve(name string) *Symbol {
 	return nil
 }
 
+// resolve walks up the scope chain looking for a variable
+func (a *Analyzer) resolveFn(name string) *ast.FnDecl {
+	for s := a.scope; s != nil; s = s.parent {
+		if fn, ok := s.functions[name]; ok {
+			return fn
+		}
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // AST Traversal
 // -----------------------------------------------------------------------------
@@ -93,6 +107,7 @@ func (a *Analyzer) analyzeDecl(decl ast.Decl) {
 	switch v := decl.(type) {
 	case *ast.FnDecl:
 		a.pushScope() // Create a new scope for the function body
+		a.scope.functions[v.Name] = v
 
 		// Load parameters into the local scope!
 		for _, param := range v.Params {
@@ -230,23 +245,42 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) string {
 		}
 
 		// 2. Resolve the function name in the global scope
-		sym := a.resolve(ident.Value)
-		if sym == nil || sym.Type != "function" {
+		fn := a.resolveFn(ident.Value)
+		if fn == nil {
 			a.errorf(e.Pos(), "undefined function '%s'", ident.Value)
 			return "unknown"
 		}
 
-		// 3. Analyze all the arguments being passed in
-		for _, arg := range e.Arguments {
-			a.analyzeExpr(arg)
-			// TODO later: compare arg types to the function's parameter types!
+		// 2.5 Check arity
+		if len(fn.Params) != len(e.Arguments) {
+			a.errorf(e.Pos(), "function arguments don't match")
+			return "unknown"
 		}
 
-		// For now, assume all functions return "int" (Tracer bullet)
-		return "int"
+		// 3. Analyze all the arguments being passed in
+		for i, arg := range e.Arguments {
+			exprType := a.analyzeExpr(arg)
+			argType := fn.Params[i].Type.String()
+			if exprType != argType {
+				a.errorf(e.Pos(), "function %s called with value type %s, expected %s", fn.Name, exprType, argType)
+			}
+		}
+
+		return fn.ReturnType.String()
 
 	default:
 		a.errorf(expr.Pos(), "expression type not recognized")
 		return "unknown"
+	}
+}
+
+func (a *Analyzer) injectLibraryFunctions() {
+	// Inject 'puts' into the global scope
+	a.scope.functions["puts"] = &ast.FnDecl{
+		Name: "puts",
+		Params: []ast.Param{
+			{Name: "s", Type: &ast.NamedType{Name: "string"}},
+		},
+		ReturnType: &ast.NamedType{Name: "int"},
 	}
 }
