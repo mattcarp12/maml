@@ -5,7 +5,7 @@ import (
 	"github.com/llir/llvm/ir/types"
 )
 
-func (c *Compiler) getPutsFunc() *ir.Func {
+func (c *Codegen) getPutsFunc() *ir.Func {
 	for _, f := range c.module.Funcs {
 		if f.Name() == "puts" {
 			return f

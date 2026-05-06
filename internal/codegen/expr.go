@@ -11,7 +11,7 @@ import (
 )
 
 // evaluateExpression now takes the new ast.Expr interface
-func (c *Compiler) evaluateExpression(expr ast.Expr) (value.Value, error) {
+func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 	switch e := expr.(type) {
 	case *ast.IntLiteral:
 		// Convert MAML int to LLVM i32 constant
@@ -259,7 +259,7 @@ func (c *Compiler) evaluateExpression(expr ast.Expr) (value.Value, error) {
 
 // getFieldIndex looks up the struct definition in your AST/Sema registry
 // and returns the integer index of the requested field.
-func (c *Compiler) getFieldIndex(structName string, fieldName string) (int, error) {
+func (c *Codegen) getFieldIndex(structName string, fieldName string) (int, error) {
 	// For our tracer bullet, we will hardcode the 'Point' lookup.
 	// (Later, you will pull this directly from the `sema.Scope.types` map you just built!)
 	if structName == "Point" {
@@ -274,7 +274,7 @@ func (c *Compiler) getFieldIndex(structName string, fieldName string) (int, erro
 }
 
 // getLLVMStructType returns the LLVM memory layout for a custom type
-func (c *Compiler) getLLVMStructType(structName string) types.Type {
+func (c *Codegen) getLLVMStructType(structName string) types.Type {
 	if structName == "Point" {
 		// Point is just two 32-bit integers sitting next to each other
 		return types.NewStruct(types.I32, types.I32)

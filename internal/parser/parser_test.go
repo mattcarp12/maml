@@ -7,6 +7,8 @@ import (
 
 	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/lexer"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // -----------------------------------------------------------------------------
@@ -309,35 +311,7 @@ func testIdentifier(t *testing.T, exp ast.Expr, value string) bool {
 	return true
 }
 
-func TestIfExpressionParsing(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{
-			// Note the newlines and exact syntax
-			"if x > 5 {\n\t=> true\n}",
-			"if (x > 5) {\n\t=> true\n}",
-		},
-		{
-			"if x == y {\n\t=> 10\n} else {\n\t=> 20\n}",
-			"if (x == y) {\n\t=> 10\n} else {\n\t=> 20\n}",
-		},
-	}
 
-	for _, tt := range tests {
-		// Wrap in a dummy return statement so it acts as an expression
-		inputWrapped := fmt.Sprintf("return %s", tt.input)
-		stmtsWrapped := parseFunctionBody(t, inputWrapped)
-
-		retStmt := stmtsWrapped[0].(*ast.ReturnStmt)
-		actual := retStmt.Value.String()
-
-		if actual != tt.expected {
-			t.Errorf("\nexpected:\n%q\n\ngot:\n%q", tt.expected, actual)
-		}
-	}
-}
 
 func TestCallExpressionParsing(t *testing.T) {
 	input := `add(5, x + 2)`
@@ -413,5 +387,87 @@ func TestStringLiteralParsing(t *testing.T) {
 
 	if actual != "hello world" {
 		t.Errorf("Mismatch. Got: %s", actual)
+	}
+}
+
+func TestParserRegressions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Bug 1 Fix: LBRACE Precedence in If Condition",
+			input:    "if x > 5 {\n\t=> true\n}",
+			expected: "if (x > 5) {\n\t=> true\n}",
+		},
+		{
+			name:     "Bug 2 Fix: Else Block Token Alignment",
+			input:    "if x == y {\n\t=> 10\n} else {\n\t=> 20\n}",
+			expected: "if (x == y) {\n\t=> 10\n} else {\n\t=> 20\n}",
+		},
+		{
+			name:     "Struct Literals Normalization (Should not be broken by Bug 1 fix)",
+			input:    "Point{x: 5, y: 10 + 2}",
+			expected: "Point{x: 5, y: (10 + 2)}",
+		},
+		{
+			name:     "Deeply Nested If/Else (Stress Test)",
+			input:    "if a == true {\n\t=> if b {\n\t\t=> 1\n\t} else {\n\t\t=> 2\n}\n} else {\n\t=> 3\n}",
+			expected: "if (a == true) {\n\t=> if b {\n\t=> 1\n} else {\n\t=> 2\n}\n} else {\n\t=> 3\n}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Wrap in a dummy return statement so it acts as an expression
+			inputWrapped := fmt.Sprintf("return %s", tt.input)
+
+			// Note: Assuming parseFunctionBody doesn't panic, but if it returns nil,
+			// testify handles the failure gracefully.
+			stmts := parseFunctionBody(t, inputWrapped)
+
+			// 'require' will halt the test immediately if the length isn't 1,
+			// preventing index out-of-bounds panics on the next line.
+			require.Len(t, stmts, 1, "Expected exactly 1 statement from the wrapper function")
+
+			retStmt, ok := stmts[0].(*ast.ReturnStmt)
+			require.True(t, ok, "Expected statement to be a ReturnStmt, got %T", stmts[0])
+			require.NotNil(t, retStmt.Value, "Return statement value should not be nil")
+
+			// 'assert' will log the diff beautifully if the strings don't match
+			actual := retStmt.Value.String()
+			assert.Equal(t, tt.expected, actual, "AST string representation mismatched")
+		})
+	}
+}
+
+func TestIfExpressionParsing(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{
+			// Note the newlines and exact syntax
+			"if x > 5 {\n\t=> true\n}",
+			"if (x > 5) {\n\t=> true\n}",
+		},
+		{
+			"if x == y {\n\t=> 10\n} else {\n\t=> 20\n}",
+			"if (x == y) {\n\t=> 10\n} else {\n\t=> 20\n}",
+		},
+	}
+
+	for _, tt := range tests {
+		// Wrap in a dummy return statement so it acts as an expression
+		inputWrapped := fmt.Sprintf("return %s", tt.input)
+		stmtsWrapped := parseFunctionBody(t, inputWrapped)
+
+		retStmt := stmtsWrapped[0].(*ast.ReturnStmt)
+		actual := retStmt.Value.String()
+
+		if actual != tt.expected {
+			t.Errorf("\nexpected:\n%q\n\ngot:\n%q", tt.expected, actual)
+		}
 	}
 }

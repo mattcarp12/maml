@@ -89,34 +89,34 @@ func (p *Parser) parseGroupedExpression() ast.Expr {
 
 func (p *Parser) parseIfExpression() ast.Expr {
 	pos := p.curPos()
+	p.nextToken() // consume 'if'
 
-	p.nextToken() // skip the 'if' keyword
-
-	// 1. Parse the condition (e.g., x > 5)
+	// 1. Temporarily disable struct parsing so '{' isn't consumed
+	p.noStructLiteral = true
 	condition := p.parseExpression(LOWEST)
+	p.noStructLiteral = false
+
 	if condition == nil {
 		return nil
 	}
 
-	// 2. We expect a block to follow the condition
-	if !p.expectPeek(token.LBRACE) {
+	if p.peekToken.Type != token.LBRACE {
 		return nil
 	}
 
-	// 3. Parse the 'true' block
+	p.nextToken() // move to LBRACE
 	consequence := p.parseBlockStmt()
 
 	var alternative *ast.BlockStmt
 
-	// 4. Check if there is an 'else' block attached
-	if p.peekToken.Type == token.ELSE {
-		p.nextToken() // move onto 'else'
-
-		if !p.expectPeek(token.LBRACE) {
+	// 2. CHECK curToken, NOT peekToken!
+	// parseBlockStmt advanced past '}', so curToken is already 'else'
+	if p.curToken.Type == token.ELSE {
+		// We are already on 'else', just check if the peek token is '{'
+		if p.peekToken.Type != token.LBRACE {
 			return nil
 		}
-
-		// Parse the 'false' block
+		p.nextToken() // move to LBRACE
 		alternative = p.parseBlockStmt()
 	}
 
@@ -254,5 +254,5 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 }
 
 func (p *Parser) parseStringLiteral() ast.Expr {
-    return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
+	return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
 }

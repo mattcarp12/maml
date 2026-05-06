@@ -1,3 +1,4 @@
+# Grammer v1
 ```ebnf
 ============================================================
 MAML LANGUAGE GRAMMAR SKETCH 
@@ -300,6 +301,225 @@ SEMANTIC / DESIGN NOTES (NOT GRAMMAR)
    - WebAssembly (Wasm) Component Model Support
    - Reproducible & Hermetic Builds
    - Remote Build Execution (RBE) Protocol
+
+============================================================
+END DOCUMENT
+============================================================
+```
+
+# Grammar v2 
+
+```ebnf
+============================================================
+MAML LANGUAGE GRAMMAR (VERSION 2.0 - CLOUD-NATIVE)
+============================================================
+
+------------------------------------------------------------
+1. LEXICAL
+------------------------------------------------------------
+
+Identifier      = letter { letter | digit | "_" } ;
+IntLiteral      = digit { digit } ;
+FloatLiteral    = digit { digit } "." digit { digit } ;
+StringLiteral   = `"` { any_char_except_quote_or_escape | escape_seq } `"` ;
+BoolLiteral     = "true" | "false" ;
+
+Keywords =
+    "package" | "import" | "static"
+  | "type" | "interface" | "impl" | "self"
+  | "fn" | "return" | "using"
+  | "mut" | "with"
+  | "if" | "else" | "match"
+  | "async" | "await"
+  | "for" | "while" | "break" | "continue" ;
+
+Operators / Punctuation =
+    ":=" | "=" | "=>" | "|>" | "|"
+  | "+" | "-" | "*" | "/" | "%"
+  | "==" | "!=" | "<" | "<=" | ">" | ">="
+  | "&&" | "||" | "!"
+  | "." | "," | ";" | ":" 
+  | "(" | ")" | "{" | "}" | "[" | "]" ;
+
+
+------------------------------------------------------------
+2. PROGRAM STRUCTURE
+------------------------------------------------------------
+
+Program         = { TopDecl } ;
+
+TopDecl         = PackageDecl
+                | ImportDecl
+                | TypeDecl
+                | InterfaceDecl
+                | ImplDecl
+                | FuncDecl
+                | GlobalConstDecl ;
+
+PackageDecl     = "package" Identifier ";" ;
+
+ImportDecl      = "import" StringLiteral ";"
+                | "import" "(" { StringLiteral ";" } ")" ;
+
+GlobalConstDecl = Identifier ":=" ( Expr | StaticLoad ) ";" ;
+
+(* Cloud-native asset embedding *)
+StaticLoad      = "static" "(" StringLiteral ")" ;
+
+
+------------------------------------------------------------
+3. TYPES & IMPLEMENTATIONS
+------------------------------------------------------------
+
+TypeDecl        = "type" Identifier [ TypeParams ] "=" TypeRhs ";" ;
+
+TypeParams      = "[" Identifier { "," Identifier } "]" ;
+
+TypeRhs         = ProductType | SumType | AliasType ;
+
+AliasType       = TypeExpr ;
+
+ProductType     = "{" FieldDecl { "," FieldDecl } "}" ;
+
+FieldDecl       = Identifier TypeExpr ;
+
+SumType         = Variant { "|" Variant } ;
+
+Variant         = Identifier | Identifier "(" [ VariantArgs ] ")" ;
+
+VariantArgs     = TypeExpr { "," TypeExpr } ;
+
+(* Open Implementation blocks (package-scoped) *)
+ImplDecl        = "impl" Identifier [ TypeParams ] "{" { MethodDecl } "}" ;
+
+MethodDecl      = "fn" Identifier "(" [ Receiver ] [ "," ParamList ] ")" 
+                  [ "using" "(" ParamList ")" ]
+                  [ "async" ] "=>" TypeExpr Block ;
+
+Receiver        = [ "mut" ] "self" ;
+
+
+------------------------------------------------------------
+4. INTERFACES (STRUCTURAL / DI)
+------------------------------------------------------------
+
+InterfaceDecl   = "type" Identifier "=" "interface" "{" { MethodSig ";" } "}" ;
+
+MethodSig       = Identifier "(" [ ParamList ] ")" [ "using" "(" ParamList ")" ] 
+                  [ "async" ] "=>" TypeExpr ;
+
+
+------------------------------------------------------------
+5. FUNCTIONS
+------------------------------------------------------------
+
+FuncDecl        = "fn" Identifier [ TypeParams ] "(" [ ParamList ] ")"
+                  [ "using" "(" ParamList ")" ]
+                  [ "async" ] "=>" TypeExpr Block ;
+
+ParamList       = Param { "," Param } ;
+
+Param           = [ "mut" ] Identifier TypeExpr ;
+
+
+------------------------------------------------------------
+6. STATEMENTS
+------------------------------------------------------------
+
+Block           = "{" { Stmt } "}" ;
+
+Stmt            = VarDecl | ConstDecl | AssignStmt | ReturnStmt 
+                | IfStmt | MatchStmt | ForStmt | WhileStmt 
+                | BreakStmt | ContinueStmt | ExprStmt | Block ;
+
+ConstDecl       = Identifier ":=" Expr ";" ;
+
+VarDecl         = "mut" Identifier ":=" Expr ";" ;
+
+AssignStmt      = LValue "=" Expr ";" ;
+
+LValue          = Identifier { "." Identifier | "[" Expr "]" } ;
+
+ReturnStmt      = "return" [ Expr ] ";" ;
+
+
+------------------------------------------------------------
+7. EXPRESSIONS
+------------------------------------------------------------
+
+Expr            = PipeExpr ;
+
+PipeExpr        = LogicOrExpr { "|>" LogicOrExpr } ;
+
+LogicOrExpr     = LogicAndExpr { "||" LogicAndExpr } ;
+LogicAndExpr    = EqualityExpr { "&&" EqualityExpr } ;
+
+EqualityExpr    = RelExpr { ("==" | "!=") RelExpr } ;
+RelExpr         = AddExpr { ("<" | "<=" | ">" | ">=") AddExpr } ;
+
+AddExpr         = MulExpr { ("+" | "-") MulExpr } ;
+MulExpr         = UnaryExpr { ("*" | "/" | "%") UnaryExpr } ;
+
+UnaryExpr       = ("!" | "-") UnaryExpr
+                | AwaitExpr
+                | PrimaryExpr ;
+
+AwaitExpr       = "await" UnaryExpr ;
+
+PrimaryExpr     = Literal
+                | Identifier
+                | CallExpr
+                | WithExpr
+                | FieldAccess
+                | ParenExpr
+                | IfExpr
+                | MatchExpr ;
+
+(* Functional Update: Optimized to in-place mutation by compiler if unique *)
+WithExpr        = PrimaryExpr "with" "{" FieldUpdate { "," FieldUpdate } "}" ;
+
+FieldUpdate     = Identifier "=" Expr ;
+
+CallExpr        = PrimaryExpr "(" [ ArgList ] ")" [ "using" "(" ArgList ")" ] ;
+
+ArgList         = Expr { "," Expr } ;
+
+MatchExpr       = "match" Expr "{" { MatchArm } "}" ;
+
+MatchArm        = Pattern "=>" ( Expr | Block ) ;
+
+
+============================================================
+SEMANTIC / DESIGN DECISIONS
+============================================================
+
+1. Mechanical Transparency (The Go Philosophy)
+   - Value Semantics: Structs are stack-allocated values by default.
+   - Explicit Mutability: No hidden pointers. 'mut' is the only way to mutate.
+   - Single-Threaded: One MAML runtime per core. No locking overhead.
+
+2. ADT Memory Layout (The Rust/Zig Strategy)
+   - Unboxed ADTs: Tagged unions are contiguous memory.
+   - Exhaustiveness: Match statements are verified at compile-time.
+   - Flat Match: Error handling is explicit via Result[T, E] and divergent match arms.
+
+3. Capability-Based Security (The Cloud-Native Innovation)
+   - No Ambient Authority: No global 'fs' or 'net'.
+   - Capability Objects: I/O requires passing a Capability handle (e.g., NetCap).
+   - Contextual Parameters: 'using' clause handles capability plumbing without 
+     polluting function signatures manually.
+   - maml.toml Manifest: Declarative source of truth for required capabilities.
+   - Static Verification: Compiler ensures code does not exceed manifest authority.
+
+4. Async Runtime (The Node/NGINX Model)
+   - State Machines: async/await compiles to stackless state machines.
+   - Task Density: Millions of idle tasks per GB of RAM.
+   - Zero-Copy Workers: CPU work offloaded to OS processes via Shared Memory.
+
+5. Toolchain
+   - maml build --containerize: Emits distroless container + Seccomp/RBAC manifests.
+   - Built-in OTel: Implicit trace propagation via the async state machine.
+   - Static VFS: Embedding assets into the binary to simplify container deployment.
 
 ============================================================
 END DOCUMENT

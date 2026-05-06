@@ -8,32 +8,35 @@ import (
 )
 
 func (p *Parser) parseBlockStmt() *ast.BlockStmt {
-	block := &ast.BlockStmt{
-		Pos_:       p.curPos(),
-		Statements: []ast.Stmt{},
-	}
+	block := &ast.BlockStmt{Pos_: p.curPos()}
 
-	p.nextToken() // skip '{'
-
-	// Skip any leading newlines inside the block
-	for p.curToken.Type == token.NEWLINE {
-		p.nextToken()
-	}
+	// curToken is '{', move past it
+	p.nextToken()
+	p.skipNewlines()
 
 	for p.curToken.Type != token.RBRACE && p.curToken.Type != token.EOF {
 		stmt := p.parseStmt()
 		if stmt != nil {
 			block.Statements = append(block.Statements, stmt)
 		}
-		p.nextToken()
 
-		// Skip any extra blank lines between statements
-		for p.curToken.Type == token.NEWLINE {
-			p.nextToken()
+		// This is the tricky part. If parseStmt() ended on a NEWLINE
+		// because of expectStatementEnd, we are already ready to check
+		// the next token or the RBRACE.
+		if p.peekToken.Type == token.RBRACE {
+			p.nextToken() // Move to RBRACE to trigger loop exit
+			break
 		}
+
+		p.nextToken()
+		p.skipNewlines()
 	}
 
-	block.End_ = p.curPos()
+	if p.curToken.Type == token.RBRACE {
+		block.End_ = p.curPos()
+		p.nextToken() // consume '}'
+	}
+
 	return block
 }
 

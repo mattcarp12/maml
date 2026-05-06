@@ -37,6 +37,11 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 }
 
 func (p *Parser) peekPrecedence() int {
+	// If the flag is set, pretend LBRACE has the lowest precedence
+	// so the Pratt parser won't consume it.
+	if p.noStructLiteral && p.peekToken.Type == token.LBRACE {
+		return LOWEST
+	}
 	if p, ok := precedences[p.peekToken.Type]; ok {
 		return p
 	}
