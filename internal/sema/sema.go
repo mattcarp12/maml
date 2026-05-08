@@ -6,80 +6,106 @@ import (
 	"github.com/mattcarp12/maml/internal/ast"
 )
 
+type SymbolKind string
+
+const (
+	VarSymbol  SymbolKind = "var"
+	FuncSymbol SymbolKind = "func"
+)
+
 type Scope struct {
-	parent    *Scope
-	symbols   map[string]*Symbol
-	types     map[string]ast.TypeExpr
-	functions map[string]*ast.FnDecl
+	parent  *Scope
+	symbols map[string]*Symbol
+	types   map[string]Type
 }
 
 type Symbol struct {
+	Kind    SymbolKind // NEW: Tells us what this symbol is
 	Name    string
 	Mutable bool
-	// For V1, resolving types to a string representation (e.g., "int") is easiest.
-	// Later, this will point to a concrete semantic `Type` struct.
-	Type string
+	Type    Type
 }
 
 type Analyzer struct {
-	scope  *Scope
-	errors []string
+	scope          *Scope
+	errors         []string
+	TypeMap        map[ast.Node]Type
+	expectedReturn Type
 }
 
 func New() *Analyzer {
+	globalScope := &Scope{
+		symbols: make(map[string]*Symbol),
+		types:   make(map[string]Type),
+	}
+
+	// Properly register 'puts' as a FuncSymbol
+	globalScope.symbols["puts"] = &Symbol{
+		Kind:    FuncSymbol,
+		Name:    "puts",
+		Mutable: false,
+		Type: &FunctionType{
+			Params: []Type{StringType{}},
+			Return: IntType{},
+		},
+	}
+
 	return &Analyzer{
-		errors: []string{},
+		scope:          globalScope,
+		errors:         []string{},
+		TypeMap:        make(map[ast.Node]Type),
+		expectedReturn: nil,
 	}
 }
 
-// errorf is our standardized compiler error formatter
 func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	a.errors = append(a.errors, fmt.Sprintf("Line %d:%d - %s", pos.Line, pos.Col, msg))
 }
 
-func (a *Analyzer) Analyze(program *ast.Program) []string {
-	a.pushScope() // Push the Global Scope
+// Analyze runs the full semantic analysis pipeline and returns errors and the resolved TypeMap.
+func (a *Analyzer) Analyze(program *ast.Program) ([]string, map[ast.Node]Type) {
+	a.pushScope() // Global scope
 
-	a.injectLibraryFunctions()
-
-	// PASS 1: Register all top-level functions so they can call each other
+	// PASS 1: Register Types (Structs, Aliases)
 	for _, decl := range program.Decls {
-		if fn, ok := decl.(*ast.FnDecl); ok {
-			a.scope.symbols[fn.Name] = &Symbol{
-				Name:    fn.Name,
-				Mutable: false,
-				Type:    "function", // We will refine function signatures later
-			}
+		if td, ok := decl.(*ast.TypeDecl); ok {
+			a.analyzeTypeDecl(td)
 		}
 	}
 
-	// PASS 2: Analyze the bodies
+	// PASS 2: Register Function Signatures
 	for _, decl := range program.Decls {
-		a.analyzeDecl(decl)
+		if fn, ok := decl.(*ast.FnDecl); ok {
+			a.registerFunction(fn)
+		}
+	}
+
+	// PASS 3: Typecheck Function Bodies
+	for _, decl := range program.Decls {
+		if fn, ok := decl.(*ast.FnDecl); ok {
+			a.analyzeFnBody(fn)
+		}
 	}
 
 	a.popScope()
-	return a.errors
+	return a.errors, a.TypeMap
 }
-
-// -----------------------------------------------------------------------------
-// Scope Management
-// -----------------------------------------------------------------------------
 
 func (a *Analyzer) pushScope() {
 	a.scope = &Scope{
-		parent:    a.scope,
-		symbols:   make(map[string]*Symbol),
-		functions: make(map[string]*ast.FnDecl),
+		parent:  a.scope,
+		symbols: make(map[string]*Symbol),
+		types:   make(map[string]Type),
 	}
 }
 
 func (a *Analyzer) popScope() {
-	a.scope = a.scope.parent
+	if a.scope != nil {
+		a.scope = a.scope.parent
+	}
 }
 
-// resolve walks up the scope chain looking for a variable
 func (a *Analyzer) resolve(name string) *Symbol {
 	for s := a.scope; s != nil; s = s.parent {
 		if sym, ok := s.symbols[name]; ok {
@@ -89,198 +115,247 @@ func (a *Analyzer) resolve(name string) *Symbol {
 	return nil
 }
 
-// resolve walks up the scope chain looking for a variable
-func (a *Analyzer) resolveFn(name string) *ast.FnDecl {
-	for s := a.scope; s != nil; s = s.parent {
-		if fn, ok := s.functions[name]; ok {
-			return fn
-		}
+func (a *Analyzer) registerFunction(v *ast.FnDecl) {
+	var paramTypes []Type
+	for _, p := range v.Params {
+		paramTypes = append(paramTypes, a.resolveAstType(p.Type))
 	}
-	return nil
+	retType := a.resolveAstType(v.ReturnType)
+
+	// Register the signature fully populated with real Types!
+	a.scope.symbols[v.Name] = &Symbol{
+		Kind:    FuncSymbol,
+		Name:    v.Name,
+		Mutable: false,
+		Type:    &FunctionType{Params: paramTypes, Return: retType},
+	}
 }
 
-// -----------------------------------------------------------------------------
-// AST Traversal
-// -----------------------------------------------------------------------------
+func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
+	a.pushScope()
 
-func (a *Analyzer) analyzeDecl(decl ast.Decl) {
-	switch v := decl.(type) {
-	case *ast.FnDecl:
-		a.pushScope() // Create a new scope for the function body
-		a.scope.functions[v.Name] = v
+	// Bind parameters into the local scope as Variables
+	for _, param := range v.Params {
+		pType := a.resolveAstType(param.Type)
+		a.scope.symbols[param.Name] = &Symbol{
+			Kind:    VarSymbol,
+			Name:    param.Name,
+			Mutable: false,
+			Type:    pType,
+		}
+		a.TypeMap[param.Type] = pType
+	}
 
-		// Load parameters into the local scope!
-		for _, param := range v.Params {
-			a.scope.symbols[param.Name] = &Symbol{
-				Name:    param.Name,
-				Mutable: false,                            // In MAML, parameters are immutable by default
-				Type:    param.Type.(*ast.NamedType).Name, // e.g., "int"
+	a.expectedReturn = a.resolveAstType(v.ReturnType)
+
+	alwaysReturns := a.analyzeBlockStmt(v.Body)
+	if !alwaysReturns {
+		a.errorf(v.Pos(), "function '%s' is missing a return statement", v.Name)
+	}
+
+	a.expectedReturn = nil
+	a.popScope()
+}
+
+func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
+	switch t := expr.(type) {
+	case *ast.NamedType:
+		switch t.Name {
+		case "int":
+			return IntType{}
+		case "bool":
+			return BoolType{}
+		case "string":
+			return StringType{}
+		default:
+			for s := a.scope; s != nil; s = s.parent {
+				if custom, ok := s.types[t.Name]; ok {
+					return custom
+				}
 			}
+			a.errorf(t.Pos(), "unknown type %s", t.Name)
+			return UnknownType{}
 		}
+	}
+	return UnknownType{}
+}
 
-		a.analyzeBlockStmt(v.Body)
-		a.popScope()
-
-	case *ast.TypeDecl:
-		// check if type name is already taken
-		if _, ok := a.scope.types[v.Name.Name]; ok {
-			a.errorf(v.Pos(), "type %s already defined", v.Name.Name)
-			return
+func (a *Analyzer) analyzeTypeDecl(v *ast.TypeDecl) {
+	if _, ok := a.scope.types[v.Name.Name]; ok {
+		a.errorf(v.Pos(), "type %s already defined", v.Name.Name)
+		return
+	}
+	if pt, ok := v.Rhs.(*ast.ProductType); ok {
+		st := &StructType{Name: v.Name.Name}
+		for _, f := range pt.Fields {
+			st.Fields = append(st.Fields, StructField{
+				Name: f.Name,
+				Type: a.resolveAstType(f.Type),
+			})
 		}
-		a.scope.types[v.Name.Name] = v.Rhs
-
-	default:
-		a.errorf(decl.Pos(), "declaration type not recognized")
+		a.scope.types[v.Name.Name] = st
+	} else {
+		a.scope.types[v.Name.Name] = a.resolveAstType(v.Rhs)
 	}
 }
 
-func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) string {
+// Returns true if the block guarantees a return statement
+func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
+	alwaysReturns := false
 	for _, stmt := range body.Statements {
-		stmtType := a.analyzeStmt(stmt)
-		switch stmt.(type) {
-		case *ast.ReturnStmt, *ast.YieldStmt:
-			return stmtType
+		// If any statement in this block returns, the block returns
+		if a.analyzeStmt(stmt) {
+			alwaysReturns = true
 		}
 	}
-	return "void"
+	return alwaysReturns
 }
 
-func (a *Analyzer) analyzeStmt(stmt ast.Stmt) string {
+// Returns true if the statement is a guaranteed return
+func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 	switch s := stmt.(type) {
 	case *ast.DeclareStmt:
-		// 1. Analyze the right side to figure out what type we are assigning
 		exprType := a.analyzeExpr(s.Value)
-
-		// 2. MAML strict rule: No shadowing in the same scope
 		if _, exists := a.scope.symbols[s.Name]; exists {
-			a.errorf(s.Pos(), "variable '%s' is already declared in this block", s.Name)
-			return "unknown"
+			a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
+			return false
 		}
-
-		// 3. Register the variable in the current scope
 		a.scope.symbols[s.Name] = &Symbol{
+			Kind:    VarSymbol,
 			Name:    s.Name,
 			Mutable: s.Mutable,
 			Type:    exprType,
 		}
-
-		return exprType
+		return false
 
 	case *ast.ReturnStmt:
-		// Just ensure the expression being returned is valid
-		exprType := a.analyzeExpr(s.Value)
-		// TODO: Compare this expression's type against the Function's ReturnType
-		return exprType
+		retType := a.analyzeExpr(s.Value)
+
+		// NEW: Verify the returned type matches the function's expected type!
+		if a.expectedReturn != nil && !a.expectedReturn.Equals(UnknownType{}) {
+			if !retType.Equals(a.expectedReturn) && !retType.Equals(UnknownType{}) {
+				a.errorf(s.Pos(), "type mismatch: expected return type '%s', got '%s'", a.expectedReturn.String(), retType.String())
+			}
+		}
+		return true // Yes, this statement returns!
 
 	case *ast.YieldStmt:
-		exprType := a.analyzeExpr(s.Value)
-		return exprType
+		a.analyzeExpr(s.Value)
+		return false
 
-	default:
-		a.errorf(stmt.Pos(), "statement type not recognized")
-		return "unknown"
+	case *ast.ExprStmt:
+		a.analyzeExpr(s.Value)
+		return false
 	}
+
+	return false
 }
 
-// analyzeExpr evaluates an expression and returns its computed type
-func (a *Analyzer) analyzeExpr(expr ast.Expr) string {
+func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
+	var t Type = UnknownType{}
+
 	switch e := expr.(type) {
 
 	case *ast.IntLiteral:
-		return "int"
+		t = IntType{}
 
 	case *ast.BoolLiteral:
-		return "bool"
+		t = BoolType{}
 
 	case *ast.Identifier:
 		sym := a.resolve(e.Value)
 		if sym == nil {
-			a.errorf(e.Pos(), "undefined variable '%s'", e.Value)
-			return "unknown"
+			a.errorf(e.Pos(), "undefined name '%s'", e.Value)
+			t = UnknownType{}
+		} else {
+			t = sym.Type
 		}
-		return sym.Type
 
 	case *ast.InfixExpr:
-		leftType := a.analyzeExpr(e.Left)
-		rightType := a.analyzeExpr(e.Right)
+		left := a.analyzeExpr(e.Left)
+		right := a.analyzeExpr(e.Right)
 
-		// MAML strict rule: You can only do math on identical types
-		if leftType != "unknown" && rightType != "unknown" && leftType != rightType {
-			a.errorf(e.Pos(), "type mismatch: cannot %s '%s' and '%s'", e.Operator, leftType, rightType)
+		if !left.Equals(UnknownType{}) && !right.Equals(UnknownType{}) && !left.Equals(right) {
+			a.errorf(e.Pos(), "type mismatch: cannot %s '%s' and '%s'", e.Operator, left.String(), right.String())
 		}
-
-		// A math operation between two ints results in an int
-		return leftType
+		t = left
 
 	case *ast.IfExpr:
-		// 1. The condition must evaluate to a boolean
-		condType := a.analyzeExpr(e.Condition)
-		if condType != "bool" && condType != "unknown" {
-			a.errorf(e.Pos(), "IF condition must be a boolean, got '%s'", condType)
+		cond := a.analyzeExpr(e.Condition)
+		if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
+			a.errorf(e.Pos(), "IF condition must be a boolean")
 		}
-
-		// 2. Analyze the 'true' branch
-		thenType := a.analyzeBlockStmt(e.Consequence)
-
-		// 3. Analyze the 'false' branch
+		a.analyzeBlockStmt(e.Consequence)
 		if e.Alternative != nil {
-			elseType := a.analyzeBlockStmt(e.Alternative)
-
-			// If both branches exist, they MUST match types to be used as an expression
-			if thenType != "unknown" && elseType != "unknown" && thenType != elseType {
-				a.errorf(e.Pos(), "if/else branches have incompatible yield types: '%s' and '%s'", thenType, elseType)
-			}
-			return thenType
+			a.analyzeBlockStmt(e.Alternative)
 		}
-
-		// If there is no else block, it yields nothing (void)
-		return "void"
+		t = IntType{} // simplified for now
 
 	case *ast.CallExpr:
-		// 1. Ensure the function being called is actually an identifier
-		ident, ok := e.Function.(*ast.Identifier)
+		// 1. Evaluate whatever is being called
+		fnTypeExpr := a.analyzeExpr(e.Function)
+
+		// 2. Ensure it evaluates to a FunctionType
+		fnType, ok := fnTypeExpr.(*FunctionType)
 		if !ok {
-			a.errorf(e.Pos(), "cannot call non-function")
-			return "unknown"
-		}
+			if !fnTypeExpr.Equals(UnknownType{}) {
+				a.errorf(e.Pos(), "cannot call non-function type '%s'", fnTypeExpr.String())
+			}
+			t = UnknownType{}
+		} else {
+			// 3. Arity check
+			if len(e.Arguments) != len(fnType.Params) {
+				a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d", len(fnType.Params), len(e.Arguments))
+				t = UnknownType{}
+			} else {
+				// 4. Typecheck arguments against the FunctionType signature
+				for i, arg := range e.Arguments {
+					argType := a.analyzeExpr(arg)
+					paramType := fnType.Params[i]
 
-		// 2. Resolve the function name in the global scope
-		fn := a.resolveFn(ident.Value)
-		if fn == nil {
-			a.errorf(e.Pos(), "undefined function '%s'", ident.Value)
-			return "unknown"
-		}
-
-		// 2.5 Check arity
-		if len(fn.Params) != len(e.Arguments) {
-			a.errorf(e.Pos(), "function arguments don't match")
-			return "unknown"
-		}
-
-		// 3. Analyze all the arguments being passed in
-		for i, arg := range e.Arguments {
-			exprType := a.analyzeExpr(arg)
-			argType := fn.Params[i].Type.String()
-			if exprType != argType {
-				a.errorf(e.Pos(), "function %s called with value type %s, expected %s", fn.Name, exprType, argType)
+					if !argType.Equals(paramType) && !argType.Equals(UnknownType{}) {
+						a.errorf(e.Pos(), "argument %d type mismatch: expected '%s', got '%s'", i, paramType.String(), argType.String())
+					}
+				}
+				t = fnType.Return
 			}
 		}
 
-		return fn.ReturnType.String()
+	case *ast.StructLiteral:
+		// Look up the struct type definition
+		for s := a.scope; s != nil; s = s.parent {
+			if custom, ok := s.types[e.Type.Value]; ok {
+				t = custom
+				break
+			}
+		}
+		// Analyze fields to catch inner errors
+		for _, field := range e.Fields {
+			a.analyzeExpr(field.Value)
+		}
+
+	case *ast.FieldAccess:
+		objType := a.analyzeExpr(e.Object)
+		if st, ok := objType.(*StructType); ok {
+			idx := st.GetFieldIndex(e.Field.Value)
+			if idx >= 0 {
+				t = st.Fields[idx].Type
+			} else {
+				a.errorf(e.Pos(), "field '%s' not found on struct '%s'", e.Field.Value, st.Name)
+			}
+		} else if !objType.Equals(UnknownType{}) {
+			a.errorf(e.Pos(), "cannot access field on non-struct type '%s'", objType.String())
+		}
+
+	case *ast.StringLiteral:
+		t = StringType{}
 
 	default:
-		a.errorf(expr.Pos(), "expression type not recognized")
-		return "unknown"
+		a.errorf(expr.Pos(), "expression type not recognized: %T", expr)
+		t = UnknownType{}
 	}
-}
 
-func (a *Analyzer) injectLibraryFunctions() {
-	// Inject 'puts' into the global scope
-	a.scope.functions["puts"] = &ast.FnDecl{
-		Name: "puts",
-		Params: []ast.Param{
-			{Name: "s", Type: &ast.NamedType{Name: "string"}},
-		},
-		ReturnType: &ast.NamedType{Name: "int"},
-	}
+	// NEW: Save the resolved type so Codegen can use it!
+	a.TypeMap[expr] = t
+	return t
 }

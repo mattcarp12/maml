@@ -2,10 +2,9 @@ package codegen
 
 import (
 	"github.com/llir/llvm/ir/types"
+	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
 )
-
-// Declare, Return, Yield, Block
 
 func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
 	val, err := c.evaluateExpression(n.Value)
@@ -13,20 +12,15 @@ func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
 		return err
 	}
 
-	// 1. Ask the value what LLVM type it is
 	valType := val.Type()
-
-	// 2. If it's ALREADY a pointer (like the struct memory allocated by StructLiteral),
-	// we don't need to allocate new memory. Just point the variable to it!
 	if _, isPtr := valType.(*types.PointerType); isPtr {
-		c.env[n.Name] = val
+		c.setVar(n.Name, val) // FIX: Use new Env method
 		return nil
 	}
 
-	// 3. If it's a primitive (like an i32 from a math equation), allocate space and store it.
 	alloc := c.currentBlock.NewAlloca(valType)
 	c.currentBlock.NewStore(val, alloc)
-	c.env[n.Name] = alloc
+	c.setVar(n.Name, alloc) // FIX: Use new Env method
 	return nil
 }
 
@@ -39,21 +33,39 @@ func (c *Codegen) compileReturnStmt(n *ast.ReturnStmt) error {
 	return nil
 }
 
-func (c *Codegen) compileYieldStmt(n *ast.YieldStmt) error {
-	val, err := c.evaluateExpression(n.Value)
-	if err != nil {
-		return err
-	}
-	// Save the yielded value into compiler state so the IfExpr can grab it
-	c.currentYield = val
-	return nil
-}
+// FIX: Blocks now return (value.Value, error) and push/pop their own scope!
+func (c *Codegen) compileBlockStmt(n *ast.BlockStmt) (value.Value, error) {
+	c.pushEnv()
+	defer c.popEnv()
 
-func (c *Codegen) compileBlockStmt(n *ast.BlockStmt) error {
+	var lastYield value.Value
 	for _, stmt := range n.Statements {
-		if err := c.Compile(stmt); err != nil {
-			return err
+		switch s := stmt.(type) {
+		case *ast.DeclareStmt:
+			if err := c.compileDeclareStmt(s); err != nil {
+				return nil, err
+			}
+		case *ast.ReturnStmt:
+			if err := c.compileReturnStmt(s); err != nil {
+				return nil, err
+			}
+		case *ast.YieldStmt:
+			// Handle yields directly in the block instead of calling a separate function
+			val, err := c.evaluateExpression(s.Value)
+			if err != nil {
+				return nil, err
+			}
+			lastYield = val
+		case *ast.ExprStmt:
+			if err := c.compileExprStmt(s); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return nil
+	return lastYield, nil
+}
+
+func (c *Codegen) compileExprStmt(n *ast.ExprStmt) error {
+	_, err := c.evaluateExpression(n.Value)
+	return err
 }

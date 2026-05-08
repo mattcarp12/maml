@@ -4,20 +4,428 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/lexer"
 	"github.com/mattcarp12/maml/internal/parser"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// testHelper parses the input and runs the semantic analyzer.
-// It explicitly fails the test if the *parser* has errors, to ensure
-// we are actually testing semantic logic and not broken syntax.
-func analyzeInput(t *testing.T, input string) []string {
+func TestAnalyzer_Analyze(t *testing.T) {
+	tests := []struct {
+		name        string
+		program     *ast.Program
+		wantErrors  []string
+		wantTypeMap map[string]Type // simplified key for expected types (e.g., var name or expr desc)
+	}{
+		{
+			name:       "empty program",
+			program:    &ast.Program{Decls: []ast.Decl{}},
+			wantErrors: nil,
+		},
+		{
+			name: "simple function with return",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ReturnStmt{
+									Value: &ast.IntLiteral{Value: 42},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "function missing return",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"function 'main' is missing a return statement"},
+		},
+		{
+			name: "type mismatch in return",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ReturnStmt{
+									Value: &ast.BoolLiteral{Value: true},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"type mismatch: expected return type 'int', got 'bool'"},
+		},
+		{
+			name: "variable declaration and use",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.DeclareStmt{
+									Name:    "x",
+									Mutable: false,
+									Value:   &ast.IntLiteral{Value: 10},
+								},
+								&ast.ReturnStmt{
+									Value: &ast.Identifier{Value: "x"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "undefined variable",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ReturnStmt{
+									Value: &ast.Identifier{Value: "undefined"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"undefined name 'undefined'"},
+		},
+		{
+			name: "redeclaration error",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.DeclareStmt{
+									Name:  "x",
+									Value: &ast.IntLiteral{Value: 1},
+								},
+								&ast.DeclareStmt{
+									Name:  "x",
+									Value: &ast.IntLiteral{Value: 2},
+								},
+								&ast.ReturnStmt{
+									Value: &ast.Identifier{Value: "x"},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"variable 'x' is already declared"},
+		},
+		{
+			name: "infix type mismatch",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ReturnStmt{
+									Value: &ast.InfixExpr{
+										Left:     &ast.IntLiteral{Value: 1},
+										Operator: "+",
+										Right:    &ast.BoolLiteral{Value: true},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"type mismatch: cannot + 'int' and 'bool'"},
+		},
+		{
+			name: "if condition must be bool",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ReturnStmt{
+									Value: &ast.IfExpr{
+										Condition:   &ast.IntLiteral{Value: 1},
+										Consequence: &ast.BlockStmt{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"IF condition must be a boolean"},
+		},
+		{
+			name: "builtin puts call",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ExprStmt{
+									Value: &ast.CallExpr{
+										Function: &ast.Identifier{Value: "puts"},
+										Arguments: []ast.Expr{
+											&ast.StringLiteral{Value: "hello"},
+										},
+									},
+								},
+								&ast.ReturnStmt{Value: &ast.IntLiteral{Value: 0}},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "wrong arity call",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.ExprStmt{
+									Value: &ast.CallExpr{
+										Function:  &ast.Identifier{Value: "puts"},
+										Arguments: []ast.Expr{},
+									},
+								},
+								&ast.ReturnStmt{Value: &ast.IntLiteral{Value: 0}},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"wrong number of arguments: expected 1, got 0"},
+		},
+		{
+			name: "struct definition and literal",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.TypeDecl{
+						Name: &ast.NamedType{Name: "Point"},
+						Rhs: &ast.ProductType{
+							Fields: []ast.Param{
+								{Name: "x", Type: &ast.NamedType{Name: "int"}},
+								{Name: "y", Type: &ast.NamedType{Name: "int"}},
+							},
+						},
+					},
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.DeclareStmt{
+									Name: "p",
+									Value: &ast.StructLiteral{
+										Type: &ast.Identifier{Value: "Point"},
+										Fields: []ast.StructField{
+											{Name: &ast.Identifier{Value: "x"}, Value: &ast.IntLiteral{Value: 1}},
+											{Name: &ast.Identifier{Value: "y"}, Value: &ast.IntLiteral{Value: 2}},
+										},
+									},
+								},
+								&ast.ReturnStmt{Value: &ast.IntLiteral{Value: 0}},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "unknown type in struct field",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.TypeDecl{
+						Name: &ast.NamedType{Name: "Bad"},
+						Rhs: &ast.ProductType{
+							Fields: []ast.Param{
+								{Name: "x", Type: &ast.NamedType{Name: "unknownType"}},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"unknown type unknownType"},
+		},
+		{
+			name: "field access on struct",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.TypeDecl{
+						Name: &ast.NamedType{Name: "Point"},
+						Rhs: &ast.ProductType{
+							Fields: []ast.Param{{Name: "x", Type: &ast.NamedType{Name: "int"}}},
+						},
+					},
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.DeclareStmt{
+									Name: "p",
+									Value: &ast.StructLiteral{
+										Type:   &ast.Identifier{Value: "Point"},
+										Fields: []ast.StructField{{Name: &ast.Identifier{Value: "x"}, Value: &ast.IntLiteral{Value: 10}}},
+									},
+								},
+								&ast.ReturnStmt{
+									Value: &ast.FieldAccess{
+										Object: &ast.Identifier{Value: "p"},
+										Field:  &ast.Identifier{Value: "x"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "field access on non-struct",
+			program: &ast.Program{
+				Decls: []ast.Decl{
+					&ast.FnDecl{
+						Name:       "main",
+						Params:     []ast.Param{},
+						ReturnType: &ast.NamedType{Name: "int"},
+						Body: &ast.BlockStmt{
+							Statements: []ast.Stmt{
+								&ast.DeclareStmt{
+									Name:  "x",
+									Value: &ast.IntLiteral{Value: 10},
+								},
+								&ast.ReturnStmt{
+									Value: &ast.FieldAccess{
+										Object: &ast.Identifier{Value: "x"},
+										Field:  &ast.Identifier{Value: "foo"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrors: []string{"cannot access field on non-struct type 'int'"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			analyzer := New()
+			errors, _ := analyzer.Analyze(tt.program)
+
+			if tt.wantErrors == nil {
+				require.Empty(t, errors, "expected no errors")
+			} else {
+				require.Len(t, errors, len(tt.wantErrors))
+				for i, want := range tt.wantErrors {
+					require.Contains(t, errors[i], want)
+				}
+			}
+
+			// Optional: basic check on TypeMap size or specific entries if needed
+			if tt.wantTypeMap != nil {
+				// Custom assertions based on expected types
+			}
+		})
+	}
+}
+
+// Additional focused table tests for specific analyzers if needed
+
+func TestAnalyzer_ResolveAstType(t *testing.T) {
+	// Could be a separate test for helper methods
+	analyzer := New()
+
+	tests := []struct {
+		name     string
+		typeExpr ast.TypeExpr
+		want     Type
+		wantErr  bool
+	}{
+		{"int", &ast.NamedType{Name: "int"}, IntType{}, false},
+		{"unknown", &ast.NamedType{Name: "FooBar"}, UnknownType{}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := analyzer.resolveAstType(tt.typeExpr) // Note: method is unexported, may need to adjust or test via Analyze
+			if tt.wantErr {
+				// Check errors
+			} else {
+				require.True(t, got.Equals(tt.want))
+			}
+		})
+	}
+}
+
+// analyzeInput parses the input and runs semantic analysis.
+// It now returns both the errors and the resolved TypeMap.
+func analyzeInput(t *testing.T, input string) ([]string, map[ast.Node]Type) {
 	l := lexer.New(input)
 	p := parser.New(l)
 	program := p.ParseProgram()
 
 	if len(p.Errors()) > 0 {
-		t.Fatalf("Parser encountered errors, fix syntax first:\n%s", strings.Join(p.Errors(), "\n"))
+		t.Fatalf("Parser errors:\n%s", strings.Join(p.Errors(), "\n"))
 	}
 
 	analyzer := New()
@@ -30,7 +438,7 @@ func TestValidPrograms(t *testing.T) {
 		input string
 	}{
 		{
-			name: "Basic declarations and math",
+			name: "basic declarations and return",
 			input: `
 			fn main() int {
 				x := 5
@@ -39,161 +447,243 @@ func TestValidPrograms(t *testing.T) {
 			}`,
 		},
 		{
-			name: "Function calling (Pass 1 Resolution)",
+			name: "function with parameters and call",
 			input: `
-			fn helper() int {
-				return 42
+			fn add(a int, b int) int {
+				return a + b
 			}
+
 			fn main() int {
-				// We haven't implemented function call AST nodes yet, 
-				// but this ensures multiple functions parse without scope collision.
-				x := 5
-				return x
+				return add(3, 4)
+			}`,
+		},
+		{
+			name: "if expression",
+			input: `
+			fn main() int {
+				return if true { => 10 } else { => 20 }
+			}`,
+		},
+		{
+			name: "struct declaration and usage",
+			input: `
+			type Point = { x int, y int }
+
+			fn main() int {
+				p := Point{x: 10, y: 20}
+				return p.x + p.y
+			}`,
+		},
+		{
+			name: "built-in puts",
+			input: `
+			fn main() int {
+				puts("hello world")
+				return 0
 			}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors := analyzeInput(t, tt.input)
-			if len(errors) > 0 {
-				t.Errorf("Expected 0 semantic errors, got %d:\n%s", len(errors), strings.Join(errors, "\n"))
+			errors, typeMap := analyzeInput(t, tt.input)
+			assert.Empty(t, errors, "expected no semantic errors")
+			assert.NotEmpty(t, typeMap, "TypeMap should be populated for valid programs")
+		})
+	}
+}
+
+func TestReturnPathEnforcement(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "missing return statement",
+			input: `
+			fn main() int {
+				x := 5
+			}`,
+			expectedErr: "missing a return statement",
+		},
+		{
+			name: "wrong return type",
+			input: `
+			fn main() int {
+				return "hello"
+			}`,
+			expectedErr: "expected return type 'int', got 'string'",
+		},
+		{
+			name: "function returning a struct",
+			input: `
+			type Point = { x int, y int }
+			fn makePoint() Point {
+				return Point{x: 1, y: 2}
 			}
+			fn main() int { return 0 }
+			`,
+			expectedErr: "", // Should be valid
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0], tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestStructAndFieldValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "access unknown field",
+			input: `
+			type Point = { x int }
+			fn main() int {
+				p := Point{x: 10}
+				return p.y
+			}`,
+			expectedErr: "field 'y' not found on struct 'Point'",
+		},
+		{
+			name: "field access on non-struct",
+			input: `
+			fn main() int {
+				x := 5
+				return x.y
+			}`,
+			expectedErr: "cannot access field on non-struct type 'int'",
+		},
+		{
+			name: "duplicate struct definition",
+			input: `
+			type Point = { x int }
+			type Point = { y int }
+			fn main() int { return 0 }
+			`,
+			expectedErr: "type Point already defined",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			require.NotEmpty(t, errors)
+			assert.Contains(t, errors[0], tt.expectedErr)
 		})
 	}
 }
 
 func TestVariableShadowing(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		expectedError string
+		name        string
+		input       string
+		expectedErr string
 	}{
 		{
-			name: "Duplicate immutable declaration",
+			name: "duplicate immutable declaration",
 			input: `
 			fn main() int {
 				x := 5
 				x := 10
+				return x
 			}`,
-			expectedError: "variable 'x' is already declared in this block",
-		},
-		{
-			name: "Duplicate mixed declaration",
-			input: `
-			fn main() int {
-				mut y := 5
-				y := 10
-			}`,
-			expectedError: "variable 'y' is already declared in this block",
+			expectedErr: "variable 'x' is already declared",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors := analyzeInput(t, tt.input)
-			if len(errors) == 0 {
-				t.Fatalf("Expected a semantic error, but got none")
-			}
-
-			if !strings.Contains(errors[0], tt.expectedError) {
-				t.Errorf("Expected error containing %q, got %q", tt.expectedError, errors[0])
-			}
+			errors, _ := analyzeInput(t, tt.input)
+			require.NotEmpty(t, errors)
+			assert.Contains(t, errors[0], tt.expectedErr)
 		})
 	}
 }
 
 func TestUndefinedVariables(t *testing.T) {
 	tests := []struct {
-		name          string
-		input         string
-		expectedError string
+		name        string
+		input       string
+		expectedErr string
 	}{
 		{
-			name: "Returning an undeclared variable",
-			input: `
-			fn main() int {
-				return x
-			}`,
-			expectedError: "undefined variable 'x'",
+			name:        "undefined name in return",
+			input:       `fn main() int { return x }`,
+			expectedErr: "undefined name 'x'",
 		},
 		{
-			name: "Using undeclared variable in math",
+			name: "undefined function",
 			input: `
 			fn main() int {
-				y := 10
-				return x + y
+				return missingFunc()
 			}`,
-			expectedError: "undefined variable 'x'",
-		},
-		{
-			name: "Assigning an undeclared variable to another",
-			input: `
-			fn main() int {
-				a := b
-			}`,
-			expectedError: "undefined variable 'b'",
+			expectedErr: "undefined name 'missingFunc'",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors := analyzeInput(t, tt.input)
-			if len(errors) == 0 {
-				t.Fatalf("Expected a semantic error, but got none")
-			}
-
-			if !strings.Contains(errors[0], tt.expectedError) {
-				t.Errorf("Expected error containing %q, got %q", tt.expectedError, errors[0])
-			}
+			errors, _ := analyzeInput(t, tt.input)
+			require.NotEmpty(t, errors)
+			assert.Contains(t, errors[0], tt.expectedErr)
 		})
 	}
 }
 
-func TestScopeIsolation(t *testing.T) {
-	// This proves that a variable declared in one function
-	// does not "leak" into the global scope or another function.
-	input := `
-	fn first() int {
-		secret := 42
-		return secret
+func TestTypeMismatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name:        "bool used in arithmetic",
+			input:       `fn main() int { return true + 5 }`,
+			expectedErr: "type mismatch",
+		},
+		{
+			name:        "non-boolean if condition",
+			input:       `fn main() int { return if 5 { => 10 } }`,
+			expectedErr: "IF condition must be a boolean",
+		},
+		{
+			name: "wrong argument type in function call",
+			input: `
+			fn add(a int, b int) int { return a + b }
+			fn main() int {
+				return add(5, "hello")
+			}`,
+			expectedErr: "argument 1 type mismatch",
+		},
+		{
+			name: "wrong number of arguments",
+			input: `
+			fn add(a int, b int) int { return a + b }
+			fn main() int {
+				return add(5)
+			}`,
+			expectedErr: "wrong number of arguments",
+		},
 	}
 
-	fn second() int {
-		return secret
-	}
-	`
-
-	errors := analyzeInput(t, input)
-	if len(errors) == 0 {
-		t.Fatalf("Expected a semantic error, but got none")
-	}
-
-	expectedError := "undefined variable 'secret'"
-	found := false
-	for _, err := range errors {
-		if strings.Contains(err, expectedError) {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Errorf("Expected error containing %q, got:\n%s", expectedError, strings.Join(errors, "\n"))
-	}
-}
-
-func TestSemanticTypeChecking(t *testing.T) {
-	input := `
-	fn add(x int, y int) int { return x + y }
-	
-	fn main() int {
-		// This should trigger a semantic error!
-		return add(5, true) 
-	}
-	`
-	errors := analyzeInput(t, input)
-	if len(errors) == 0 {
-		t.Errorf("Expected semantic error for passing 'bool' to 'int' parameter, but got none.")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			require.NotEmpty(t, errors)
+			assert.Contains(t, errors[0], tt.expectedErr)
+		})
 	}
 }

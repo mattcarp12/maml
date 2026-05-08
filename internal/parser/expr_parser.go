@@ -111,8 +111,9 @@ func (p *Parser) parseIfExpression() ast.Expr {
 
 	// 2. CHECK curToken, NOT peekToken!
 	// parseBlockStmt advanced past '}', so curToken is already 'else'
-	if p.curToken.Type == token.ELSE {
+	if p.peekToken.Type == token.ELSE {
 		// We are already on 'else', just check if the peek token is '{'
+		p.nextToken() // consume 'else'
 		if p.peekToken.Type != token.LBRACE {
 			return nil
 		}

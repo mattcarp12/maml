@@ -193,7 +193,3 @@ func (l *Lexer) newToken(tokenType token.TokenType, ch byte, startLine, startCol
 		Col:     startCol,
 	}
 }
-
-
-
-

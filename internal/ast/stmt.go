@@ -76,3 +76,17 @@ func (ys *YieldStmt) String() string {
 	return fmt.Sprintf("=> %s", ys.Value.String())
 }
 func (ys *YieldStmt) stmtNode() {}
+
+// ExprStmt represents an expression that acts as a standalone statement.
+// e.g., a function call like `puts("hello")`
+type ExprStmt struct {
+	Value Expr
+	Pos_  Position
+}
+
+func (es *ExprStmt) Pos() Position { return es.Pos_ }
+func (es *ExprStmt) End() Position { return es.Value.End() }
+func (es *ExprStmt) String() string {
+	return es.Value.String()
+}
+func (es *ExprStmt) stmtNode() {}

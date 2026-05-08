@@ -14,3 +14,16 @@ test:
 
 coverage:
 	go test ./... -coverprofile=coverage.out
+
+# =============================================
+# E2E / Integration Tests
+# =============================================
+
+test-e2e:
+	go test ./test/integration -v
+
+test-e2e-short:
+	go test ./test/integration -short -v
+
+update-golden:
+	UPDATE_GOLDEN=true go test ./test/integration -v

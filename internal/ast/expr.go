@@ -136,8 +136,15 @@ type FieldAccess struct {
 
 func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
 func (fa *FieldAccess) End() Position { return fa.Field.End() }
+
 func (fa *FieldAccess) String() string {
-	return fmt.Sprintf("(%s.%s)", fa.Object.String(), fa.Field.String())
+	// Avoid extra parentheses on nested field access
+	objStr := fa.Object.String()
+	if _, isField := fa.Object.(*FieldAccess); isField {
+		// Already parenthesized by inner FieldAccess
+		return fmt.Sprintf("%s.%s", objStr, fa.Field.String())
+	}
+	return fmt.Sprintf("(%s.%s)", objStr, fa.Field.String())
 }
 func (fa *FieldAccess) exprNode() {}
 

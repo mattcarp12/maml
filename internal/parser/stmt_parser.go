@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"fmt"
-
 	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/token"
 )
@@ -34,7 +32,7 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 
 	if p.curToken.Type == token.RBRACE {
 		block.End_ = p.curPos()
-		p.nextToken() // consume '}'
+		// p.nextToken() // consume '}'
 	}
 
 	return block
@@ -42,15 +40,21 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 
 func (p *Parser) parseStmt() ast.Stmt {
 	switch p.curToken.Type {
-	case token.MUT, token.IDENT:
+	case token.MUT:
 		return p.parseDeclareStmt()
+	case token.IDENT:
+		// Look ahead: if we see ':=', it's a declaration. Otherwise, it's an expression.
+		if p.peekToken.Type == token.DECLARE {
+			return p.parseDeclareStmt()
+		}
+		return p.parseExpressionStmt()
 	case token.RETURN:
 		return p.parseReturnStmt()
 	case token.YIELD:
 		return p.parseYieldStmt()
 	default:
-		p.AddError(fmt.Sprintf("unrecognized statement inside block: %s", p.curToken.Literal))
-		return nil
+		// Any other token (e.g., '1 + 2', 'if true') can be evaluated as an expression statement
+		return p.parseExpressionStmt()
 	}
 }
 
@@ -125,6 +129,23 @@ func (p *Parser) parseYieldStmt() *ast.YieldStmt {
 
 	return &ast.YieldStmt{
 		Value: value,
+		Pos_:  pos,
+	}
+}
+
+func (p *Parser) parseExpressionStmt() ast.Stmt {
+	pos := p.curPos()
+
+	expr := p.parseExpression(LOWEST)
+	if expr == nil {
+		return nil
+	}
+
+	// Consume the newline terminating this statement
+	p.expectStatementEnd()
+
+	return &ast.ExprStmt{ // Use ast.ExpressionStmt{} if that is your AST node's name
+		Value: expr, // Or Expression: expr
 		Pos_:  pos,
 	}
 }
