@@ -33,9 +33,15 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		return CGValue{V: alloc, Type: semaType, IsAddress: true}, nil
 
 	case *ast.InfixExpr:
-		// Arithmetic needs the actual VALUES, so we 'load' them
-		leftCG, _ := c.evaluateExpression(e.Left)
-		rightCG, _ := c.evaluateExpression(e.Right)
+		leftCG, err := c.evaluateExpression(e.Left)
+		if err != nil {
+			return CGValue{}, err
+		}
+
+		rightCG, err := c.evaluateExpression(e.Right)
+		if err != nil {
+			return CGValue{}, err
+		}
 
 		left := c.load(leftCG)
 		right := c.load(rightCG)
@@ -127,24 +133,19 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 
 		var llvmArgs []value.Value
 		for i, arg := range e.Arguments {
-			argCG, _ := c.evaluateExpression(arg)
-			val := c.load(argCG) // Get the pointer to the {i8*, i32} struct
+			argCG, err := c.evaluateExpression(arg)
+			if err != nil {
+				return CGValue{}, err
+			}
+			val := c.load(argCG)
 
 			// --- THE STRING LOWERING RULE ---
 			// If calling 'puts', convert the MAML Fat Pointer into a raw C pointer
 			if isIdent && ident.Value == "puts" && i == 0 {
 				if _, ok := argCG.Type.(sema.StringType); ok {
-					stringStructType := types.NewStruct(types.I8Ptr, types.I32)
-
-					// Get the address of field 0 (the i8*)
-					ptrToRawChar := c.currentBlock.NewGetElementPtr(
-						stringStructType,
-						val,
-						constant.NewInt(types.I32, 0), // Dereference struct
-						constant.NewInt(types.I32, 0), // Access field 0
-					)
-					// Load the raw i8* value
-					val = c.currentBlock.NewLoad(types.I8Ptr, ptrToRawChar)
+					// 'val' is now the loaded struct VALUE {i8*, i32}.
+					// Extract the first field (the raw i8*) directly!
+					val = c.currentBlock.NewExtractValue(val, 0)
 				}
 			}
 
@@ -159,7 +160,10 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		structPtr := c.currentBlock.NewAlloca(llvmType)
 
 		for _, field := range e.Fields {
-			valCG, _ := c.evaluateExpression(field.Value)
+			valCG, err := c.evaluateExpression(field.Value)
+			if err != nil {
+				return CGValue{}, err
+			}
 			val := c.load(valCG) // Ensure we have the data to store
 
 			index := semaType.(*sema.StructType).GetFieldIndex(field.Name.Value)
@@ -172,7 +176,10 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		return CGValue{V: structPtr, Type: semaType, IsAddress: true}, nil
 
 	case *ast.FieldAccess:
-		objCG, _ := c.evaluateExpression(e.Object)
+		objCG, err := c.evaluateExpression(e.Object)
+		if err != nil {
+			return CGValue{}, err
+		}
 		// We need the address of the struct to find the field address
 		objPtr := objCG.V
 

@@ -1,0 +1,15 @@
+// test/programs/struct_pass.maml
+type Rect = {
+    w int,
+    h int
+}
+
+fn area(r Rect) int {
+    return r.w * r.h
+}
+
+fn main() int {
+    box := Rect{w: 5, h: 6}
+    return area(box)
+}
+// Expected exit: 30

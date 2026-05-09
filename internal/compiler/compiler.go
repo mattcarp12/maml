@@ -23,17 +23,12 @@ type Result struct {
 }
 
 type Compiler struct {
-	lexer   *lexer.Lexer
-	parser  *parser.Parser
-	sema    *sema.Analyzer
-	codegen *codegen.Codegen
+	lexer  *lexer.Lexer
+	parser *parser.Parser
 }
 
 func New() *Compiler {
-	return &Compiler{
-		sema:    sema.New(),
-		codegen: codegen.New(),
-	}
+	return &Compiler{}
 }
 
 // CompileSource is now a convenience wrapper around the more detailed Compile method.
@@ -63,8 +58,9 @@ func (c *Compiler) Compile(src string) (*Result, error) {
 		return nil, fmt.Errorf("parser errors:\n%s", strings.Join(errs, "\n"))
 	}
 
-	// 2. Semantic Analysis
-	semaErrors, typeMap := c.sema.Analyze(program)
+	// 2. Semantic Analysis (FRESH INSTANCE)
+	analyzer := sema.New()
+	semaErrors, typeMap := analyzer.Analyze(program)
 	if len(semaErrors) > 0 {
 		var sb strings.Builder
 		sb.WriteString("semantic errors:\n")
@@ -74,22 +70,21 @@ func (c *Compiler) Compile(src string) (*Result, error) {
 		return nil, errors.New(sb.String())
 	}
 
-	// 3. Code Generation
-	// Note: We'll assume codegen.Generate now returns the ir.Module as part of its state
-	if err := c.codegen.Generate(program, typeMap); err != nil {
-		return nil, fmt.Errorf("codegen error: %w", err)
+	// 3. Code Generation (FRESH INSTANCE)
+	cg := codegen.New()
+	if err := cg.Generate(program, typeMap); err != nil {
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	// 4. IR Verification (Sanity Check)
-	if err := c.codegen.Validate(); err != nil {
-		// Even if IR is invalid, we might want to see it for debugging
-		return &Result{LLVMIR: c.codegen.String()}, fmt.Errorf("IR verification failed: %w", err)
+	if err := cg.Validate(); err != nil {
+		return &Result{LLVMIR: cg.String()}, fmt.Errorf("IR verification failed: %w", err)
 	}
 
 	return &Result{
 		AST:     program,
 		TypeMap: typeMap,
-		Module:  c.codegen.Module(), // We'll add this getter next
-		LLVMIR:  c.codegen.String(),
+		Module:  cg.Module(),
+		LLVMIR:  cg.String(),
 	}, nil
 }

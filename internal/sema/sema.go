@@ -181,7 +181,6 @@ func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
 			Mutable: false,
 			Type:    pType,
 		}
-		a.TypeMap[param.Type] = pType
 	}
 
 	a.expectedReturn = a.resolveAstType(v.ReturnType)
@@ -196,26 +195,34 @@ func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
 }
 
 func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
+	var resolvedType Type = UnknownType{}
+
 	switch t := expr.(type) {
 	case *ast.NamedType:
 		switch t.Name {
 		case "int":
-			return IntType{}
+			resolvedType = IntType{}
 		case "bool":
-			return BoolType{}
+			resolvedType = BoolType{}
 		case "string":
-			return StringType{}
+			resolvedType = StringType{}
 		default:
+			found := false
 			for s := a.scope; s != nil; s = s.parent {
 				if custom, ok := s.types[t.Name]; ok {
-					return custom
+					resolvedType = custom
+					found = true
+					break
 				}
 			}
-			a.errorf(t.Pos(), "unknown type %s", t.Name)
-			return UnknownType{}
+			if !found {
+				a.errorf(t.Pos(), "unknown type %s", t.Name)
+			}
 		}
 	}
-	return UnknownType{}
+
+	a.TypeMap[expr] = resolvedType
+	return resolvedType
 }
 
 // Returns true if the block guarantees a return statement
@@ -304,11 +311,41 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
 			a.errorf(e.Pos(), "IF condition must be a boolean")
 		}
+
+		var thenYieldType Type = UnknownType{}
+		var elseYieldType Type = UnknownType{}
+
 		a.analyzeBlockStmt(e.Consequence)
+		if len(e.Consequence.Statements) > 0 {
+			lastStmt := e.Consequence.Statements[len(e.Consequence.Statements)-1]
+			if yield, ok := lastStmt.(*ast.YieldStmt); ok {
+				thenYieldType = a.TypeMap[yield.Value]
+			}
+		}
+
 		if e.Alternative != nil {
 			a.analyzeBlockStmt(e.Alternative)
+			if len(e.Alternative.Statements) > 0 {
+				lastStmt := e.Alternative.Statements[len(e.Alternative.Statements)-1]
+				if yield, ok := lastStmt.(*ast.YieldStmt); ok {
+					elseYieldType = a.TypeMap[yield.Value]
+				}
+			}
 		}
-		t = IntType{} // simplified for now
+
+		// Enforce that both branches yield the same type
+		if !thenYieldType.Equals(UnknownType{}) && !elseYieldType.Equals(UnknownType{}) {
+			if !thenYieldType.Equals(elseYieldType) {
+				a.errorf(e.Pos(), "type mismatch: if branches yield different types ('%s' vs '%s')", thenYieldType.String(), elseYieldType.String())
+			}
+		}
+
+		// Assign the unified type
+		if !thenYieldType.Equals(UnknownType{}) {
+			t = thenYieldType
+		} else {
+			t = elseYieldType
+		}
 
 	case *ast.CallExpr:
 		// 1. Evaluate whatever is being called

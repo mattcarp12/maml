@@ -66,8 +66,8 @@ func (c *Codegen) setVar(name string, val value.Value) {
 
 // Generate is the entry point. We now accept the typeMap!
 func (c *Codegen) Generate(node ast.Node, typeMap map[ast.Node]sema.Type) error {
-	// Save the type map on the struct so other codegen functions can use it
-	if c.typeMap == nil && typeMap != nil {
+	// Set unconditionally if provided
+	if typeMap != nil {
 		c.typeMap = typeMap
 	}
 
@@ -75,7 +75,8 @@ func (c *Codegen) Generate(node ast.Node, typeMap map[ast.Node]sema.Type) error 
 	switch n := node.(type) {
 	case *ast.Program:
 		for _, decl := range n.Decls {
-			if err := c.Generate(decl, typeMap); err != nil {
+			// Pass nil recursively; we rely on c.typeMap now
+			if err := c.Generate(decl, nil); err != nil {
 				return err
 			}
 		}
@@ -153,12 +154,7 @@ func (c *Codegen) load(val CGValue) value.Value {
 		return val.V
 	}
 
-	// If it's a struct, we usually keep the pointer in LLVM,
-	// but for primitives (int, bool), we must perform a 'load' instruction.
-	switch val.Type.(type) {
-	case *sema.StructType, sema.StringType:
-		return val.V
-	default:
-		return c.currentBlock.NewLoad(c.llvmTypeFor(val.Type), val.V)
-	}
+	// Always load the value, regardless of whether it's a primitive or a struct.
+	// This enforces true pass-by-value semantics in LLVM!
+	return c.currentBlock.NewLoad(c.llvmTypeFor(val.Type), val.V)
 }

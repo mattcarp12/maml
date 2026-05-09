@@ -1,0 +1,8 @@
+// test/programs/math.maml
+fn main() int {
+    x := 10 * 2
+    y := x - 4
+    z := y / 2
+    return z + 5
+}
+// Expected exit: 13

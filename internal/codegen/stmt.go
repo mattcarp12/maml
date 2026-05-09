@@ -1,7 +1,6 @@
 package codegen
 
 import (
-	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
 )
@@ -12,23 +11,25 @@ func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
 		return err
 	}
 
-	val := c.load(valCG)
-	valType := val.Type()
-	if _, isPtr := valType.(*types.PointerType); isPtr {
-		c.setVar(n.Name, val) // FIX: Use new Env method
+	if valCG.IsAddress {
+		// If it's already an address, we can just store it directly
+		c.setVar(n.Name, valCG.V)
 		return nil
 	}
 
-	alloc := c.currentBlock.NewAlloca(valType)
-	c.currentBlock.NewStore(val, alloc)
-	c.setVar(n.Name, alloc) // FIX: Use new Env method
+	llvmType := c.llvmTypeFor(valCG.Type)
+	alloc := c.currentBlock.NewAlloca(llvmType)
+	c.currentBlock.NewStore(valCG.V, alloc)
+	c.setVar(n.Name, alloc)
 	return nil
 }
 
 func (c *Codegen) compileReturnStmt(n *ast.ReturnStmt) error {
 	valCG, err := c.evaluateExpression(n.Value)
-	if err != nil { return err }
-	
+	if err != nil {
+		return err
+	}
+
 	c.currentBlock.NewRet(c.load(valCG)) // Load it before returning
 	return nil
 }

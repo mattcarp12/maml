@@ -1,42 +1,43 @@
 package codegen
 
 import (
+	"fmt"
+
 	"github.com/llir/llvm/ir"
-	"github.com/llir/llvm/ir/types"
 	"github.com/mattcarp12/maml/internal/ast"
-	"github.com/mattcarp12/maml/internal/sema"
 )
 
 func (c *Codegen) compileFnDecl(n *ast.FnDecl) error {
 	var llvmParams []*ir.Param
-	var paramType types.Type
 	for _, p := range n.Params {
-		paramType = types.I32 // Fallback
-
-		// Map the parameter type dynamically using our TypeMap
-		if pType, ok := c.typeMap[p.Type]; ok {
-			paramType = c.llvmTypeFor(pType)
-		} else if p.Type.String() == "string" {
-			paramType = c.llvmTypeFor(sema.StringType{})
+		pType, ok := c.typeMap[p.Type]
+		if !ok {
+			return fmt.Errorf("codegen error: unresolved type for parameter '%s'", p.Name)
 		}
-
+		paramType := c.llvmTypeFor(pType)
 		llvmParams = append(llvmParams, ir.NewParam(p.Name, paramType))
 	}
 
-	funcType := ir.NewFunc(n.Name, types.I32, llvmParams...)
+	// Dynamically resolve the return type instead of hardcoding I32
+	retSemaType, ok := c.typeMap[n.ReturnType]
+	if !ok {
+		return fmt.Errorf("codegen error: unresolved return type for function '%s'", n.Name)
+	}
+	retLLVMType := c.llvmTypeFor(retSemaType)
+
+	funcType := ir.NewFunc(n.Name, retLLVMType, llvmParams...)
 	c.module.Funcs = append(c.module.Funcs, funcType)
 	c.currentBlock = funcType.NewBlock("entry")
 
-	c.pushEnv() // FIX: Push function scope
+	c.pushEnv()
 	defer c.popEnv()
 
 	for i, p := range n.Params {
 		alloc := c.currentBlock.NewAlloca(funcType.Params[i].Typ)
 		c.currentBlock.NewStore(funcType.Params[i], alloc)
-		c.setVar(p.Name, alloc) // FIX: Use new Env method
+		c.setVar(p.Name, alloc)
 	}
 
-	// Because blocks return values now, we capture but ignore it for function bodies
 	_, err := c.compileBlockStmt(n.Body)
 	return err
 }

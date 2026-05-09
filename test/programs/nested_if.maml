@@ -1,0 +1,18 @@
+// test/programs/nested_if.maml
+fn main() int {
+    a := true
+    b := false
+
+    res := if a {
+        => if b {
+            => 10
+        } else {
+            => 20
+        }
+    } else {
+        => 30
+    }
+
+    return res
+}
+// Expected exit: 20
