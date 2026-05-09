@@ -11,59 +11,52 @@ import (
 	"github.com/mattcarp12/maml/internal/sema"
 )
 
-func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
+func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
+	semaType := c.typeMap[expr]
+
 	switch e := expr.(type) {
 	case *ast.IntLiteral:
-		return constant.NewInt(types.I32, e.Value), nil
+		return CGValue{V: constant.NewInt(types.I32, e.Value), Type: semaType, IsAddress: false}, nil
 
 	case *ast.BoolLiteral:
 		if e.Value {
-			return constant.True, nil
+			return CGValue{V: constant.True, Type: semaType, IsAddress: false}, nil
 		}
-		return constant.False, nil
+		return CGValue{V: constant.False, Type: semaType, IsAddress: false}, nil
 
 	case *ast.Identifier:
 		alloc, exists := c.resolveVar(e.Value)
 		if !exists {
-			return nil, fmt.Errorf("undefined variable: %s", e.Value)
+			return CGValue{}, fmt.Errorf("undefined variable: %s", e.Value)
 		}
-
-		if allocaInst, ok := alloc.(*ir.InstAlloca); ok {
-			if _, isStruct := allocaInst.ElemType.(*types.StructType); isStruct {
-				return alloc, nil
-			}
-			return c.currentBlock.NewLoad(allocaInst.ElemType, alloc), nil
-		}
-
-		return alloc, nil
+		// Identifiers ALWAYS return an address (the pointer to the variable)
+		return CGValue{V: alloc, Type: semaType, IsAddress: true}, nil
 
 	case *ast.InfixExpr:
-		left, err := c.evaluateExpression(e.Left)
-		if err != nil {
-			return nil, err
-		}
-		right, err := c.evaluateExpression(e.Right)
-		if err != nil {
-			return nil, err
-		}
+		// Arithmetic needs the actual VALUES, so we 'load' them
+		leftCG, _ := c.evaluateExpression(e.Left)
+		rightCG, _ := c.evaluateExpression(e.Right)
 
+		left := c.load(leftCG)
+		right := c.load(rightCG)
+
+		var res value.Value
 		switch e.Operator {
 		case "+":
-			return c.currentBlock.NewAdd(left, right), nil
+			res = c.currentBlock.NewAdd(left, right)
 		case "-":
-			return c.currentBlock.NewSub(left, right), nil
+			res = c.currentBlock.NewSub(left, right)
 		case "*":
-			return c.currentBlock.NewMul(left, right), nil
+			res = c.currentBlock.NewMul(left, right)
 		case "/":
-			return c.currentBlock.NewSDiv(left, right), nil
-		default:
-			return nil, fmt.Errorf("unsupported operator: %s", e.Operator)
+			res = c.currentBlock.NewSDiv(left, right)
 		}
+		return CGValue{V: res, Type: semaType, IsAddress: false}, nil
 
 	case *ast.IfExpr:
 		condVal, err := c.evaluateExpression(e.Condition)
 		if err != nil {
-			return nil, err
+			return CGValue{}, err
 		}
 
 		fn := c.currentBlock.Parent
@@ -71,7 +64,7 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 		elseBlk := fn.NewBlock("else")
 		mergeBlk := fn.NewBlock("merge")
 
-		c.currentBlock.NewCondBr(condVal, thenBlk, elseBlk)
+		c.currentBlock.NewCondBr(condVal.V, thenBlk, elseBlk)
 
 		// --- COMPILE THE 'THEN' BRANCH ---
 		c.currentBlock = thenBlk
@@ -79,7 +72,7 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 		// FIX: Capture the yield directly from compileBlockStmt!
 		thenYield, err := c.compileBlockStmt(e.Consequence)
 		if err != nil {
-			return nil, err
+			return CGValue{}, err
 		}
 		thenExitBlk := c.currentBlock
 		c.currentBlock.NewBr(mergeBlk)
@@ -92,7 +85,7 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 		if e.Alternative != nil {
 			elseYield, err = c.compileBlockStmt(e.Alternative)
 			if err != nil {
-				return nil, err
+				return CGValue{}, err
 			}
 			elseExitBlk = c.currentBlock
 			c.currentBlock.NewBr(mergeBlk)
@@ -108,20 +101,20 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 				ir.NewIncoming(thenYield, thenExitBlk),
 				ir.NewIncoming(elseYield, elseExitBlk),
 			)
-			return phi, nil
+			return CGValue{V: phi, Type: semaType, IsAddress: false}, nil
 		}
 
-		return nil, nil
+		return CGValue{}, nil
 
 	case *ast.CallExpr:
-		ident := e.Function.(*ast.Identifier).Value
+		ident, isIdent := e.Function.(*ast.Identifier)
 		var targetFunc *ir.Func
 
-		if ident == "puts" {
+		if ident.Value == "puts" {
 			targetFunc = c.getPutsFunc()
 		} else {
 			for _, f := range c.module.Funcs {
-				if f.Name() == ident {
+				if f.Name() == ident.Value {
 					targetFunc = f
 					break
 				}
@@ -129,147 +122,99 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (value.Value, error) {
 		}
 
 		if targetFunc == nil {
-			return nil, fmt.Errorf("function %s not found in LLVM module", ident)
+			return CGValue{}, fmt.Errorf("function %s not found in LLVM module", ident)
 		}
 
 		var llvmArgs []value.Value
-		for _, arg := range e.Arguments {
-			val, err := c.evaluateExpression(arg)
-			if err != nil {
-				return nil, err
+		for i, arg := range e.Arguments {
+			argCG, _ := c.evaluateExpression(arg)
+			val := c.load(argCG) // Get the pointer to the {i8*, i32} struct
+
+			// --- THE STRING LOWERING RULE ---
+			// If calling 'puts', convert the MAML Fat Pointer into a raw C pointer
+			if isIdent && ident.Value == "puts" && i == 0 {
+				if _, ok := argCG.Type.(sema.StringType); ok {
+					stringStructType := types.NewStruct(types.I8Ptr, types.I32)
+
+					// Get the address of field 0 (the i8*)
+					ptrToRawChar := c.currentBlock.NewGetElementPtr(
+						stringStructType,
+						val,
+						constant.NewInt(types.I32, 0), // Dereference struct
+						constant.NewInt(types.I32, 0), // Access field 0
+					)
+					// Load the raw i8* value
+					val = c.currentBlock.NewLoad(types.I8Ptr, ptrToRawChar)
+				}
 			}
+
 			llvmArgs = append(llvmArgs, val)
 		}
 
-		if ident == "puts" {
-			stringStructPtr := llvmArgs[0]
-			dataFieldPtr := c.currentBlock.NewGetElementPtr(
-				types.NewStruct(types.I8Ptr, types.I32),
-				stringStructPtr,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, 0),
-			)
-			rawCharPtr := c.currentBlock.NewLoad(types.I8Ptr, dataFieldPtr)
-			llvmArgs[0] = rawCharPtr
-		}
-
-		return c.currentBlock.NewCall(targetFunc, llvmArgs...), nil
+		res := c.currentBlock.NewCall(targetFunc, llvmArgs...)
+		return CGValue{V: res, Type: semaType, IsAddress: false}, nil
 
 	case *ast.StructLiteral:
-		// 1. Look up the true semantic type from our TypeMap!
-		semaType, ok := c.typeMap[e]
-		if !ok {
-			return nil, fmt.Errorf("could not resolve struct type for literal in codegen")
-		}
-
-		// Ensure it's actually a struct
-		structType, isStruct := semaType.(*sema.StructType)
-		if !isStruct {
-			return nil, fmt.Errorf("type in map is not a struct")
-		}
-
-		// 2. Ask our new helper for the exact LLVM memory layout
-		llvmType := c.llvmTypeFor(structType)
-
-		// 3. ALLOCA: Ask LLVM for a block of stack memory
+		llvmType := c.llvmTypeFor(semaType)
 		structPtr := c.currentBlock.NewAlloca(llvmType)
 
-		// 4. INITIALIZE FIELDS
 		for _, field := range e.Fields {
-			val, err := c.evaluateExpression(field.Value)
-			if err != nil {
-				return nil, err
-			}
+			valCG, _ := c.evaluateExpression(field.Value)
+			val := c.load(valCG) // Ensure we have the data to store
 
-			// Look up the exact memory slot for this specific field!
-			index := structType.GetFieldIndex(field.Name.Value)
-			if index < 0 {
-				return nil, fmt.Errorf("unknown field '%s' on struct '%s'", field.Name.Value, structType.Name)
-			}
+			index := semaType.(*sema.StructType).GetFieldIndex(field.Name.Value)
+			fieldPtr := c.currentBlock.NewGetElementPtr(llvmType, structPtr,
+				constant.NewInt(types.I32, 0), constant.NewInt(types.I32, int64(index)))
 
-			// Calculate the memory address
-			fieldPtr := c.currentBlock.NewGetElementPtr(
-				llvmType,
-				structPtr,
-				constant.NewInt(types.I32, 0),
-				constant.NewInt(types.I32, int64(index)),
-			)
-
-			// Store the value
 			c.currentBlock.NewStore(val, fieldPtr)
 		}
-
-		return structPtr, nil
+		// A struct literal returns an address (the pointer to the alloca)
+		return CGValue{V: structPtr, Type: semaType, IsAddress: true}, nil
 
 	case *ast.FieldAccess:
-		// 1. Evaluate the object to get its pointer
-		objPtr, err := c.evaluateExpression(e.Object)
-		if err != nil {
-			return nil, err
-		}
+		objCG, _ := c.evaluateExpression(e.Object)
+		// We need the address of the struct to find the field address
+		objPtr := objCG.V
 
-		// 2. Ask the TypeMap what the object's type actually is
-		semaType, ok := c.typeMap[e.Object]
-		if !ok {
-			return nil, fmt.Errorf("could not resolve object type in codegen")
-		}
-		structType, isStruct := semaType.(*sema.StructType)
-		if !isStruct {
-			return nil, fmt.Errorf("cannot access field on non-struct")
-		}
-
-		// 3. Get the LLVM type and find the field's index
-		llvmType := c.llvmTypeFor(structType)
+		structType := objCG.Type.(*sema.StructType)
 		index := structType.GetFieldIndex(e.Field.Value)
-		if index < 0 {
-			return nil, fmt.Errorf("unknown field '%s' on struct '%s'", e.Field.Value, structType.Name)
-		}
 
-		// Calculate the exact memory address of the field
-		fieldPtr := c.currentBlock.NewGetElementPtr(
-			llvmType,
-			objPtr,
-			constant.NewInt(types.I32, 0),
-			constant.NewInt(types.I32, int64(index)),
-		)
+		fieldPtr := c.currentBlock.NewGetElementPtr(c.llvmTypeFor(structType), objPtr,
+			constant.NewInt(types.I32, 0), constant.NewInt(types.I32, int64(index)))
 
-		// 4. LOAD: Read the actual value. We must tell LLVM exactly what type we are loading!
-		// We use llvmTypeFor again on the specific field's type.
-		fieldType := c.llvmTypeFor(structType.Fields[index].Type)
-		return c.currentBlock.NewLoad(fieldType, fieldPtr), nil
+		// FieldAccess returns the address of the field
+		return CGValue{V: fieldPtr, Type: semaType, IsAddress: true}, nil
 
 	case *ast.StringLiteral:
-		strLen := len(e.Value)
-		strBytes := append([]byte(e.Value), 0)
+		strVal := e.Value
+		strLen := len(strVal)
+
+		// Append a null terminator so libc functions like 'puts' work
+		strBytes := append([]byte(strVal), 0)
 		strConst := constant.NewCharArray(strBytes)
 		globalDef := c.module.NewGlobalDef(".str", strConst)
 		globalDef.Immutable = true
 
-		zero := constant.NewInt(types.I32, 0)
-		charPtr := c.currentBlock.NewGetElementPtr(
-			types.NewArray(uint64(strLen+1), types.I8),
-			globalDef,
-			zero,
-			zero,
-		)
-
+		// Create the MAML Fat Pointer { i8*, i32 } on the stack
 		stringStructType := types.NewStruct(types.I8Ptr, types.I32)
 		structAlloc := c.currentBlock.NewAlloca(stringStructType)
 
-		dataFieldPtr := c.currentBlock.NewGetElementPtr(
-			stringStructType, structAlloc,
-			constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0),
+		zero := constant.NewInt(types.I32, 0)
+		charPtr := c.currentBlock.NewGetElementPtr(
+			types.NewArray(uint64(len(strBytes)), types.I8),
+			globalDef, zero, zero,
 		)
-		c.currentBlock.NewStore(charPtr, dataFieldPtr)
 
-		lenFieldPtr := c.currentBlock.NewGetElementPtr(
-			stringStructType, structAlloc,
-			constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1),
-		)
-		c.currentBlock.NewStore(constant.NewInt(types.I32, int64(strLen)), lenFieldPtr)
+		// Set Field 0: Raw Pointer
+		p0 := c.currentBlock.NewGetElementPtr(stringStructType, structAlloc, zero, zero)
+		c.currentBlock.NewStore(charPtr, p0)
 
-		return structAlloc, nil
+		// Set Field 1: Length (MAML specific)
+		p1 := c.currentBlock.NewGetElementPtr(stringStructType, structAlloc, zero, constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(constant.NewInt(types.I32, int64(strLen)), p1)
+
+		return CGValue{V: structAlloc, Type: semaType, IsAddress: true}, nil
 	}
 
-	return nil, fmt.Errorf("unsupported expression: %T", expr)
+	return CGValue{}, fmt.Errorf("unsupported expression: %T", expr)
 }

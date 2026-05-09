@@ -1,18 +1,27 @@
-// internal/compiler/compiler.go
 package compiler
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/llir/llvm/ir"
+	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/codegen"
 	"github.com/mattcarp12/maml/internal/lexer"
 	"github.com/mattcarp12/maml/internal/parser"
 	"github.com/mattcarp12/maml/internal/sema"
 )
 
-// Compiler orchestrates the entire compilation pipeline:
-// Lexer → Parser → Semantic Analysis → Code Generation
+// Result holds all artifacts produced during the compilation process.
+type Result struct {
+	AST     *ast.Program
+	TypeMap map[ast.Node]sema.Type
+	Module  *ir.Module
+	LLVMIR  string
+}
+
 type Compiler struct {
 	lexer   *lexer.Lexer
 	parser  *parser.Parser
@@ -20,7 +29,6 @@ type Compiler struct {
 	codegen *codegen.Codegen
 }
 
-// New creates a new Compiler with fresh instances of each stage.
 func New() *Compiler {
 	return &Compiler{
 		sema:    sema.New(),
@@ -28,53 +36,60 @@ func New() *Compiler {
 	}
 }
 
-// CompileSource compiles MAML source code and returns the generated LLVM IR.
+// CompileSource is now a convenience wrapper around the more detailed Compile method.
 func (c *Compiler) CompileSource(src string) (string, error) {
-	// 1. Lexical Analysis
+	res, err := c.Compile(src)
+	if err != nil {
+		return "", err
+	}
+	return res.LLVMIR, nil
+}
+
+func (c *Compiler) CompileFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return c.CompileSource(string(content))
+}
+
+// Compile executes the full pipeline and returns all intermediate artifacts.
+func (c *Compiler) Compile(src string) (*Result, error) {
+	// 1. Lex & Parse
 	c.lexer = lexer.New(src)
 	c.parser = parser.New(c.lexer)
-
-	// 2. Parsing
 	program := c.parser.ParseProgram()
 	if errs := c.parser.Errors(); len(errs) > 0 {
-		return "", fmt.Errorf("parser errors:\n%s", formatErrors(errs))
+		return nil, fmt.Errorf("parser errors:\n%s", strings.Join(errs, "\n"))
 	}
 
-	// 3. Semantic Analysis
-	// NEW: We now capture the typeMap!
+	// 2. Semantic Analysis
 	semaErrors, typeMap := c.sema.Analyze(program)
 	if len(semaErrors) > 0 {
-		return "", fmt.Errorf("semantic errors:\n%s", formatErrors(semaErrors))
+		var sb strings.Builder
+		sb.WriteString("semantic errors:\n")
+		for _, err := range semaErrors {
+			sb.WriteString(fmt.Sprintf("%s\n", err))
+		}
+		return nil, errors.New(sb.String())
 	}
 
-	// 4. Code Generation
+	// 3. Code Generation
+	// Note: We'll assume codegen.Generate now returns the ir.Module as part of its state
 	if err := c.codegen.Generate(program, typeMap); err != nil {
-		return "", fmt.Errorf("code generation error: %w", err)
+		return nil, fmt.Errorf("codegen error: %w", err)
 	}
 
-	return c.codegen.String(), nil
-}
-
-// CompileFile reads a .maml file and compiles it.
-func (c *Compiler) CompileFile(filename string) (string, error) {
-	src, err := os.ReadFile(filename)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file %s: %w", filename, err)
+	// 4. IR Verification (Sanity Check)
+	if err := c.codegen.Validate(); err != nil {
+		// Even if IR is invalid, we might want to see it for debugging
+		return &Result{LLVMIR: c.codegen.String()}, fmt.Errorf("IR verification failed: %w", err)
 	}
-	return c.CompileSource(string(src))
-}
 
-// Helper to format multiple errors nicely
-func formatErrors(errs []string) string {
-	var out string
-	for _, e := range errs {
-		out += "  - " + e + "\n"
-	}
-	return out
-}
-
-// Diagnostics returns any errors from the last compilation (for future IDE use)
-func (c *Compiler) Diagnostics() []string {
-	// TODO: Aggregate parser + sema errors with positions in the future
-	return nil
+	return &Result{
+		AST:     program,
+		TypeMap: typeMap,
+		Module:  c.codegen.Module(), // We'll add this getter next
+		LLVMIR:  c.codegen.String(),
+	}, nil
 }

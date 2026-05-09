@@ -18,7 +18,6 @@ type Parser struct {
 	errors          []string
 	prefixParseFns  map[token.TokenType]prefixParseFn
 	infixParseFns   map[token.TokenType]infixParseFn
-	noStructLiteral bool
 }
 
 func New(l *lexer.Lexer) *Parser {

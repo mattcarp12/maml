@@ -91,33 +91,36 @@ func (p *Parser) parseIfExpression() ast.Expr {
 	pos := p.curPos()
 	p.nextToken() // consume 'if'
 
-	// 1. Temporarily disable struct parsing so '{' isn't consumed
-	p.noStructLiteral = true
+	// --- THE INFIX SHIELD ---
+	// Temporarily remove '{' from the infix map so the condition
+	// parser doesn't treat it as a struct literal.
+	oldInfix := p.infixParseFns[token.LBRACE]
+	delete(p.infixParseFns, token.LBRACE)
+
 	condition := p.parseExpression(LOWEST)
-	p.noStructLiteral = false
+
+	// Restore the handler immediately after parsing the condition
+	p.infixParseFns[token.LBRACE] = oldInfix
 
 	if condition == nil {
 		return nil
 	}
 
-	if p.peekToken.Type != token.LBRACE {
+	if !p.expectPeek(token.LBRACE) {
 		return nil
 	}
 
-	p.nextToken() // move to LBRACE
-	consequence := p.parseBlockStmt()
+	consequence := p.parseBlockStmt() // Ends on '}'
 
 	var alternative *ast.BlockStmt
 
-	// 2. CHECK curToken, NOT peekToken!
-	// parseBlockStmt advanced past '}', so curToken is already 'else'
+	// After parseBlockStmt, curToken is '}', so peekToken is 'else'
 	if p.peekToken.Type == token.ELSE {
-		// We are already on 'else', just check if the peek token is '{'
-		p.nextToken() // consume 'else'
-		if p.peekToken.Type != token.LBRACE {
+		p.nextToken() // Move curToken to 'else'
+
+		if !p.expectPeek(token.LBRACE) {
 			return nil
 		}
-		p.nextToken() // move to LBRACE
 		alternative = p.parseBlockStmt()
 	}
 
@@ -169,7 +172,6 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
 }
 
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
-	// verify that 'left' is an identifier
 	leftIdent, ok := left.(*ast.Identifier)
 	if !ok {
 		return nil
@@ -177,18 +179,17 @@ func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 
 	sl := &ast.StructLiteral{
 		Type: leftIdent,
-		Pos_: p.curPos(),
+		Pos_: leftIdent.Pos(),
 	}
 
-	// Case 1: No fields specified (empty struct)
+	// curToken is '{'. If next is '}', it's an empty struct Point{}
 	if p.peekToken.Type == token.RBRACE {
 		p.nextToken()
 		sl.End_ = p.curPos()
 		return sl
 	}
 
-	// Case 2: There is at least one field
-	p.nextToken() // step onto first field identifier
+	p.nextToken() // Step onto first field name
 
 	field := p.parseStructField()
 	if field == nil {

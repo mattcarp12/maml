@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mattcarp12/maml/internal/compiler"
@@ -30,6 +31,7 @@ func TestEndToEnd(t *testing.T) {
 			c := compiler.New()
 			llvmIR, err := c.CompileFile(tc.file)
 			require.NoError(t, err, "compilation failed")
+			// verifyWithLLVM(t, llvmIR)
 
 			// 2. Build and run the binary
 			exitCode := buildAndRun(t, llvmIR, tc.name)
@@ -69,4 +71,13 @@ func buildAndRun(t *testing.T, llvmIR string, testName string) int {
 		t.Fatalf("failed to run binary: %v", err)
 	}
 	return 0
+}
+
+func verifyWithLLVM(t *testing.T, ir string) {
+	cmd := exec.Command("llvm-as", "-o", "/dev/null")
+	cmd.Stdin = strings.NewReader(ir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("LLVM rejected the generated IR:\n%s\nOutput: %s", ir, string(output))
+	}
 }

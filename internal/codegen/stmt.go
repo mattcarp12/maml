@@ -7,11 +7,12 @@ import (
 )
 
 func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
-	val, err := c.evaluateExpression(n.Value)
+	valCG, err := c.evaluateExpression(n.Value)
 	if err != nil {
 		return err
 	}
 
+	val := c.load(valCG)
 	valType := val.Type()
 	if _, isPtr := valType.(*types.PointerType); isPtr {
 		c.setVar(n.Name, val) // FIX: Use new Env method
@@ -25,11 +26,10 @@ func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
 }
 
 func (c *Codegen) compileReturnStmt(n *ast.ReturnStmt) error {
-	val, err := c.evaluateExpression(n.Value)
-	if err != nil {
-		return err
-	}
-	c.currentBlock.NewRet(val)
+	valCG, err := c.evaluateExpression(n.Value)
+	if err != nil { return err }
+	
+	c.currentBlock.NewRet(c.load(valCG)) // Load it before returning
 	return nil
 }
 
@@ -51,11 +51,11 @@ func (c *Codegen) compileBlockStmt(n *ast.BlockStmt) (value.Value, error) {
 			}
 		case *ast.YieldStmt:
 			// Handle yields directly in the block instead of calling a separate function
-			val, err := c.evaluateExpression(s.Value)
+			valCG, err := c.evaluateExpression(s.Value)
 			if err != nil {
 				return nil, err
 			}
-			lastYield = val
+			lastYield = c.load(valCG)
 		case *ast.ExprStmt:
 			if err := c.compileExprStmt(s); err != nil {
 				return nil, err

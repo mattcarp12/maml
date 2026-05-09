@@ -11,6 +11,6 @@ func (c *Codegen) getPutsFunc() *ir.Func {
 			return f
 		}
 	}
-	// If it doesn't exist, declare it: declare i32 @puts(i8*)
-	return c.module.NewFunc("puts", types.I32, ir.NewParam("", types.I8Ptr))
+	// C declaration: int puts(char* s)
+	return c.module.NewFunc("puts", types.I32, ir.NewParam("s", types.I8Ptr))
 }

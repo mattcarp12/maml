@@ -363,7 +363,7 @@ func TestAnalyzer_Analyze(t *testing.T) {
 					},
 				},
 			},
-			wantErrors: []string{"cannot access field on non-struct type 'int'"},
+			wantErrors: []string{"cannot access field 'foo' on non-struct type 'int'"},
 		},
 	}
 
@@ -377,7 +377,7 @@ func TestAnalyzer_Analyze(t *testing.T) {
 			} else {
 				require.Len(t, errors, len(tt.wantErrors))
 				for i, want := range tt.wantErrors {
-					require.Contains(t, errors[i], want)
+					require.Contains(t, errors[i].Msg, want)
 				}
 			}
 
@@ -419,7 +419,7 @@ func TestAnalyzer_ResolveAstType(t *testing.T) {
 
 // analyzeInput parses the input and runs semantic analysis.
 // It now returns both the errors and the resolved TypeMap.
-func analyzeInput(t *testing.T, input string) ([]string, map[ast.Node]Type) {
+func analyzeInput(t *testing.T, input string) ([]ast.CompileError, map[ast.Node]Type) {
 	l := lexer.New(input)
 	p := parser.New(l)
 	program := p.ParseProgram()
@@ -535,7 +535,7 @@ func TestReturnPathEnforcement(t *testing.T) {
 				assert.Empty(t, errors)
 			} else {
 				require.NotEmpty(t, errors)
-				assert.Contains(t, errors[0], tt.expectedErr)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
 			}
 		})
 	}
@@ -555,7 +555,7 @@ func TestStructAndFieldValidation(t *testing.T) {
 				p := Point{x: 10}
 				return p.y
 			}`,
-			expectedErr: "field 'y' not found on struct 'Point'",
+			expectedErr: "field 'y' does not exist on struct 'Point'",
 		},
 		{
 			name: "field access on non-struct",
@@ -564,7 +564,7 @@ func TestStructAndFieldValidation(t *testing.T) {
 				x := 5
 				return x.y
 			}`,
-			expectedErr: "cannot access field on non-struct type 'int'",
+			expectedErr: "cannot access field 'y' on non-struct type 'int'",
 		},
 		{
 			name: "duplicate struct definition",
@@ -573,7 +573,7 @@ func TestStructAndFieldValidation(t *testing.T) {
 			type Point = { y int }
 			fn main() int { return 0 }
 			`,
-			expectedErr: "type Point already defined",
+			expectedErr: "type 'Point' already defined",
 		},
 	}
 
@@ -581,7 +581,7 @@ func TestStructAndFieldValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			errors, _ := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
-			assert.Contains(t, errors[0], tt.expectedErr)
+			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
 	}
 }
@@ -608,7 +608,7 @@ func TestVariableShadowing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			errors, _ := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
-			assert.Contains(t, errors[0], tt.expectedErr)
+			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
 	}
 }
@@ -638,7 +638,7 @@ func TestUndefinedVariables(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			errors, _ := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
-			assert.Contains(t, errors[0], tt.expectedErr)
+			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
 	}
 }
@@ -683,7 +683,7 @@ func TestTypeMismatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			errors, _ := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
-			assert.Contains(t, errors[0], tt.expectedErr)
+			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
 	}
 }

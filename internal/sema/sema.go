@@ -2,6 +2,7 @@ package sema
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mattcarp12/maml/internal/ast"
 )
@@ -28,7 +29,7 @@ type Symbol struct {
 
 type Analyzer struct {
 	scope          *Scope
-	errors         []string
+	errors         []ast.CompileError
 	TypeMap        map[ast.Node]Type
 	expectedReturn Type
 }
@@ -52,36 +53,52 @@ func New() *Analyzer {
 
 	return &Analyzer{
 		scope:          globalScope,
-		errors:         []string{},
+		errors:         []ast.CompileError{},
 		TypeMap:        make(map[ast.Node]Type),
 		expectedReturn: nil,
 	}
 }
 
 func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
-	a.errors = append(a.errors, fmt.Sprintf("Line %d:%d - %s", pos.Line, pos.Col, msg))
+	a.errors = append(a.errors, ast.CompileError{
+		Stage: "Sema",
+		Pos:   pos,
+		Msg:   fmt.Sprintf(format, args...),
+	})
 }
 
-// Analyze runs the full semantic analysis pipeline and returns errors and the resolved TypeMap.
-func (a *Analyzer) Analyze(program *ast.Program) ([]string, map[ast.Node]Type) {
+func (a *Analyzer) Analyze(program *ast.Program) ([]ast.CompileError, map[ast.Node]Type) {
 	a.pushScope() // Global scope
 
-	// PASS 1: Register Types (Structs, Aliases)
+	// PASS 1: Type Discovery
+	// Just register the names so recursive types can find each other.
 	for _, decl := range program.Decls {
 		if td, ok := decl.(*ast.TypeDecl); ok {
-			a.analyzeTypeDecl(td)
+			if _, exists := a.scope.types[td.Name.Name]; exists {
+				a.errorf(td.Pos(), "type '%s' already defined", td.Name.Name)
+				continue
+			}
+			// Register an empty shell of the struct
+			a.scope.types[td.Name.Name] = &StructType{Name: td.Name.Name}
 		}
 	}
 
-	// PASS 2: Register Function Signatures
+	// PASS 2: Type Resolution
+	// Now that all names are known, resolve the fields.
+	for _, decl := range program.Decls {
+		if td, ok := decl.(*ast.TypeDecl); ok {
+			a.resolveTypeBody(td)
+		}
+	}
+
+	// PASS 3: Function Signatures
 	for _, decl := range program.Decls {
 		if fn, ok := decl.(*ast.FnDecl); ok {
 			a.registerFunction(fn)
 		}
 	}
 
-	// PASS 3: Typecheck Function Bodies
+	// PASS 4: Function Bodies (The final check)
 	for _, decl := range program.Decls {
 		if fn, ok := decl.(*ast.FnDecl); ok {
 			a.analyzeFnBody(fn)
@@ -128,6 +145,27 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 		Name:    v.Name,
 		Mutable: false,
 		Type:    &FunctionType{Params: paramTypes, Return: retType},
+	}
+}
+
+func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
+	// Look up the shell we created in Pass 1
+	existingType := a.scope.types[v.Name.Name]
+	st, ok := existingType.(*StructType)
+	if !ok {
+		return
+	}
+
+	if pt, ok := v.Rhs.(*ast.ProductType); ok {
+		for _, f := range pt.Fields {
+			// Because of Pass 1, resolveAstType can now find 'Node'
+			// even while we are still defining 'Node'!
+			fieldType := a.resolveAstType(f.Type)
+			st.Fields = append(st.Fields, StructField{
+				Name: f.Name,
+				Type: fieldType,
+			})
+		}
 	}
 }
 
@@ -178,25 +216,6 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 		}
 	}
 	return UnknownType{}
-}
-
-func (a *Analyzer) analyzeTypeDecl(v *ast.TypeDecl) {
-	if _, ok := a.scope.types[v.Name.Name]; ok {
-		a.errorf(v.Pos(), "type %s already defined", v.Name.Name)
-		return
-	}
-	if pt, ok := v.Rhs.(*ast.ProductType); ok {
-		st := &StructType{Name: v.Name.Name}
-		for _, f := range pt.Fields {
-			st.Fields = append(st.Fields, StructField{
-				Name: f.Name,
-				Type: a.resolveAstType(f.Type),
-			})
-		}
-		a.scope.types[v.Name.Name] = st
-	} else {
-		a.scope.types[v.Name.Name] = a.resolveAstType(v.Rhs)
-	}
 }
 
 // Returns true if the block guarantees a return statement
@@ -322,30 +341,88 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		}
 
 	case *ast.StructLiteral:
-		// Look up the struct type definition
+		// 1. Resolve the base struct type
+		var structDef *StructType
 		for s := a.scope; s != nil; s = s.parent {
 			if custom, ok := s.types[e.Type.Value]; ok {
-				t = custom
-				break
+				if st, ok := custom.(*StructType); ok {
+					structDef = st
+					t = st
+					break
+				}
 			}
 		}
-		// Analyze fields to catch inner errors
-		for _, field := range e.Fields {
-			a.analyzeExpr(field.Value)
+
+		if structDef == nil {
+			a.errorf(e.Type.Pos(), "undefined struct type '%s'", e.Type.Value)
+			return UnknownType{}
+		}
+
+		// 2. Track seen fields to catch duplicates
+		seenFields := make(map[string]bool)
+
+		for _, literalField := range e.Fields {
+			fieldName := literalField.Name.Value
+
+			// Check for duplicates in the literal: Point{x: 1, x: 2}
+			if seenFields[fieldName] {
+				a.errorf(literalField.Name.Pos(), "duplicate field '%s' in struct literal", fieldName)
+				continue
+			}
+			seenFields[fieldName] = true
+
+			// 3. Verify field exists in the definition
+			fieldIdx := structDef.GetFieldIndex(fieldName)
+			if fieldIdx < 0 {
+				a.errorf(literalField.Name.Pos(), "struct '%s' has no field '%s'", structDef.Name, fieldName)
+				continue
+			}
+
+			// 4. Type-check the value against the field definition
+			expectedFieldType := structDef.Fields[fieldIdx].Type
+			actualValType := a.analyzeExpr(literalField.Value)
+
+			if !actualValType.Equals(expectedFieldType) && !actualValType.Equals(UnknownType{}) {
+				a.errorf(literalField.Value.Pos(),
+					"type mismatch for field '%s': expected '%s', got '%s'",
+					fieldName, expectedFieldType.String(), actualValType.String())
+			}
+		}
+
+		// 5. (Optional but recommended) Check for missing fields
+		if len(seenFields) < len(structDef.Fields) {
+			var missing []string
+			for _, f := range structDef.Fields {
+				if !seenFields[f.Name] {
+					missing = append(missing, f.Name)
+				}
+			}
+			// In many languages this is an error; in others, it uses defaults.
+			// For MAML, let's make it a warning or error.
+			a.errorf(e.Pos(), "missing fields in struct literal: %s", strings.Join(missing, ", "))
 		}
 
 	case *ast.FieldAccess:
 		objType := a.analyzeExpr(e.Object)
-		if st, ok := objType.(*StructType); ok {
-			idx := st.GetFieldIndex(e.Field.Value)
-			if idx >= 0 {
-				t = st.Fields[idx].Type
-			} else {
-				a.errorf(e.Pos(), "field '%s' not found on struct '%s'", e.Field.Value, st.Name)
-			}
-		} else if !objType.Equals(UnknownType{}) {
-			a.errorf(e.Pos(), "cannot access field on non-struct type '%s'", objType.String())
+
+		// If the object's type is already unknown, don't cascade errors
+		if objType.Equals(UnknownType{}) {
+			return UnknownType{}
 		}
+
+		st, ok := objType.(*StructType)
+		if !ok {
+			a.errorf(e.Object.Pos(), "cannot access field '%s' on non-struct type '%s'", e.Field.Value, objType.String())
+			return UnknownType{}
+		}
+
+		idx := st.GetFieldIndex(e.Field.Value)
+		if idx < 0 {
+			a.errorf(e.Field.Pos(), "field '%s' does not exist on struct '%s'", e.Field.Value, st.Name)
+			return UnknownType{}
+		}
+
+		t = st.Fields[idx].Type
 
 	case *ast.StringLiteral:
 		t = StringType{}
