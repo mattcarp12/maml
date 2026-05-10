@@ -1,0 +1,14 @@
+type A = {a int, b int}
+type B = {a A, b int}
+type C = {a A, b B}
+
+fn main() int {
+    a := A{a: 1, b: 2}
+    b := B{a: a, b: 3}
+    c := C{a: a, b: b}
+
+    return c.a.a + c.a.b + c.b.a.a + c.b.a.b + c.b.b
+    // return 1 + 2 + 1 + 2 + 3 = 9
+}
+
+// Should return: 9

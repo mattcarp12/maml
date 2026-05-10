@@ -27,6 +27,13 @@ var testPrograms = []struct {
 	{"struct_ret", "../programs/struct_ret.maml", 21},
 	{"nested_if", "../programs/nested_if.maml", 20},
 	{"puts_multi", "../programs/puts_multi.maml", 99},
+	{"nested_structs", "../programs/nested_structs.maml", 9},
+	{"nested_structs2", "../programs/nested_structs2.maml", 15},
+	{"assignment", "../programs/assignment.maml", 42},
+	{"assignment_complex", "../programs/assignment_complex.maml", 20},
+	{"logic1", "../programs/logic1.maml", 50},
+	{"logic2", "../programs/logic2.maml", 15},
+	{"for_loop1", "../programs/for_loop1.maml", 15},
 }
 
 func TestEndToEnd(t *testing.T) {

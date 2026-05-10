@@ -62,6 +62,11 @@ func (t *FunctionType) Equals(other Type) bool {
 	if !ok || len(t.Params) != len(o.Params) || !t.Return.Equals(o.Return) {
 		return false
 	}
+	for i := range t.Params {
+		if !t.Params[i].Equals(o.Params[i]) {
+			return false
+		}
+	}
 	return true
 }
 

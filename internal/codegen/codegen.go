@@ -1,6 +1,8 @@
 package codegen
 
 import (
+	"fmt"
+
 	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
@@ -19,6 +21,7 @@ type Codegen struct {
 	currentEnv   *Env
 	typeMap      map[ast.Node]sema.Type
 	typeCache    map[string]types.Type
+	labelCounter int
 }
 
 // CGValue wraps an LLVM value with its MAML type and memory category.
@@ -84,24 +87,6 @@ func (c *Codegen) Generate(node ast.Node, typeMap map[ast.Node]sema.Type) error 
 	case *ast.FnDecl:
 		err = c.compileFnDecl(n)
 
-	case *ast.BlockStmt:
-		// FIX 1: compileBlockStmt now returns (value.Value, error).
-		// We use `_` to ignore the value here at the top level.
-		_, err = c.compileBlockStmt(n)
-
-	case *ast.DeclareStmt:
-		err = c.compileDeclareStmt(n)
-
-	case *ast.ReturnStmt:
-		err = c.compileReturnStmt(n)
-
-	case *ast.YieldStmt:
-		// FIX 2: We deleted compileYieldStmt because blocks handle yields directly.
-		// If Generate hits a stray yield, we just evaluate the expression.
-		_, err = c.evaluateExpression(n.Value)
-
-	case *ast.ExprStmt:
-		err = c.compileExprStmt(n)
 	}
 
 	return err
@@ -134,7 +119,6 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 		for _, f := range v.Fields {
 			fields = append(fields, c.llvmTypeFor(f.Type))
 		}
-
 		// Use Module.NewStruct for named types so LLVM prints them nicely (e.g., %Point)
 		res := types.NewStruct(fields...)
 		result = res
@@ -157,4 +141,9 @@ func (c *Codegen) load(val CGValue) value.Value {
 	// Always load the value, regardless of whether it's a primitive or a struct.
 	// This enforces true pass-by-value semantics in LLVM!
 	return c.currentBlock.NewLoad(c.llvmTypeFor(val.Type), val.V)
+}
+
+func (c *Codegen) newLabel(prefix string) string {
+	c.labelCounter++
+	return fmt.Sprintf("%s_%d", prefix, c.labelCounter)
 }

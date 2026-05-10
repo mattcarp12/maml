@@ -30,7 +30,7 @@ func (b *BlockStmt) String() string {
 func (b *BlockStmt) stmtNode() {}
 
 // -----------------------------------------------------------------------------
-// Statements
+// Declare and Assign Statements
 // -----------------------------------------------------------------------------
 
 type DeclareStmt struct {
@@ -51,6 +51,23 @@ func (d *DeclareStmt) String() string {
 	return fmt.Sprintf(format, d.Name, op, d.Value.String())
 }
 func (d *DeclareStmt) stmtNode() {}
+
+type AssignStmt struct {
+	LValue Expr
+	RValue Expr
+	Pos_  Position
+}
+
+func (a *AssignStmt) Pos() Position { return a.Pos_ }
+func (a *AssignStmt) End() Position { return a.RValue.End() }
+func (a *AssignStmt) String() string {
+	return fmt.Sprintf("%s = %s", a.LValue.String(), a.RValue.String())
+}
+func (a *AssignStmt) stmtNode() {}
+
+// -----------------------------------------------------------------------------
+// Function Return and Yield
+// -----------------------------------------------------------------------------
 
 type ReturnStmt struct {
 	Value Expr
@@ -77,8 +94,10 @@ func (ys *YieldStmt) String() string {
 }
 func (ys *YieldStmt) stmtNode() {}
 
-// ExprStmt represents an expression that acts as a standalone statement.
-// e.g., a function call like `puts("hello")`
+// -----------------------------------------------------------------------------
+// ExprStmt - an expression that acts as a standalone statement.
+// -----------------------------------------------------------------------------
+
 type ExprStmt struct {
 	Value Expr
 	Pos_  Position
@@ -90,3 +109,22 @@ func (es *ExprStmt) String() string {
 	return es.Value.String()
 }
 func (es *ExprStmt) stmtNode() {}
+
+// -----------------------------------------------------------------------------
+// For loop
+// -----------------------------------------------------------------------------
+
+type ForStmt struct {
+    Init      Stmt       
+    Condition Expr       
+    Post      Stmt       
+    Body      *BlockStmt 
+    Pos_      Position
+}
+
+func (f *ForStmt) Pos() Position { return f.Pos_ }
+func (f *ForStmt) End() Position { return f.Body.End() }
+func (f *ForStmt) String() string {
+	return fmt.Sprintf("for (%s; %s; %s) %s", f.Init.String(), f.Condition.String(), f.Post.String(), f.Body.String())
+}
+func (f *ForStmt) stmtNode() {}

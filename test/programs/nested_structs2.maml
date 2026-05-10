@@ -1,0 +1,12 @@
+type A = {a int, b int}
+type B = {a A, b int}
+type C = {a A, b B}
+
+fn main() int {
+    c := C{a: A{a: 1, b: 2}, b: B{a: A{a: 4, b: 5}, b: 3}}
+
+    return c.a.a + c.a.b + c.b.a.a + c.b.a.b + c.b.b
+    // return 1 + 2 + 4 + 5 + 3 = 15
+}
+
+// Should return: 15

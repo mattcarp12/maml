@@ -461,7 +461,7 @@ func TestValidPrograms(t *testing.T) {
 			name: "if expression",
 			input: `
 			fn main() int {
-				return if true { => 10 } else { => 20 }
+				return if (true) { => 10 } else { => 20 }
 			}`,
 		},
 		{
@@ -656,7 +656,7 @@ func TestTypeMismatch(t *testing.T) {
 		},
 		{
 			name:        "non-boolean if condition",
-			input:       `fn main() int { return if 5 { => 10 } }`,
+			input:       `fn main() int { return if (5) { => 10 } }`,
 			expectedErr: "IF condition must be a boolean",
 		},
 		{
@@ -676,6 +676,33 @@ func TestTypeMismatch(t *testing.T) {
 				return add(5)
 			}`,
 			expectedErr: "wrong number of arguments",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			require.NotEmpty(t, errors)
+			assert.Contains(t, errors[0].Msg, tt.expectedErr)
+		})
+	}
+}
+
+func TestImmutableAssignment(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "reassigning immutable variable",
+			input: `
+			fn main() int {
+				x := 5
+				x = 10
+				return x
+			}`,
+			expectedErr: "cannot assign to immutable variable 'x'",
 		},
 	}
 

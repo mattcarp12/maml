@@ -5,6 +5,7 @@ import (
 
 	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
+	"github.com/llir/llvm/ir/enum"
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
@@ -38,6 +39,63 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 			return CGValue{}, err
 		}
 
+		switch e.Operator {
+		case "&&":
+			// Short-circuiting AND: if left is false, return false immediately
+			// Otherwise, evaluate and return the right side
+			fn := c.currentBlock.Parent
+			rightBlk := fn.NewBlock(c.newLabel("and_right"))
+			mergeBlk := fn.NewBlock(c.newLabel("and_merge"))
+
+			leftVal := c.load(leftCG)
+			leftExitBlk := c.currentBlock
+			c.currentBlock.NewCondBr(leftVal, rightBlk, mergeBlk)
+
+			// --- EVALUATE RIGHT BLOCK ---
+			c.currentBlock = rightBlk
+			rightCG, _ := c.evaluateExpression(e.Right)
+			rightVal := c.load(rightCG)
+			rightExitBlk := c.currentBlock // Remember where right finished!
+			c.currentBlock.NewBr(mergeBlk)
+
+			// --- MERGE BLOCK ---
+			c.currentBlock = mergeBlk
+			// Phi: If from left block, result is false. If from right block, result is rightVal.
+			phi := mergeBlk.NewPhi(
+				ir.NewIncoming(constant.False, leftExitBlk),
+				ir.NewIncoming(rightVal, rightExitBlk),
+			)
+			return CGValue{V: phi, Type: semaType, IsAddress: false}, nil
+		case "||":
+			// Short-circuiting OR: if left is true, return true immediately
+			// Otherwise, evaluate and return the right side
+			fn := c.currentBlock.Parent
+			rightBlk := fn.NewBlock(c.newLabel("or_right"))
+			mergeBlk := fn.NewBlock(c.newLabel("or_merge"))
+
+			leftVal := c.load(leftCG)
+			leftExitBlk := c.currentBlock
+			c.currentBlock.NewCondBr(leftVal, mergeBlk, rightBlk)
+
+			// --- Evaluate the Right Block ---
+			c.currentBlock = rightBlk
+			rightCG, err := c.evaluateExpression(e.Right)
+			if err != nil {
+				return CGValue{}, err
+			}
+			rightVal := c.load(rightCG)
+			rightExitBlk := c.currentBlock
+			c.currentBlock.NewBr(mergeBlk)
+
+			// --- Merge Block ---
+			c.currentBlock = mergeBlk
+			phi := mergeBlk.NewPhi(
+				ir.NewIncoming(constant.True, leftExitBlk),
+				ir.NewIncoming(rightVal, rightExitBlk),
+			)
+			return CGValue{V: phi, Type: semaType, IsAddress: false}, nil
+		}
+
 		rightCG, err := c.evaluateExpression(e.Right)
 		if err != nil {
 			return CGValue{}, err
@@ -56,6 +114,34 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 			res = c.currentBlock.NewMul(left, right)
 		case "/":
 			res = c.currentBlock.NewSDiv(left, right)
+		case "<":
+			res = c.currentBlock.NewICmp(enum.IPredSLT, left, right)
+		case ">":
+			res = c.currentBlock.NewICmp(enum.IPredSGT, left, right)
+		case "<=":
+			res = c.currentBlock.NewICmp(enum.IPredSLE, left, right)
+		case ">=":
+			res = c.currentBlock.NewICmp(enum.IPredSGE, left, right)
+		case "==":
+			res = c.currentBlock.NewICmp(enum.IPredEQ, left, right)
+		case "!=":
+			res = c.currentBlock.NewICmp(enum.IPredNE, left, right)
+		}
+		return CGValue{V: res, Type: semaType, IsAddress: false}, nil
+
+	case *ast.PrefixExpr:
+		rightCG, err := c.evaluateExpression(e.Right)
+		if err != nil {
+			return CGValue{}, err
+		}
+		right := c.load(rightCG)
+
+		var res value.Value
+		switch e.Operator {
+		case "-":
+			res = c.currentBlock.NewSub(constant.NewInt(types.I32, 0), right)
+		case "!":
+			res = c.currentBlock.NewXor(right, constant.True)
 		}
 		return CGValue{V: res, Type: semaType, IsAddress: false}, nil
 
@@ -66,16 +152,15 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		}
 
 		fn := c.currentBlock.Parent
-		thenBlk := fn.NewBlock("then")
-		elseBlk := fn.NewBlock("else")
-		mergeBlk := fn.NewBlock("merge")
+		thenBlk := fn.NewBlock(c.newLabel("then"))
+		elseBlk := fn.NewBlock(c.newLabel("else"))
+		mergeBlk := fn.NewBlock(c.newLabel("merge"))
 
-		c.currentBlock.NewCondBr(condVal.V, thenBlk, elseBlk)
+		c.currentBlock.NewCondBr(c.load(condVal), thenBlk, elseBlk)
 
 		// --- COMPILE THE 'THEN' BRANCH ---
 		c.currentBlock = thenBlk
 
-		// FIX: Capture the yield directly from compileBlockStmt!
 		thenYield, err := c.compileBlockStmt(e.Consequence)
 		if err != nil {
 			return CGValue{}, err
@@ -114,6 +199,10 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 
 	case *ast.CallExpr:
 		ident, isIdent := e.Function.(*ast.Identifier)
+		if !isIdent {
+			return CGValue{}, fmt.Errorf("unsupported function call: only direct calls to identifiers are supported")
+		}
+		// TODO - eventually support more complex call expressions (e.g. function pointers, methods, etc.)
 		var targetFunc *ir.Func
 
 		if ident.Value == "puts" {
@@ -199,7 +288,7 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		// Append a null terminator so libc functions like 'puts' work
 		strBytes := append([]byte(strVal), 0)
 		strConst := constant.NewCharArray(strBytes)
-		globalDef := c.module.NewGlobalDef(".str", strConst)
+		globalDef := c.module.NewGlobalDef(c.newLabel("str"), strConst)
 		globalDef.Immutable = true
 
 		// Create the MAML Fat Pointer { i8*, i32 } on the stack

@@ -73,6 +73,19 @@ func (p *Parser) parseInfixExpression(left ast.Expr) ast.Expr {
 	return expression
 }
 
+func (p *Parser) parsePrefixExpression() ast.Expr {
+	expression := &ast.PrefixExpr{
+		Operator: p.curToken.Literal,
+		Pos_:     p.curPos(),
+	}
+
+	p.nextToken()
+
+	expression.Right = p.parseExpression(PREFIX)
+
+	return expression
+}
+
 func (p *Parser) parseGroupedExpression() ast.Expr {
 	p.nextToken() // skip the '('
 
@@ -89,23 +102,21 @@ func (p *Parser) parseGroupedExpression() ast.Expr {
 
 func (p *Parser) parseIfExpression() ast.Expr {
 	pos := p.curPos()
-	p.nextToken() // consume 'if'
-
-	// --- THE INFIX SHIELD ---
-	// Temporarily remove '{' from the infix map so the condition
-	// parser doesn't treat it as a struct literal.
-	oldInfix := p.infixParseFns[token.LBRACE]
-	delete(p.infixParseFns, token.LBRACE)
+	if !p.expectPeek(token.LPAREN) { // Expect '(' after 'if'
+		return nil
+	}
+	p.nextToken() // Step onto the condition expression after '('
 
 	condition := p.parseExpression(LOWEST)
-
-	// Restore the handler immediately after parsing the condition
-	p.infixParseFns[token.LBRACE] = oldInfix
-
 	if condition == nil {
 		return nil
 	}
 
+	if !p.expectPeek(token.RPAREN) { // Expect ')' after condition
+		return nil
+	}
+
+	// check for '{' before parsing the consequence block
 	if !p.expectPeek(token.LBRACE) {
 		return nil
 	}
@@ -174,6 +185,7 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 	leftIdent, ok := left.(*ast.Identifier)
 	if !ok {
+		p.AddError("expected identifier on the left side of '{' when parsing struct literal")
 		return nil
 	}
 

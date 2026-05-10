@@ -127,6 +127,19 @@ func (ie *InfixExpr) String() string {
 }
 func (ie *InfixExpr) exprNode() {}
 
+type PrefixExpr struct {
+	Operator string
+	Right    Expr
+	Pos_     Position
+}
+
+func (pe *PrefixExpr) Pos() Position { return pe.Pos_ }
+func (pe *PrefixExpr) End() Position { return pe.Right.End() }
+func (pe *PrefixExpr) String() string {
+	return fmt.Sprintf("(%s%s)", pe.Operator, pe.Right.String())
+}
+func (pe *PrefixExpr) exprNode() {}
+
 // FieldAccess represents: object.field
 type FieldAccess struct {
 	Object Expr        // Can be an Identifier (p), or another FieldAccess (user.address)

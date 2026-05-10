@@ -52,6 +52,8 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseReturnStmt()
 	case token.YIELD:
 		return p.parseYieldStmt()
+	case token.FOR:
+		return p.parseForStmt()
 	default:
 		// Any other token (e.g., '1 + 2', 'if true') can be evaluated as an expression statement
 		return p.parseExpressionStmt()
@@ -141,11 +143,85 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 		return nil
 	}
 
+	// Handle the case where an expression is followed by an assignment, e.g., 'x = 5'
+	if p.peekToken.Type == token.ASSIGN {
+		p.nextToken() // get onto '='
+		p.nextToken() // move to the expression on the right side of '='
+		value := p.parseExpression(LOWEST)
+		if value == nil {
+			return nil
+		}
+		p.expectStatementEnd() // Consume the newline after the assignment
+		return &ast.AssignStmt{
+			LValue: expr,
+			RValue: value,
+			Pos_:   pos,
+		}
+	}
+
 	// Consume the newline terminating this statement
 	p.expectStatementEnd()
 
-	return &ast.ExprStmt{ // Use ast.ExpressionStmt{} if that is your AST node's name
-		Value: expr, // Or Expression: expr
+	return &ast.ExprStmt{
+		Value: expr,
 		Pos_:  pos,
+	}
+}
+
+func (p *Parser) parseForStmt() *ast.ForStmt {
+	pos := p.curPos()
+	// p.nextToken() // skip 'for'
+
+	// Infinite loop `for { ... }`
+	if p.curToken.Type == token.LBRACE {
+		return &ast.ForStmt{Body: p.parseBlockStmt(), Pos_: pos}
+	}
+
+	// Expect the opening parenthesis
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	p.nextToken() // get inside the parens
+
+	// Parse the first piece (either Init or Condition)
+	first := p.parseStmt()
+
+	var condition ast.Expr
+	var post ast.Stmt
+	var init ast.Stmt
+
+	// 4. Was that a Condition or an Init?
+	if p.peekToken.Type == token.RPAREN {
+		// It was a While loop! e.g. for (x < 10)
+		condition = first.(*ast.ExprStmt).Value
+		p.nextToken() // step on the RPAREN to prepare for parsing the body
+	} else {
+		// It was a C-style loop! e.g. for (mut i := 0; i < 10; i = i + 1)
+		init = first
+
+		// p.curToken should now be on the condition (because expectStatementEnd consumed the ';')
+		condition = p.parseExpression(LOWEST)
+
+		if !p.expectPeek(token.SEMICOLON) {
+			return nil
+		}
+		p.nextToken() // move past ';'
+
+		post = p.parseStmt()
+		// parseStmt should leave us on the RPAREN due to expectStatementEnd
+	}
+
+	// 5. Expect '{' and parse body
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+	body := p.parseBlockStmt()
+
+	return &ast.ForStmt{
+		Init:      init,
+		Condition: condition,
+		Post:      post,
+		Body:      body,
+		Pos_:      pos,
 	}
 }

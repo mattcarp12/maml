@@ -39,6 +39,7 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.LPAREN] = p.parseGroupedExpression
 	p.prefixParseFns[token.IF] = p.parseIfExpression
 	p.prefixParseFns[token.STRING] = p.parseStringLiteral
+	p.prefixParseFns[token.NOT] = p.parsePrefixExpression
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression
@@ -55,4 +56,7 @@ func (p *Parser) setParseFns() {
 	p.infixParseFns[token.LPAREN] = p.parseCallExpression
 	p.infixParseFns[token.LBRACE] = p.parseStructLiteral
 	p.infixParseFns[token.DOT] = p.parseFieldAccess
+	p.infixParseFns[token.AND] = p.parseInfixExpression
+	p.infixParseFns[token.OR] = p.parseInfixExpression
+
 }

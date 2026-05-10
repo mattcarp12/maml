@@ -60,6 +60,7 @@ const (
 	ELSE   // else
 	MUT    // mut
 	RETURN // return
+	FOR    // for
 )
 
 var keywords = map[string]TokenType{
@@ -76,6 +77,7 @@ var keywords = map[string]TokenType{
 	"false":  BOOL,
 	"mut":    MUT,
 	"return": RETURN,
+	"for":    FOR,
 }
 
 func LookupIdent(ident string) TokenType {

@@ -170,12 +170,12 @@ func TestIfExpressionParsing(t *testing.T) {
 	}{
 		{
 			name:     "simple if",
-			input:    "if x > 5 { => true }",
+			input:    "if (x > 5) { => true }",
 			expected: "if (x > 5) {\n\t=> true\n}",
 		},
 		{
 			name:     "if with else",
-			input:    "if x == y { => 10 } else { => 20 }",
+			input:    "if (x == y) { => 10 } else { => 20 }",
 			expected: "if (x == y) {\n\t=> 10\n} else {\n\t=> 20\n}",
 		},
 	}

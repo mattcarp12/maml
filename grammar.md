@@ -25,7 +25,7 @@ Keywords =
   | "async" | "await"
   | "if" | "else"
   | "match"
-  | "for" | "while"
+  | "for" 
   | "break" | "continue"
   | "static"
   | "with"
@@ -156,7 +156,6 @@ Stmt            = VarDecl
                 | IfStmt
                 | MatchStmt
                 | ForStmt
-                | WhileStmt
                 | BreakStmt
                 | ContinueStmt
                 | ExprStmt
@@ -181,8 +180,6 @@ ReturnStmt      = "return" [ Expr ] ";" ;
 IfStmt          = "if" Expr Block [ "else" (Block | IfStmt) ] ;
 
 ForStmt         = "for" [ SimpleStmt ] ";" [ Expr ] ";" [ SimpleStmt ] Block ;
-
-WhileStmt       = "while" Expr Block ;
 
 SimpleStmt      = VarDecl | AssignStmt | ExprStmt ;
 

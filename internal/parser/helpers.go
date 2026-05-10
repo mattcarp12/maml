@@ -59,7 +59,8 @@ func (p *Parser) skipNewlines() {
 // expectStatementEnd checks if the statement properly terminates.
 // It allows NEWLINE, EOF, or a closing RBRACE (for one-liner blocks).
 func (p *Parser) expectStatementEnd() {
-	if p.peekToken.Type == token.NEWLINE || p.peekToken.Type == token.EOF || p.peekToken.Type == token.RBRACE {
+	if p.peekToken.Type == token.NEWLINE || p.peekToken.Type == token.EOF ||
+		p.peekToken.Type == token.RBRACE || p.peekToken.Type == token.RPAREN {
 		if p.peekToken.Type == token.NEWLINE {
 			p.nextToken() // Consume the newline
 		}
