@@ -296,29 +296,6 @@ Literal         = IntLiteral
 
 # ============================================================
 
-## 1. MEMORY MODEL (NO GC)
-
-* **ARC heap** for shared values (refcounted, non-atomic in single-threaded mode)
-* **Async task arenas** for fast bump allocation (freed at task completion)
-* **Copy-on-write (CoW)** for mutation of shared values
-* **No global mutable variables**
-* **No tracing garbage collector**
-
----
-
-## 2. OWNERSHIP MODEL
-
-### Parameter rules
-
-* `T` → borrowed (immutable)
-* `mut T` → mutable borrow
-* `own T` → ownership transfer (move)
-
-### Key properties
-
-* `own` invalidates caller binding
-* borrow is default for readability
-* moves are explicit
 
 ---
 
@@ -327,7 +304,7 @@ Literal         = IntLiteral
 * Immutable by default
 * Mutation requires `mut`
 * Immutable values are freely shared (ARC-safe)
-* Mutation triggers CoW if shared
+
 
 ---
 
@@ -415,3 +392,39 @@ Literal         = IntLiteral
 # END OF UNIFIED GRAMMAR
 
 # ============================================================
+
+1. Core Syntax & Defaults
+Immutable by Default: Variables are immutable unless explicitly declared with mut (e.g., x := 10 vs mut y := 10).
+
+No Global Mutable State: Enforces pure functions and dependency injection.
+
+Implicit References (No & symbol): * Value Types (primitives, fixed arrays, static structs) are always passed by copy.
+
+Reference Types (dynamic structs, slices, maps) are always implicitly passed by reference.
+
+Call-Site Mutability Signaling: To pass a mutable reference to a function, the programmer must explicitly type mut at the call site (e.g., myfunc(mut x)).
+
+2. The Semantic Rules (Compile-Time Safety)
+Aliasing XOR Mutability: The compiler maintains a Lock Table. A reference type can have multiple immutable readers OR exactly one mutable writer, but never both.
+
+Implicit Move Semantics: Assigning a mutable variable to another (mut y := x) or passing it to a channel automatically Moves the Exclusive Write Lock. The compiler invalidates x and throws a compile-time error if the user tries to use x again.
+
+No weak References Needed: By avoiding traditional ARC cycles through Region-Based Memory, the language avoids the need for weak keywords.
+
+3. Memory Management (The Hybrid Engine)
+No Garbage Collector: All memory is managed deterministically.
+
+Task-Based Arenas (Region-Based Memory): Every async task gets its own contiguous block of memory. All local variables and complex data structures (including cyclic graphs) are allocated here. When the task ends, the entire Arena is instantly dropped. Zero ARC overhead locally.
+
+The Global ARC Heap: A shared memory space managed by Automatic Reference Counting (ARC) for data that needs to survive across different tasks.
+
+Escape Analysis (The Secret Sauce): The compiler automatically analyzes the AST. If a variable stays local to its task, it goes in the Task Arena. If it escapes (e.g., sent over a channel), the compiler promotes it to the Global ARC Heap and injects the +1/-1 ARC counters.
+
+Explicit Arenas (Standard Library): For advanced data structures (like global graph databases), programmers can manually instantiate Arena.new() to manage cycles without ARC leaks.
+
+4. Concurrency & Closures
+Single-Threaded Async/Await: The runtime compiles tasks down to state machines running on a single thread, completely eliminating hardware data races.
+
+Message Passing (Channels): Tasks communicate via channels. Sending a Value Type copies it. Sending an Immutable Reference Type increments its ARC counter. Sending a Mutable Reference Type moves the lock to the receiving task.
+
+Ergonomic Closures: Lambdas implicitly capture their environment. If the lambda stays local, it uses the Arena. If it escapes (e.g., spawned as a new task), Escape Analysis bumps the captured variables to the ARC heap.

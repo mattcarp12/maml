@@ -170,20 +170,19 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 
 func (p *Parser) parseForStmt() *ast.ForStmt {
 	pos := p.curPos()
-	// p.nextToken() // skip 'for'
 
-	// Infinite loop `for { ... }`
+	// 1. Infinite loop `for { ... }`
 	if p.curToken.Type == token.LBRACE {
 		return &ast.ForStmt{Body: p.parseBlockStmt(), Pos_: pos}
 	}
 
-	// Expect the opening parenthesis
+	// 2. Expect the opening parenthesis
 	if !p.expectPeek(token.LPAREN) {
 		return nil
 	}
 	p.nextToken() // get inside the parens
 
-	// Parse the first piece (either Init or Condition)
+	// 3. Parse the first piece (either Init or Condition)
 	first := p.parseStmt()
 
 	var condition ast.Expr
@@ -191,27 +190,40 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 	var init ast.Stmt
 
 	// 4. Was that a Condition or an Init?
-	if p.peekToken.Type == token.RPAREN {
-		// It was a While loop! e.g. for (x < 10)
-		condition = first.(*ast.ExprStmt).Value
-		p.nextToken() // step on the RPAREN to prepare for parsing the body
-	} else {
-		// It was a C-style loop! e.g. for (mut i := 0; i < 10; i = i + 1)
+	if p.curToken.Type == token.SEMICOLON {
+		// --- C-STYLE LOOP ---
+		// expectStatementEnd() ate the ';' and left curToken sitting on it.
 		init = first
-
-		// p.curToken should now be on the condition (because expectStatementEnd consumed the ';')
+		
+		p.nextToken() // step off the ';' and onto the start of the condition
 		condition = p.parseExpression(LOWEST)
 
+		// parseExpression does NOT consume semicolons, so it should be the peek token
 		if !p.expectPeek(token.SEMICOLON) {
 			return nil
 		}
-		p.nextToken() // move past ';'
+		p.nextToken() // step off the ';' and onto the start of the post statement
 
 		post = p.parseStmt()
-		// parseStmt should leave us on the RPAREN due to expectStatementEnd
+		
+		// parseStmt() leaves us just before the RPAREN (expectStatementEnd doesn't eat parens)
+		if !p.expectPeek(token.RPAREN) {
+			return nil
+		}
+
+	} else if p.peekToken.Type == token.RPAREN {
+		// --- WHILE LOOP ---
+		// expectStatementEnd() saw the ')' but left it alone.
+		condition = first.(*ast.ExprStmt).Value
+		p.nextToken() // step onto the RPAREN
+
+	} else {
+		p.errors = append(p.errors, "expected ';' or ')' in for loop")
+		return nil
 	}
 
 	// 5. Expect '{' and parse body
+	// Right now, curToken is ')'. expectPeek checks if the next is '{' and steps onto it.
 	if !p.expectPeek(token.LBRACE) {
 		return nil
 	}

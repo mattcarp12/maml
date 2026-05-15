@@ -104,6 +104,8 @@ func (l *Lexer) NextToken() token.Token {
 		tok = l.newToken(token.DOT, l.ch, startLine, startCol)
 	case ',':
 		tok = l.newToken(token.COMMA, l.ch, startLine, startCol)
+	case ';':
+		tok = l.newToken(token.SEMICOLON, l.ch, startLine, startCol)
 
 	// Track Bracket Depth for ASI
 	case '{':

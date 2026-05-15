@@ -1,0 +1,11 @@
+type Point = { x int, y int }
+
+fn translate(p Point, dx int, dy int) Point {
+    return Point{ x: p.x + dx, y: p.y + dy }
+}
+
+fn main() int {
+    p := Point{ x: 1, y: 2 }
+    q := translate(p, 3, 4)
+    return q.x
+}

@@ -22,16 +22,14 @@ type Result struct {
 	LLVMIR  string
 }
 
-type Compiler struct {
-	lexer  *lexer.Lexer
-	parser *parser.Parser
-}
+// Compiler is completely stateless.
+// It acts as a namespace for compilation methods.
+type Compiler struct{}
 
 func New() *Compiler {
 	return &Compiler{}
 }
 
-// CompileSource is now a convenience wrapper around the more detailed Compile method.
 func (c *Compiler) CompileSource(src string) (string, error) {
 	res, err := c.Compile(src)
 	if err != nil {
@@ -50,15 +48,16 @@ func (c *Compiler) CompileFile(path string) (string, error) {
 
 // Compile executes the full pipeline and returns all intermediate artifacts.
 func (c *Compiler) Compile(src string) (*Result, error) {
-	// 1. Lex & Parse
-	c.lexer = lexer.New(src)
-	c.parser = parser.New(c.lexer)
-	program := c.parser.ParseProgram()
-	if errs := c.parser.Errors(); len(errs) > 0 {
+	// 1. Lex & Parse (Local instances)
+	l := lexer.New(src)
+	p := parser.New(l)
+	program := p.ParseProgram()
+
+	if errs := p.Errors(); len(errs) > 0 {
 		return nil, fmt.Errorf("parser errors:\n%s", strings.Join(errs, "\n"))
 	}
 
-	// 2. Semantic Analysis (FRESH INSTANCE)
+	// 2. Semantic Analysis
 	analyzer := sema.New()
 	semaErrors, typeMap := analyzer.Analyze(program)
 	if len(semaErrors) > 0 {
@@ -70,10 +69,10 @@ func (c *Compiler) Compile(src string) (*Result, error) {
 		return nil, errors.New(sb.String())
 	}
 
-	// 3. Code Generation (FRESH INSTANCE)
+	// 3. Code Generation
 	cg := codegen.New()
 	if err := cg.Generate(program, typeMap); err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("codegen error: %w", err)
 	}
 
 	// 4. IR Verification (Sanity Check)

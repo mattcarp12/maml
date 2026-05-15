@@ -1,9 +1,11 @@
 package integration
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -12,84 +14,96 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testPrograms = []struct {
-	name         string
-	file         string
-	expectedExit int
-}{
-	{"ret42", "../programs/ret42.maml", 42},
-	{"fncall", "../programs/fncall.maml", 42},
-	{"struct1", "../programs/struct1.maml", 30},
-	{"ifelse", "../programs/ifelse.maml", 10},
-	{"puts", "../programs/puts.maml", 0},
-	{"math", "../programs/math.maml", 13},
-	{"struct_pass", "../programs/struct_pass.maml", 30},
-	{"struct_ret", "../programs/struct_ret.maml", 21},
-	{"nested_if", "../programs/nested_if.maml", 20},
-	{"puts_multi", "../programs/puts_multi.maml", 99},
-	{"nested_structs", "../programs/nested_structs.maml", 9},
-	{"nested_structs2", "../programs/nested_structs2.maml", 15},
-	{"assignment", "../programs/assignment.maml", 42},
-	{"assignment_complex", "../programs/assignment_complex.maml", 20},
-	{"logic1", "../programs/logic1.maml", 50},
-	{"logic2", "../programs/logic2.maml", 15},
-	{"for_loop1", "../programs/for_loop1.maml", 15},
-}
-
 func TestEndToEnd(t *testing.T) {
-	for _, tc := range testPrograms {
-		t.Run(tc.name, func(t *testing.T) {
-			// 1. Compile using the full compiler pipeline
-			c := compiler.New()
-			llvmIR, err := c.CompileFile(tc.file)
-			require.NoError(t, err, "compilation failed")
-			// verifyWithLLVM(t, llvmIR)
+	// Automatically find all .maml files in the programs directory
+	matches, err := filepath.Glob("../programs/*/*.maml")
+	require.NoError(t, err)
+	require.NotEmpty(t, matches, "No .maml test files found!")
 
-			// 2. Build and run the binary
-			exitCode := buildAndRun(t, llvmIR, tc.name)
-			assert.Equal(t, tc.expectedExit, exitCode,
-				"program exited with wrong status code")
+	for _, srcPath := range matches {
+		testName := strings.TrimSuffix(filepath.Base(srcPath), ".maml")
+		dir := filepath.Dir(srcPath)
+
+		t.Run(testName, func(t *testing.T) {
+			// 1. Read expected outcome files
+			expectedExit := readIntFile(filepath.Join(dir, testName+".exitcode.txt"), 0)
+			expectedOut := readFile(filepath.Join(dir, testName+".expected.txt"))
+			expectedErr := readFile(filepath.Join(dir, testName+".expected_err.txt"))
+
+			// 2. Compile
+			c := compiler.New()
+			llvmIR, compileErr := c.CompileFile(srcPath)
+
+			// 3. Handle Expected Compilation Errors (Negative Tests)
+			if expectedErr != "" {
+				require.Error(t, compileErr, "Expected a compilation error but got none")
+				assert.Contains(t, compileErr.Error(), strings.TrimSpace(expectedErr), "Compilation error did not match expected")
+				return // Test passes successfully!
+			}
+
+			// 4. Ensure successful compilation
+			require.NoError(t, compileErr, "Compilation failed unexpectedly")
+
+			// 5. Build and Run
+			actualExit, actualOut := buildAndRun(t, llvmIR, testName)
+
+			// 6. Assertions
+			assert.Equal(t, expectedExit, actualExit, "Exit code mismatch")
+
+			if expectedOut != "" {
+				assert.Equal(t, strings.TrimSpace(expectedOut), strings.TrimSpace(actualOut), "Stdout mismatch")
+			}
 		})
 	}
 }
 
-// buildAndRun writes IR, compiles with clang, runs the binary, and returns exit code
-func buildAndRun(t *testing.T, llvmIR string, testName string) int {
-	// Write LLVM IR
+// buildAndRun writes IR, compiles with clang, runs the binary, and returns (exitCode, stdout)
+func buildAndRun(t *testing.T, llvmIR string, testName string) (int, string) {
 	irPath := filepath.Join(os.TempDir(), testName+".ll")
 	err := os.WriteFile(irPath, []byte(llvmIR), 0644)
 	require.NoError(t, err)
 	defer os.Remove(irPath)
 
-	// Compile with clang
 	binPath := filepath.Join(os.TempDir(), testName+".exe")
 	cmd := exec.Command("clang", "-Wno-override-module", irPath, "-o", binPath)
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("clang failed:\n%s", string(output))
-	}
+	require.NoError(t, err, "clang failed:\n%s", string(output))
 	defer os.Remove(binPath)
 
-	// Run the binary
+	var stdout bytes.Buffer
 	cmd = exec.Command(binPath)
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 
 	err = cmd.Run()
+
+	exitCode := 0
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		return exitErr.ExitCode()
-	}
-	if err != nil {
+		exitCode = exitErr.ExitCode()
+	} else if err != nil {
 		t.Fatalf("failed to run binary: %v", err)
 	}
-	return 0
+
+	return exitCode, stdout.String()
 }
 
-func verifyWithLLVM(t *testing.T, ir string) {
-	cmd := exec.Command("llvm-as", "-o", "/dev/null")
-	cmd.Stdin = strings.NewReader(ir)
-	output, err := cmd.CombinedOutput()
+// Helpers
+func readFile(path string) string {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("LLVM rejected the generated IR:\n%s\nOutput: %s", ir, string(output))
+		return ""
 	}
+	return string(b)
+}
+
+func readIntFile(path string, defaultVal int) int {
+	str := readFile(path)
+	if str == "" {
+		return defaultVal
+	}
+	val, err := strconv.Atoi(strings.TrimSpace(str))
+	if err != nil {
+		return defaultVal
+	}
+	return val
 }

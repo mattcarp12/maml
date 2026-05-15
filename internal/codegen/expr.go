@@ -158,45 +158,55 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 
 		c.currentBlock.NewCondBr(c.load(condVal), thenBlk, elseBlk)
 
+		var phiIncoming []*ir.Incoming
+
 		// --- COMPILE THE 'THEN' BRANCH ---
 		c.currentBlock = thenBlk
-
 		thenYield, err := c.compileBlockStmt(e.Consequence)
 		if err != nil {
 			return CGValue{}, err
 		}
-		thenExitBlk := c.currentBlock
-		c.currentBlock.NewBr(mergeBlk)
+		
+		// FIX: Only branch to merge if there is no terminator (like a return!)
+		if c.currentBlock.Term == nil {
+			c.currentBlock.NewBr(mergeBlk)
+			if thenYield != nil {
+				phiIncoming = append(phiIncoming, ir.NewIncoming(thenYield, c.currentBlock))
+			}
+		}
 
 		// --- COMPILE THE 'ELSE' BRANCH ---
 		c.currentBlock = elseBlk
 		var elseYield value.Value
-		var elseExitBlk *ir.Block
 
 		if e.Alternative != nil {
 			elseYield, err = c.compileBlockStmt(e.Alternative)
 			if err != nil {
 				return CGValue{}, err
 			}
-			elseExitBlk = c.currentBlock
-			c.currentBlock.NewBr(mergeBlk)
+
+			// FIX: Only branch to merge if there is no terminator
+			if c.currentBlock.Term == nil {
+				c.currentBlock.NewBr(mergeBlk)
+				if elseYield != nil {
+					phiIncoming = append(phiIncoming, ir.NewIncoming(elseYield, c.currentBlock))
+				}
+			}
 		} else {
+			// No else block, so we just branch straight to merge
 			c.currentBlock.NewBr(mergeBlk)
 		}
 
 		// --- THE MERGE BLOCK ---
 		c.currentBlock = mergeBlk
 
-		if thenYield != nil && elseYield != nil {
-			phi := mergeBlk.NewPhi(
-				ir.NewIncoming(thenYield, thenExitBlk),
-				ir.NewIncoming(elseYield, elseExitBlk),
-			)
+		// Only create a phi node if branches actually flowed into this block with values
+		if len(phiIncoming) > 0 {
+			phi := mergeBlk.NewPhi(phiIncoming...)
 			return CGValue{V: phi, Type: semaType, IsAddress: false}, nil
 		}
 
 		return CGValue{}, nil
-
 	case *ast.CallExpr:
 		ident, isIdent := e.Function.(*ast.Identifier)
 		if !isIdent {
