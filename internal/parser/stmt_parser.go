@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+
 	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/token"
 )
@@ -13,16 +15,28 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 	p.skipNewlines()
 
 	for p.curToken.Type != token.RBRACE && p.curToken.Type != token.EOF {
-		stmt := p.parseStmt()
-		if stmt != nil {
-			block.Statements = append(block.Statements, stmt)
+		// Stop collecting if the error cap was exceeded.
+		if p.hadTooManyErrors() {
+			break
 		}
 
-		// This is the tricky part. If parseStmt() ended on a NEWLINE
-		// because of expectStatementEnd, we are already ready to check
-		// the next token or the RBRACE.
+		errorsBefore := len(p.parseErrors)
+		stmt := p.parseStmt()
+
+		if stmt != nil {
+			block.Statements = append(block.Statements, stmt)
+		} else if len(p.parseErrors) > errorsBefore {
+			// parseStmt recorded at least one error and returned nil.
+			// Synchronise to the next statement boundary and keep going
+			// so we can report further errors in this block.
+			p.synchronize()
+			p.skipNewlines()
+			continue
+		}
+
+		// Happy path: check if the next thing closes the block.
 		if p.peekToken.Type == token.RBRACE {
-			p.nextToken() // Move to RBRACE to trigger loop exit
+			p.nextToken() // move onto '}' to trigger loop exit
 			break
 		}
 
@@ -30,9 +44,11 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 		p.skipNewlines()
 	}
 
-	if p.curToken.Type == token.RBRACE {
+	switch p.curToken.Type {
+	case token.RBRACE:
 		block.End_ = p.curPos()
-		// p.nextToken() // consume '}'
+	default:
+		p.AddError(fmt.Sprintf("expected '}' to close block, got %s", p.curToken.Type))
 	}
 
 	return block
@@ -74,7 +90,7 @@ func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 
 	name := p.curToken.Literal
 
-	// We expect := for declarations. (We will handle standard = for updates later)
+	// We expect := for declarations.
 	if !p.expectPeek(token.DECLARE) {
 		return nil
 	}
@@ -194,7 +210,7 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 		// --- C-STYLE LOOP ---
 		// expectStatementEnd() ate the ';' and left curToken sitting on it.
 		init = first
-		
+
 		p.nextToken() // step off the ';' and onto the start of the condition
 		condition = p.parseExpression(LOWEST)
 
@@ -205,8 +221,8 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 		p.nextToken() // step off the ';' and onto the start of the post statement
 
 		post = p.parseStmt()
-		
-		// parseStmt() leaves us just before the RPAREN (expectStatementEnd doesn't eat parens)
+
+		// parseStmt() leaves us just before the RPAREN
 		if !p.expectPeek(token.RPAREN) {
 			return nil
 		}
@@ -214,16 +230,23 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 	} else if p.peekToken.Type == token.RPAREN {
 		// --- WHILE LOOP ---
 		// expectStatementEnd() saw the ')' but left it alone.
-		condition = first.(*ast.ExprStmt).Value
+
+		// Safe type assertion: first must be an ExprStmt to extract the condition.
+		exprStmt, ok := first.(*ast.ExprStmt)
+		if !ok {
+			p.AddError("while-style for loop condition must be an expression")
+			return nil
+		}
+		condition = exprStmt.Value
 		p.nextToken() // step onto the RPAREN
 
 	} else {
-		p.errors = append(p.errors, "expected ';' or ')' in for loop")
+		p.AddError("expected ';' or ')' in for loop")
 		return nil
 	}
 
 	// 5. Expect '{' and parse body
-	// Right now, curToken is ')'. expectPeek checks if the next is '{' and steps onto it.
+	// curToken is ')'. expectPeek checks if the next is '{' and steps onto it.
 	if !p.expectPeek(token.LBRACE) {
 		return nil
 	}

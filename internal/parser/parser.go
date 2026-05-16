@@ -11,23 +11,38 @@ type (
 	infixParseFn  func(ast.Expr) ast.Expr
 )
 
+// defaultMaxErrors is the maximum number of errors the parser will collect
+// before it stops recording new ones. This prevents cascading / duplicate
+// errors from flooding the output after a single bad construct.
+const defaultMaxErrors = 25
+
 type Parser struct {
 	l              *lexer.Lexer
 	curToken       token.Token
 	peekToken      token.Token
-	errors         []string
+	parseErrors    []ParseError // replaces the old []string errors field
+	maxErrors      int
 	prefixParseFns map[token.TokenType]prefixParseFn
 	infixParseFns  map[token.TokenType]infixParseFn
 }
 
 func New(l *lexer.Lexer) *Parser {
 	p := &Parser{
-		l:      l,
-		errors: []string{},
+		l:           l,
+		parseErrors: []ParseError{},
+		maxErrors:   defaultMaxErrors,
 	}
 	p.setParseFns()
 	p.nextToken()
 	p.nextToken()
+	return p
+}
+
+// NewWithMaxErrors creates a Parser with a custom error cap. Useful in tests
+// that deliberately produce many errors and want to verify exact counts.
+func NewWithMaxErrors(l *lexer.Lexer, max int) *Parser {
+	p := New(l)
+	p.maxErrors = max
 	return p
 }
 
@@ -40,6 +55,7 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.IF] = p.parseIfExpression
 	p.prefixParseFns[token.STRING] = p.parseStringLiteral
 	p.prefixParseFns[token.NOT] = p.parsePrefixExpression
+	p.prefixParseFns[token.MINUS] = p.parsePrefixExpression // unary minus (was missing)
 	p.prefixParseFns[token.LBRACKET] = p.parseArrayLiteral
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)

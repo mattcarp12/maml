@@ -108,9 +108,7 @@ func (al *ArrayLiteral) String() string {
 	}
 	return fmt.Sprintf("[%s]", strings.Join(elems, ", "))
 }
-func (al *ArrayLiteral) exprNode()      {}
-
-
+func (al *ArrayLiteral) exprNode() {}
 
 // -----------------------------------------------------------------------------
 // Operations
@@ -142,6 +140,7 @@ type InfixExpr struct {
 	Left     Expr
 	Operator string
 	Right    Expr
+	Pos_     Position
 }
 
 func (ie *InfixExpr) Pos() Position { return ie.Left.Pos() }
@@ -186,7 +185,7 @@ func (fa *FieldAccess) String() string {
 func (fa *FieldAccess) exprNode() {}
 
 type IndexExpr struct {
-	Left Expr
+	Left  Expr
 	Index Expr
 	Pos_  Position
 }
@@ -199,11 +198,12 @@ func (ie *IndexExpr) String() string {
 func (ie *IndexExpr) exprNode() {}
 
 type SliceExpr struct {
-	Left  Expr
-	Low   Expr // The starting index (optional, but let's make it required for now to keep it simple)
-	High  Expr // The ending index
-	Pos_  Position
+	Left Expr
+	Low  Expr // The starting index (optional, but let's make it required for now to keep it simple)
+	High Expr // The ending index
+	Pos_ Position
 }
+
 func (se *SliceExpr) Pos() Position { return se.Pos_ }
 func (se *SliceExpr) End() Position { return se.High.End() }
 func (se *SliceExpr) String() string {

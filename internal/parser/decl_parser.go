@@ -13,10 +13,24 @@ func (p *Parser) ParseProgram() *ast.Program {
 	}
 
 	for p.curToken.Type != token.EOF {
-		decl := p.parseDecl()
-		if decl != nil {
-			program.Decls = append(program.Decls, decl)
+		// Stop collecting new nodes if errors are out of control — the
+		// output would be too unreliable to be useful.
+		if p.hadTooManyErrors() {
+			break
 		}
+
+		decl := p.parseDecl()
+		if decl != nil && !isNilDecl(decl) {
+			program.Decls = append(program.Decls, decl)
+		} else {
+			// parseDecl returned nil, meaning it hit an error. Advance to
+			// the next declaration boundary so we can keep going.
+			p.synchronizeToDecl()
+			// If synchronizeToDecl landed on a decl keyword, loop back and
+			// try to parse it; if it hit EOF, the for-condition exits.
+			continue
+		}
+
 		p.nextToken()
 	}
 
@@ -34,7 +48,10 @@ func (p *Parser) parseDecl() ast.Decl {
 	case token.TYPE:
 		return p.parseTypeDecl()
 	default:
-		err := fmt.Sprintf("found %+v. only function declarations are supported at the top level for now", p.curToken)
+		err := fmt.Sprintf(
+			"found %+v. only function declarations are supported at the top level for now",
+			p.curToken,
+		)
 		p.AddError(err)
 		return nil
 	}
@@ -55,6 +72,11 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 
 	// parseFnParams assumes curToken is '(' and will return with curToken on ')'
 	params := p.parseFnParams()
+	if params == nil && p.curToken.Type != token.RPAREN {
+		// parseFnParams already recorded an error; bail so ParseProgram
+		// can synchronise to the next declaration.
+		return nil
+	}
 
 	// Parse the return type
 	if !p.expectPeek(token.IDENT) {
@@ -118,7 +140,7 @@ func (p *Parser) parseParam() ast.Param {
 
 	// We expect the very next token to be the Type (e.g., 'int')
 	if !p.expectPeek(token.IDENT) {
-		return param // Return what we have, the parser will register the error
+		return param // Return what we have; the parser will register the error
 	}
 
 	// Note: Later, when you add Generic types like Result<A, B>,
@@ -143,8 +165,13 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 
 	td.Name = &ast.NamedType{Name: p.curToken.Literal, Pos_: p.curPos()}
 
-	p.nextToken() // step onto '='
-	p.nextToken() // step onto next token
+	// Explicitly require '=' so a malformed `type Point { ... }` (missing =)
+	// gets a clear error instead of silently misparse.
+	if !p.expectPeek(token.ASSIGN) {
+		return nil
+	}
+
+	p.nextToken() // step onto the token after '='
 
 	switch p.curToken.Type {
 	case token.LBRACE:
@@ -172,14 +199,14 @@ func (p *Parser) parseProductType() *ast.ProductType {
 		return pt
 	}
 
-	// Case 2: At least one parameter
-	p.nextToken() // step onto the first parameter's name
+	// Case 2: At least one field
+	p.nextToken() // step onto the first field's name
 	pt.Fields = append(pt.Fields, p.parseParam())
 
 	// While the NEXT token is a comma...
 	for p.peekToken.Type == token.COMMA {
 		p.nextToken() // step onto ','
-		p.nextToken() // step onto the next parameter's name
+		p.nextToken() // step onto the next field's name
 		pt.Fields = append(pt.Fields, p.parseParam())
 	}
 	p.nextToken()
@@ -187,6 +214,14 @@ func (p *Parser) parseProductType() *ast.ProductType {
 
 	// Ensure we close with '}'
 	if p.curToken.Type != token.RBRACE {
+		if p.curToken.Type == token.EOF {
+			p.AddError("expected '}' to close type definition, got EOF")
+		} else {
+			p.AddError(fmt.Sprintf(
+				"expected '}' to close type definition, got %s at line %d",
+				p.curToken.Type, p.curToken.Line,
+			))
+		}
 		return nil
 	}
 

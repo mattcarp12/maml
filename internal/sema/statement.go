@@ -3,20 +3,32 @@ package sema
 
 import "github.com/mattcarp12/maml/internal/ast"
 
-// Returns true if the block guarantees a return
+// Returns true if the block guarantees a return on all paths
 func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
 	a.pushScope()
 	defer a.popScope()
+
 	alwaysReturns := false
-	for _, stmt := range body.Statements {
+	for i, stmt := range body.Statements {
+		if alwaysReturns {
+			// Any statement after a guaranteed return is unreachable
+			a.errorf(stmt.Pos(), "unreachable code after return statement")
+			// Still analyze it for other errors, but don't change alwaysReturns
+			a.analyzeStmt(stmt)
+			continue
+		}
 		if a.analyzeStmt(stmt) {
 			alwaysReturns = true
+			// Check if there are more statements after this one
+			if i < len(body.Statements)-1 {
+				// We'll catch them in the next iterations
+			}
 		}
 	}
 	return alwaysReturns
 }
 
-// Returns true if the statement is a guaranteed return
+// Returns true if the statement guarantees a return on all paths
 func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 	switch s := stmt.(type) {
 	case *ast.DeclareStmt:
@@ -107,19 +119,35 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 	if s.Init != nil {
 		a.analyzeStmt(s.Init)
 	}
+
+	// Detect infinite loop: `for (true) { ... }`
+	isInfiniteLoop := false
 	if s.Condition != nil {
 		condType := a.analyzeExpr(s.Condition)
 		if !condType.Equals(BoolType{}) && !condType.Equals(UnknownType{}) {
 			a.errorf(s.Condition.Pos(), "condition must be of type 'bool', got '%s'", condType.String())
 		}
+		if lit, ok := s.Condition.(*ast.BoolLiteral); ok && lit.Value {
+			isInfiniteLoop = true
+		}
+	} else {
+		// No condition means unconditional loop (e.g., `for { ... }`)
+		isInfiniteLoop = true
 	}
+
 	if s.Post != nil {
 		a.analyzeStmt(s.Post)
 	}
 
-	a.analyzeBlockStmt(s.Body)
+	bodyReturns := a.analyzeBlockStmt(s.Body)
 
-	return false // for loops don't guarantee a return, even if the body does return
+	// An infinite loop that always returns in its body guarantees a return
+	// (it either loops forever or returns — effectively guarantees return)
+	if isInfiniteLoop && bodyReturns {
+		return true
+	}
+
+	return false
 }
 
 // getRootIdentifier peels back index and slice expressions to find the base variable.
