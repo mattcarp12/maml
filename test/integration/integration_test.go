@@ -69,7 +69,7 @@ func buildAndRun(t *testing.T, llvmIR string, testName string) (int, string) {
 		"-Wno-override-module",
 		irPath,
 		runtimeLibPath,
-		"-Wl,-z,noexecstack",   // Silences the GNU-stack linker warning
+		"-Wl,-z,noexecstack", // Silences the GNU-stack linker warning
 		"-o", binPath,
 		"-lm",
 	)

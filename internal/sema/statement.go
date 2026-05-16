@@ -41,6 +41,11 @@ func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 		a.analyzeExpr(s.Value)
 		return false
 	case *ast.ExprStmt:
+		if ifExpr, ok := s.Value.(*ast.IfExpr); ok {
+			// Analyze types + return path
+			a.analyzeExpr(s.Value) // this calls analyzeIfExpr
+			return a.analyzeIfExprReturns(ifExpr)
+		}
 		a.analyzeExpr(s.Value)
 		return false
 	case *ast.ForStmt:
@@ -165,4 +170,21 @@ func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
 	default:
 		return nil // It's not a variable (e.g., trying to assign to `5 = 10`)
 	}
+}
+
+// analyzeIfExprReturns determines if an IfExpr used as a statement
+// guarantees a return on all paths.
+func (a *Analyzer) analyzeIfExprReturns(e *ast.IfExpr) bool {
+	// We already analyzed the condition in analyzeIfExpr, but it's safe to re-analyze
+	a.analyzeExpr(e.Condition)
+
+	consequenceReturns := a.analyzeBlockStmt(e.Consequence)
+
+	if e.Alternative == nil {
+		return false // if without else cannot guarantee return
+	}
+
+	alternativeReturns := a.analyzeBlockStmt(e.Alternative)
+
+	return consequenceReturns && alternativeReturns
 }

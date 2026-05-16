@@ -55,7 +55,7 @@ func (d *DeclareStmt) stmtNode() {}
 type AssignStmt struct {
 	LValue Expr
 	RValue Expr
-	Pos_  Position
+	Pos_   Position
 }
 
 func (a *AssignStmt) Pos() Position { return a.Pos_ }
@@ -115,11 +115,11 @@ func (es *ExprStmt) stmtNode() {}
 // -----------------------------------------------------------------------------
 
 type ForStmt struct {
-    Init      Stmt       
-    Condition Expr       
-    Post      Stmt       
-    Body      *BlockStmt 
-    Pos_      Position
+	Init      Stmt
+	Condition Expr
+	Post      Stmt
+	Body      *BlockStmt
+	Pos_      Position
 }
 
 func (f *ForStmt) Pos() Position { return f.Pos_ }

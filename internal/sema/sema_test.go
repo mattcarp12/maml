@@ -996,3 +996,430 @@ func TestArrayAndIndexIntegration(t *testing.T) {
 		})
 	}
 }
+
+func TestForStatements(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "for loop with bool condition",
+			input: `
+			fn main() int {
+				for (true) { }
+				return 0
+			}`,
+		},
+		{
+			name: "for loop with variable condition",
+			input: `
+			fn main() int {
+				x := true
+				for (x) { }
+				return 0
+			}`,
+		},
+		{
+			name: "for loop with init and post",
+			input: `
+			fn main() int {
+				for (mut i := 0; i < 10; i = i + 1) { }
+				return 0
+			}`,
+		},
+		{
+			name: "infinite for loop that always returns",
+			input: `
+			fn main() int {
+				for (true) {
+					return 42
+				}
+			}`,
+		},
+		{
+			name: "condition must be bool",
+			input: `
+			fn main() int {
+				for (42) { }
+				return 0
+			}`,
+			expectedErr: "condition must be of type 'bool'",
+		},
+		{
+			name: "unreachable code after return in for",
+			input: `
+			fn main() int {
+				for (true) {
+					return 1
+					x := 2  // unreachable
+				}
+				return 0
+			}`,
+			expectedErr: "unreachable code after return statement",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestSliceExpressions(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "slice entire array",
+			input: `
+			fn main() int {
+				arr := [1, 2, 3, 4]
+				s := arr[:]
+				return 0
+			}`,
+		},
+		{
+			name: "slice with low and high",
+			input: `
+			fn main() int {
+				arr := [1, 2, 3, 4, 5]
+				s := arr[1:4]
+				return 0
+			}`,
+		},
+		{
+			name: "slice a slice",
+			input: `
+			fn main() int {
+				arr := [1, 2, 3, 4]
+				s1 := arr[1:3]
+				s2 := s1[0:1]
+				return 0
+			}`,
+		},
+		{
+			name: "index into slice",
+			input: `
+			fn main() int {
+				arr := [10, 20, 30]
+				s := arr[:]
+				return s[1]
+			}`,
+		},
+		{
+			name: "slice non-array/slice type",
+			input: `
+			fn main() int {
+				x := 5
+				s := x[1:3]
+				return 0
+			}`,
+			expectedErr: "cannot slice non-array/slice type",
+		},
+		{
+			name: "slice low/high must be int",
+			input: `
+			fn main() int {
+				arr := [1, 2, 3]
+				s := arr[true:5]
+				return 0
+			}`,
+			expectedErr: "slice low index must be an integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestMutabilityEnforcement(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "mutable variable can be reassigned",
+			input: `
+			fn main() int {
+				mut x := 5
+				x = 10
+				return x
+			}`,
+		},
+		{
+			name: "immutable variable cannot be reassigned",
+			input: `
+			fn main() int {
+				x := 5
+				x = 10
+				return x
+			}`,
+			expectedErr: "cannot mutate immutable variable 'x'",
+		},
+		// TODO - uncomment this after implementing char data types
+		// {
+		// 	name: "string index assignment forbidden",
+		// 	input: `
+		// 	fn main() int {
+		// 		s := "hello"
+		// 		s[0] = 'a'
+		// 		return 0
+		// 	}`,
+		// 	expectedErr: "strings are immutable and cannot be modified by index",
+		// },
+		{
+			name: "mutable array element assignment",
+			input: `
+			fn main() int {
+				mut arr := [1, 2, 3]
+				arr[1] = 99
+				return 0
+			}`,
+		},
+		{
+			name: "immutable array cannot be mutated via index",
+			input: `
+			fn main() int {
+				arr := [1, 2, 3]
+				arr[1] = 99
+				return 0
+			}`,
+			expectedErr: "cannot mutate immutable variable 'arr'",
+		},
+		{
+			name: "mutable struct field assignment",
+			input: `
+			type Point = { x int, y int }
+			fn main() int {
+				mut p := Point{x: 1, y: 2}
+				p.x = 10
+				return 0
+			}`,
+		},
+		{
+			name: "assign to literal should fail",
+			input: `
+			fn main() int {
+				5 = 10
+				return 0
+			}`,
+			expectedErr: "cannot assign to non-variable expression",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestReturnPathAnalysis(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "return in if consequence only",
+			input: `
+			fn main() int {
+				if (true) { return 1 }
+				return 0
+			}`,
+		},
+		{
+			name: "return in else only",
+			input: `
+			fn main() int {
+				if (false) { 
+					return 1 
+				} else { 
+					return 0 
+				}
+			}`,
+		},
+		{
+			name: "missing return when only one branch returns",
+			input: `
+			fn main() int {
+				if (true) {
+					return 1
+				}
+				// no return here
+			}`,
+			expectedErr: "function 'main' is missing a return statement",
+		},
+		{
+			name: "nested if with guaranteed return",
+			input: `
+			fn main() int {
+				if (true) {
+					if (true) {
+						return 1
+					} else {
+						return 2
+					}
+				} else {
+					return 3
+				}
+			}`,
+		},
+		{
+			name: "if without else does not guarantee return",
+			input: `
+			fn main() int {
+				if (true) { return 42 }
+				// falls through → error
+			}`,
+			expectedErr: "function 'main' is missing a return statement",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestAssignment(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		// === Scoping Rules (should already work) ===
+		{
+			name: "variable declared only inside if branch is not visible outside",
+			input: `
+			fn main() int {
+				if (true) {
+					x := 5
+				} else {
+					x := 10
+				}
+				return x
+			}`,
+			expectedErr: "undefined name 'x'",
+		},
+		{
+			name: "variable declared in one branch only",
+			input: `
+			fn main() int {
+				if (true) {
+					x := 5
+				}
+				return x
+			}`,
+			expectedErr: "undefined name 'x'",
+		},
+		{
+			name: "variable declared outside and assigned on all paths",
+			input: `
+			fn main() int {
+				mut x := 0
+				if (true) {
+					x = 5
+				} else {
+					x = 10
+				}
+				return x
+			}`,
+		},
+		{
+			name: "variable may not be assigned on all paths",
+			input: `
+			fn main() int {
+				mut x := 0
+				if (true) {
+					x = 5
+				}
+				// else branch does not assign x
+				return x
+			}`,
+		},
+		{
+			name: "assigned before use in straight line code",
+			input: `
+			fn main() int {
+				mut x := 42
+				x = 100
+				return x
+			}`,
+		},
+		{
+			name: "nested if - assigned in all paths",
+			input: `
+			fn main() int {
+				mut x := 0
+				if (true) {
+					if (false) {
+						x = 1
+					} else {
+						x = 2
+					}
+				} else {
+					x = 3
+				}
+				return x
+			}`,
+		},
+		{
+			name: "assigned inside for loop does not count as definite",
+			input: `
+			fn main() int {
+				mut x := 0
+				for (true) {
+					x = 5
+				}
+				return x  
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors, "expected no errors for valid case")
+			} else {
+				require.NotEmpty(t, errors, "expected an error")
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}

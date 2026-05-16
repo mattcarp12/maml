@@ -25,6 +25,8 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		t = a.analyzePrefixExpr(e)
 	case *ast.IfExpr:
 		t = a.analyzeIfExpr(e)
+		// Also analyze control flow for when used as statement
+		_ = a.analyzeIfExprReturns(e) // ignore return value here
 	case *ast.CallExpr:
 		t = a.analyzeCallExpr(e)
 	case *ast.StructLiteral:
@@ -180,10 +182,12 @@ func (a *Analyzer) analyzeStructLiteral(e *ast.StructLiteral) Type {
 }
 
 func (a *Analyzer) lookupStruct(name string) *StructType {
-    t := a.lookupCustomType(name)
-    if t == nil { return nil }
-    st, _ := t.(*StructType)
-    return st
+	t := a.lookupCustomType(name)
+	if t == nil {
+		return nil
+	}
+	st, _ := t.(*StructType)
+	return st
 }
 
 func (a *Analyzer) checkStructFieldLiteral(st *StructType, literalField *ast.StructField, seen map[string]bool) {
@@ -297,7 +301,7 @@ func (a *Analyzer) analyzeSliceExpr(e *ast.SliceExpr) Type {
 	}
 
 	var baseType Type
-	
+
 	// Use a type switch to safely unwrap the underlying type!
 	switch t := leftType.(type) {
 	case ArrayType:

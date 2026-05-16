@@ -56,7 +56,7 @@ func buildCmd(args []string) {
 
 	llvmIR := runCompilerCore(file, *printIR)
 	invokeClang(llvmIR, *out)
-	
+
 	absPath, _ := filepath.Abs(*out)
 	fmt.Printf("✅ Build successful: %s\n", absPath)
 }
@@ -73,11 +73,11 @@ func runCmd(args []string) {
 	file := fs.Arg(0)
 
 	llvmIR := runCompilerCore(file, *printIR)
-	
+
 	// Create a temporary hidden executable for 'run'
 	outName := filepath.Join(os.TempDir(), "maml_run_tmp")
 	invokeClang(llvmIR, outName)
-	
+
 	executeBinary(outName)
 	os.Remove(outName) // Clean up the temp binary
 }
@@ -129,11 +129,11 @@ func invokeClang(llvmIR, outName string) {
 	defer os.Remove(irFile) // Clean up the .ll file
 
 	runtimeLibPath := "./runtime/zig-out/lib/libmamlrt.a"
-	cmd := exec.Command("clang", 
-		"-Wno-override-module", 
-		irFile, // our generated .ll file
-		runtimeLibPath, // Link maml runtime
-		"-Wl,-z,noexecstack",   // Silences the GNU-stack linker warning
+	cmd := exec.Command("clang",
+		"-Wno-override-module",
+		irFile,               // our generated .ll file
+		runtimeLibPath,       // Link maml runtime
+		"-Wl,-z,noexecstack", // Silences the GNU-stack linker warning
 		"-o", outName,
 		"-lm",
 	)

@@ -140,10 +140,10 @@ func TestYieldStatements(t *testing.T) {
 
 func TestAssignmentStatements(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		lvalue   string
-		rvalue   string
+		name   string
+		input  string
+		lvalue string
+		rvalue string
 	}{
 		{
 			name:   "simple assign",
@@ -186,12 +186,12 @@ func TestAssignmentStatements(t *testing.T) {
 
 func TestFunctionDeclarations(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		fnName      string
-		returnType  string
-		paramCount  int
-		stmtCount   int
+		name       string
+		input      string
+		fnName     string
+		returnType string
+		paramCount int
+		stmtCount  int
 	}{
 		{
 			name:       "two params",
@@ -450,10 +450,10 @@ func TestIntegerLiteralPositions(t *testing.T) {
 
 func TestIfExpressionParsing(t *testing.T) {
 	tests := []struct {
-		name            string
-		input           string
-		expected        string
-		hasAlternative  bool
+		name           string
+		input          string
+		expected       string
+		hasAlternative bool
 	}{
 		{
 			name:           "simple if",
@@ -682,10 +682,10 @@ func TestIndexExpressionParsing(t *testing.T) {
 
 func TestSliceExpressionParsing(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		hasLow   bool
-		hasHigh  bool
+		name    string
+		input   string
+		hasLow  bool
+		hasHigh bool
 	}{
 		{
 			name:    "full slice low:high",
