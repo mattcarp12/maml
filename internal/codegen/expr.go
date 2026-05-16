@@ -325,23 +325,24 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 	case *ast.ArrayLiteral:
 		arrType := c.llvmTypeFor(semaType)
 
-		// Stack allocation
-		// arrayAlloc := c.currentBlock.NewAlloca(arrType)
+		// 1. Create a NULL pointer cast to our specific Array Type (e.g., [3 x { i8*, i32 }]*)
+		nullPtr := constant.NewNull(types.NewPointer(arrType))
 
-		// --- HEAP ALLOCATION ---
-		// 1. Calculate the total size in bytes.
-		// (Assuming 32-bit/4-byte integers for this example.
-		// In a real compiler, you'd ask LLVM for the TargetData size of the element!)
-		byteSize := int64(len(e.Elements) * 4)
-		sizeVal := constant.NewInt(types.I64, byteSize)
+		// 2. Step forward by 1 entire array using GEP.
+		// Since we started at address 0, the resulting address equals the exact size in bytes!
+		sizeGep := c.currentBlock.NewGetElementPtr(arrType, nullPtr, constant.NewInt(types.I32, 1))
 
-		// 2. Call our runtime allocator!
-		// Returns an i8* (raw byte pointer)
-		rawHeapPtr := c.currentBlock.NewCall(c.runtimeAlloc, sizeVal)
+		// 3. Convert that pointer memory address into a standard 64-bit integer
+		sizeVal := c.currentBlock.NewPtrToInt(sizeGep, types.I64)
 
-		// 3. Bitcast the i8* pointer into our actual Array Pointer type (e.g., [3 x i32]*)
-		// so the rest of our GEP logic works perfectly!
+		// 4. Call our runtime allocator with the dynamically calculated, perfectly padded size!
+		rawHeapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_Alloc], sizeVal)
+
+		// 5. Bitcast the raw i8* back into our Array pointer type
 		arrayAlloc := c.currentBlock.NewBitCast(rawHeapPtr, types.NewPointer(arrType))
+
+		// --- Track this pointer so it gets deleted when the block ends! ---
+		c.trackForRelease(rawHeapPtr)
 
 		for i, elem := range e.Elements {
 			elemCG, err := c.evaluateExpression(elem)
@@ -407,11 +408,12 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 
 			// A. Get the address of Field 0 (The raw pointer)
 			zero := constant.NewInt(types.I32, 0)
+			one := constant.NewInt(types.I32, 1)
 			dataPtrPtr := c.currentBlock.NewGetElementPtr(
 				c.llvmTypeFor(t),
 				sliceStructPtr,
 				zero,
-				zero, // Field 0
+				one,
 			)
 
 			// B. Load the raw pointer from the struct!
@@ -486,6 +488,11 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 			return CGValue{}, err
 		}
 
+		// --- Grab the true base pointer of whatever we are slicing! ---
+		// If e.Left is an Array, this gives the array pointer.
+		// If e.Left is a Slice, this brilliantly extracts Field 0 of the old slice!
+		trueBasePtr := c.getRawHeapPointer(leftCG)
+
 		// Ensure we have an addressable pointer to the source
 		var sourcePtr value.Value
 		if leftCG.IsAddress {
@@ -547,20 +554,24 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		// 6. Allocate our new Slice Fat Pointer struct
 		sliceLLVMType := c.llvmTypeFor(semaType)
 		sliceAlloc := c.currentBlock.NewAlloca(sliceLLVMType)
+		zero := constant.NewInt(types.I32, 0)
 
-		// 7. Store the Pointer (Field 0)
-		ptr0 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 0))
-		c.currentBlock.NewStore(newPtr, ptr0)
+		// 7. Store the Base Pointer (Field 0)
+		ptr0 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, zero, zero)
+		c.currentBlock.NewStore(trueBasePtr, ptr0)
 
-		// 8. Store the Length (Field 1)
-		ptr1 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 1))
-		c.currentBlock.NewStore(newLen, ptr1)
+		// 8. Store the Shifted Data Pointer (Field 1)
+		ptr1 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, zero, constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(newPtr, ptr1)
 
-		// 9. Store the Capacity (Field 2)
-		ptr2 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, constant.NewInt(types.I32, 0), constant.NewInt(types.I32, 2))
-		c.currentBlock.NewStore(newCap, ptr2)
+		// 9. Store the Length (Field 2)
+		ptr2 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, zero, constant.NewInt(types.I32, 2))
+		c.currentBlock.NewStore(newLen, ptr2)
 
-		// 10. Return the new Slice!
+		// 10. Store the Capacity (Field 3)
+		ptr3 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, zero, constant.NewInt(types.I32, 3))
+		c.currentBlock.NewStore(newCap, ptr3)
+
 		return CGValue{V: sliceAlloc, Type: semaType, IsAddress: true}, nil
 
 	}

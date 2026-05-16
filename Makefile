@@ -27,3 +27,6 @@ test-e2e-short:
 
 update-golden:
 	UPDATE_GOLDEN=true go test ./test/integration -v
+
+runtime: 
+	cd runtime && zig build

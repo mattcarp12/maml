@@ -1,0 +1,11 @@
+fn main() int {
+    arr1 := [10, 20, 30] // arr1 born: Count = 1
+    
+    if (true) { // Open a nested scope
+        mut arr2 := arr1     // arr2 aliases arr1: Count = 2
+        arr2[1] = 99     // Mutate the shared memory
+    } // arr2 dies: Count = 1. (Memory survives!)
+    
+    // If ARC works, arr1 is still alive and sees the mutation!
+    return arr1[1] 
+} // arr1 dies: Count = 0. (Memory freed!)

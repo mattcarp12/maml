@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/llir/llvm/ir"
+	"github.com/llir/llvm/ir/constant"
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
@@ -22,8 +23,8 @@ type Codegen struct {
 	typeMap      map[ast.Node]sema.Type
 	typeCache    map[string]types.Type
 	labelCounter int
-	runtimeAlloc *ir.Func
-	runtimeFree  *ir.Func
+	runtimeFuncs map[RuntimeFunc]*ir.Func
+	scopeStack   [][]value.Value
 }
 
 // CGValue wraps an LLVM value with its MAML type and memory category.
@@ -35,31 +36,15 @@ type CGValue struct {
 
 func New() *Codegen {
 	c := &Codegen{
-		module:     ir.NewModule(),
-		currentEnv: &Env{vars: make(map[string]value.Value)},
-		typeCache:  make(map[string]types.Type),
+		module:       ir.NewModule(),
+		currentEnv:   &Env{vars: make(map[string]value.Value)},
+		typeCache:    make(map[string]types.Type),
+		runtimeFuncs: make(map[RuntimeFunc]*ir.Func),
+		scopeStack:   make([][]value.Value, 0),
 	}
-	c.setupRuntimeFunctions()
+	c.scopeStack = append(c.scopeStack, []value.Value{})
+	c.setupRuntimeFuncs()
 	return c
-}
-
-func (c *Codegen) setupRuntimeFunctions() {
-	// 1. Declare `maml_alloc`
-	// Signature: i8* maml_alloc(i64 size)
-	// Notice we use types.I64 for the size to match Zig's `usize` (assuming a 64-bit target)
-	c.runtimeAlloc = c.module.NewFunc(
-		"maml_alloc",
-		types.I8Ptr, // Returns a raw byte pointer
-		ir.NewParam("size", types.I64),
-	)
-
-	// 2. Declare `maml_free`
-	// Signature: void maml_free(i8* ptr)
-	c.runtimeFree = c.module.NewFunc(
-		"maml_free",
-		types.Void,
-		ir.NewParam("ptr", types.I8Ptr),
-	)
 }
 
 // Module returns the underlying LLVM IR module object.
@@ -150,9 +135,10 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 		result = types.NewArray(uint64(v.Size), baseLLVMType)
 	case sema.SliceType:
 		baseLLVMType := c.llvmTypeFor(v.Base)
+		basePtr := types.I8Ptr
 		slicePtr := types.NewPointer(baseLLVMType)
 		sliceLen, sliceCap := types.I32, types.I32
-		result = types.NewStruct(slicePtr, sliceLen, sliceCap)
+		result = types.NewStruct(basePtr, slicePtr, sliceLen, sliceCap)
 	default:
 		result = types.I32
 	}
@@ -177,4 +163,64 @@ func (c *Codegen) load(val CGValue) value.Value {
 func (c *Codegen) newLabel(prefix string) string {
 	c.labelCounter++
 	return fmt.Sprintf("%s_%d", prefix, c.labelCounter)
+}
+
+// pushScope adds a new blank page when entering a { block
+func (c *Codegen) pushScope() {
+	c.scopeStack = append(c.scopeStack, []value.Value{})
+}
+
+// trackForRelease writes a heap pointer onto the current page
+func (c *Codegen) trackForRelease(ptr value.Value) {
+	topIdx := len(c.scopeStack) - 1
+	c.scopeStack[topIdx] = append(c.scopeStack[topIdx], ptr)
+}
+
+// popScope exits a } block, releases all memory on the current page, and rips it out
+func (c *Codegen) popScope() {
+	topIdx := len(c.scopeStack) - 1
+	topPage := c.scopeStack[topIdx]
+
+	// 1. Loop backwards through the pointers and emit release calls!
+	// (Releasing in reverse order of creation is standard practice)
+	for i := len(topPage) - 1; i >= 0; i-- {
+		ptr := topPage[i]
+		// Bitcast whatever pointer it is (e.g. [3 x i32]*) back to a raw i8* for the runtime
+		rawPtr := c.currentBlock.NewBitCast(ptr, types.I8Ptr)
+		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Release], rawPtr)
+	}
+
+	// 2. Rip the page out of the notebook
+	c.scopeStack = c.scopeStack[:topIdx]
+}
+
+func isHeapManaged(t sema.Type) bool {
+	switch t.(type) {
+	case sema.ArrayType, sema.SliceType:
+		return true
+	default:
+		return false // Ints and Bools are just copied by value, no ARC needed!
+	}
+}
+
+// getRawHeapPointer safely extracts the underlying heap allocation pointer
+func (c *Codegen) getRawHeapPointer(valCG CGValue) value.Value {
+	switch t := valCG.Type.(type) {
+	case sema.ArrayType:
+		// Arrays in MAML are direct pointers to the heap allocation
+		return c.currentBlock.NewBitCast(valCG.V, types.I8Ptr)
+
+	case sema.SliceType:
+		// Slices are Fat Pointers on the stack. Field 0 contains the heap pointer.
+		zero := constant.NewInt(types.I32, 0)
+		structType := c.llvmTypeFor(t)
+
+		// GEP to Field 0
+		field0Ptr := c.currentBlock.NewGetElementPtr(structType, valCG.V, zero, zero)
+
+		return c.currentBlock.NewLoad(types.I8Ptr, field0Ptr)
+
+	default:
+		return constant.NewNull(types.I8Ptr)
+	}
 }
