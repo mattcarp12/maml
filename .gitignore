@@ -1,1 +1,4 @@
 maml.txt
+runtime/.zig-cache
+runtime/zig-out
+runtime/mimalloc

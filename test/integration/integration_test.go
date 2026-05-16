@@ -63,9 +63,16 @@ func buildAndRun(t *testing.T, llvmIR string, testName string) (int, string) {
 	err := os.WriteFile(irPath, []byte(llvmIR), 0644)
 	require.NoError(t, err)
 	defer os.Remove(irPath)
-
+	runtimeLibPath := "../../runtime/zig-out/lib/libmamlrt.a"
 	binPath := filepath.Join(os.TempDir(), testName+".exe")
-	cmd := exec.Command("clang", "-Wno-override-module", irPath, "-o", binPath)
+	cmd := exec.Command("clang",
+		"-Wno-override-module",
+		irPath,
+		runtimeLibPath,
+		"-Wl,-z,noexecstack",   // Silences the GNU-stack linker warning
+		"-o", binPath,
+		"-lm",
+	)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, "clang failed:\n%s", string(output))
 	defer os.Remove(binPath)

@@ -11,6 +11,7 @@ const (
 	LESSGREATER // > or < or >= or <=
 	SUM         // + or -
 	PRODUCT     // * or / or %
+	INDEX       // array[index]
 	CALL        // fn() or struct literal or field access
 	PREFIX      // -X or !X
 )
@@ -33,4 +34,5 @@ var precedences = map[token.TokenType]int{
 	token.LBRACE:   CALL,
 	token.DOT:      CALL,
 	token.NOT:      PREFIX,
+	token.LBRACKET: INDEX,
 }

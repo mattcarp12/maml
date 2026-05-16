@@ -270,3 +270,60 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 func (p *Parser) parseStringLiteral() ast.Expr {
 	return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
 }
+
+func (p *Parser) parseArrayLiteral() ast.Expr {
+	start := p.curPos() // Position of the '[' token
+	elems := p.parseExpressionList(token.RBRACKET)
+	return &ast.ArrayLiteral{
+		Elements: elems,
+		Pos_:     start,
+		End_:     p.curPos(),
+	}
+}
+
+func (p *Parser) parseIndexExpression(left ast.Expr) ast.Expr {
+	p.nextToken() // step into the brackets
+
+	var low ast.Expr
+	// If the current token is NOT a colon, we must have a lower bound (or an index)
+	if p.curToken.Type != token.COLON {
+		low = p.parseExpression(LOWEST)
+	}
+
+	// If the next token is a colon (arr[1:3]), OR the current token is a colon (arr[:3])
+	if p.peekToken.Type == token.COLON || p.curToken.Type == token.COLON {
+		// If we are looking at the lower bound, step onto the colon
+		if p.peekToken.Type == token.COLON {
+			p.nextToken() 
+		}
+		// Now curToken is guaranteed to be ':'
+
+		var high ast.Expr
+		// If the next token is NOT the closing bracket, we have an upper bound
+		if p.peekToken.Type != token.RBRACKET {
+			p.nextToken() // Step OFF the colon and onto the start of the upper bound
+			high = p.parseExpression(LOWEST)
+		}
+
+		if !p.expectPeek(token.RBRACKET) {
+			return nil
+		}
+
+		return &ast.SliceExpr{
+			Left: left,
+			Low:  low,
+			High: high,
+			Pos_: left.Pos(),
+		}
+	}
+
+	// Otherwise, it was just a normal index expression
+	if !p.expectPeek(token.RBRACKET) {
+		return nil
+	}
+	return &ast.IndexExpr{
+		Left:  left,
+		Index: low,
+		Pos_:  left.Pos(),
+	}
+}

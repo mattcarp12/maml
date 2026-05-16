@@ -88,6 +88,30 @@ func (sl *StringLiteral) End() Position {
 func (sl *StringLiteral) String() string { return fmt.Sprintf(`"%s"`, sl.Value) }
 func (sl *StringLiteral) exprNode()      {}
 
+type ArrayLiteral struct {
+	Elements []Expr
+	Pos_     Position
+	End_     Position
+}
+
+func (al *ArrayLiteral) Pos() Position { return al.Pos_ }
+func (al *ArrayLiteral) End() Position {
+	if len(al.Elements) > 0 {
+		return al.Elements[len(al.Elements)-1].End() // Rough estimation
+	}
+	return Position{Line: al.Pos_.Line, Col: al.Pos_.Col + 2} // For "[]"
+}
+func (al *ArrayLiteral) String() string {
+	var elems []string
+	for _, e := range al.Elements {
+		elems = append(elems, e.String())
+	}
+	return fmt.Sprintf("[%s]", strings.Join(elems, ", "))
+}
+func (al *ArrayLiteral) exprNode()      {}
+
+
+
 // -----------------------------------------------------------------------------
 // Operations
 // -----------------------------------------------------------------------------
@@ -160,6 +184,32 @@ func (fa *FieldAccess) String() string {
 	return fmt.Sprintf("(%s.%s)", objStr, fa.Field.String())
 }
 func (fa *FieldAccess) exprNode() {}
+
+type IndexExpr struct {
+	Left Expr
+	Index Expr
+	Pos_  Position
+}
+
+func (ie *IndexExpr) Pos() Position { return ie.Pos_ }
+func (ie *IndexExpr) End() Position { return ie.Index.End() }
+func (ie *IndexExpr) String() string {
+	return fmt.Sprintf("(%s[%s])", ie.Left.String(), ie.Index.String())
+}
+func (ie *IndexExpr) exprNode() {}
+
+type SliceExpr struct {
+	Left  Expr
+	Low   Expr // The starting index (optional, but let's make it required for now to keep it simple)
+	High  Expr // The ending index
+	Pos_  Position
+}
+func (se *SliceExpr) Pos() Position { return se.Pos_ }
+func (se *SliceExpr) End() Position { return se.High.End() }
+func (se *SliceExpr) String() string {
+	return fmt.Sprintf("(%s[%s:%s])", se.Left.String(), se.Low.String(), se.High.String())
+}
+func (se *SliceExpr) exprNode() {}
 
 // -----------------------------------------------------------------------------
 // Control Flow

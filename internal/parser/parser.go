@@ -12,12 +12,12 @@ type (
 )
 
 type Parser struct {
-	l               *lexer.Lexer
-	curToken        token.Token
-	peekToken       token.Token
-	errors          []string
-	prefixParseFns  map[token.TokenType]prefixParseFn
-	infixParseFns   map[token.TokenType]infixParseFn
+	l              *lexer.Lexer
+	curToken       token.Token
+	peekToken      token.Token
+	errors         []string
+	prefixParseFns map[token.TokenType]prefixParseFn
+	infixParseFns  map[token.TokenType]infixParseFn
 }
 
 func New(l *lexer.Lexer) *Parser {
@@ -40,6 +40,7 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.IF] = p.parseIfExpression
 	p.prefixParseFns[token.STRING] = p.parseStringLiteral
 	p.prefixParseFns[token.NOT] = p.parsePrefixExpression
+	p.prefixParseFns[token.LBRACKET] = p.parseArrayLiteral
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression
@@ -58,5 +59,5 @@ func (p *Parser) setParseFns() {
 	p.infixParseFns[token.DOT] = p.parseFieldAccess
 	p.infixParseFns[token.AND] = p.parseInfixExpression
 	p.infixParseFns[token.OR] = p.parseInfixExpression
-
+	p.infixParseFns[token.LBRACKET] = p.parseIndexExpression
 }

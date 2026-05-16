@@ -35,9 +35,6 @@ func (a *Analyzer) analyzeFunctionBodies(program *ast.Program) {
 }
 
 func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
-	a.pushScope()
-	defer a.popScope()
-
 	// Bind parameters
 	for _, param := range v.Params {
 		pType := a.resolveAstType(param.Type)

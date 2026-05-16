@@ -336,3 +336,106 @@ func testIdentifier(t *testing.T, exp ast.Expr, value string) {
 	require.True(t, ok, "expected *ast.Identifier, got %T", exp)
 	assert.Equal(t, value, ident.Value)
 }
+
+func TestArrayLiteralParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+		elemCnt  int
+	}{
+		{
+			name:     "empty array",
+			input:    "return []",
+			expected: "[]",
+			elemCnt:  0,
+		},
+		{
+			name:     "integer array",
+			input:    "return [1, 2, 3]",
+			expected: "[1, 2, 3]",
+			elemCnt:  3,
+		},
+		{
+			name:     "mixed expressions",
+			input:    "return [1, x, 2 + 3]",
+			expected: "[1, x, (2 + 3)]",
+			elemCnt:  3,
+		},
+		{
+			name:     "nested arrays",
+			input:    "return [[1, 2], [3, 4]]",
+			expected: "[[1, 2], [3, 4]]",
+			elemCnt:  2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmts := parseFunctionBody(t, tt.input)
+
+			require.Len(t, stmts, 1)
+
+			retStmt, ok := stmts[0].(*ast.ReturnStmt)
+			require.True(t, ok)
+
+			arr, ok := retStmt.Value.(*ast.ArrayLiteral)
+			require.True(t, ok, "expected *ast.ArrayLiteral, got %T", retStmt.Value)
+
+			assert.Len(t, arr.Elements, tt.elemCnt)
+			assert.Equal(t, tt.expected, arr.String())
+		})
+	}
+}
+
+func TestIndexExpressionParsing(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple index",
+			input:    "return arr[0]",
+			expected: "(arr[0])",
+		},
+		{
+			name:     "expression index",
+			input:    "return arr[1 + 1]",
+			expected: "(arr[(1 + 1)])",
+		},
+		{
+			name:     "nested indexing",
+			input:    "return matrix[1][2]",
+			expected: "((matrix[1])[2])",
+		},
+		{
+			name:     "index after call",
+			input:    "return getData()[0]",
+			expected: "(getData()[0])",
+		},
+		{
+			name:     "index precedence",
+			input:    "return arr[1] + arr[2]",
+			expected: "((arr[1]) + (arr[2]))",
+		},
+		{
+			name:     "index with field access",
+			input:    "return users[0].name",
+			expected: "((users[0]).name)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmts := parseFunctionBody(t, tt.input)
+
+			require.Len(t, stmts, 1)
+
+			retStmt, ok := stmts[0].(*ast.ReturnStmt)
+			require.True(t, ok)
+
+			assert.Equal(t, tt.expected, retStmt.Value.String())
+		})
+	}
+}

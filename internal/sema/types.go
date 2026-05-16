@@ -1,6 +1,9 @@
 package sema
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type Type interface {
 	String() string
@@ -29,6 +32,30 @@ type StructType struct {
 type StructField struct {
 	Name string
 	Type Type
+}
+
+type ArrayType struct {
+	Base Type
+	Size int
+}
+
+func (t ArrayType) String() string {
+	return fmt.Sprintf("[%d]%s", t.Size, t.Base.String())
+}
+
+func (t ArrayType) Equals(other Type) bool {
+	o, ok := other.(ArrayType)
+	return ok && t.Size == o.Size && t.Base.Equals(o.Base)
+}
+
+type SliceType struct {
+	Base Type
+}
+
+func (t SliceType) String() string { return "[]" + t.Base.String() }
+func (t SliceType) Equals(other Type) bool {
+	o, ok := other.(SliceType)
+	return ok && t.Base.Equals(o.Base)
 }
 
 func (t *StructType) String() string { return t.Name }

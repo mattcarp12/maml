@@ -1,0 +1,16 @@
+fn main() int {
+    // 1. Allocate a fixed array on the stack (Value Type)
+    arr := [10, 20, 30, 40, 50]
+    
+    // 2. Create a slice of that array (Fat Pointer Reference)
+    mut my_slice := arr[1:4] // Should contain [20, 30, 40]
+    
+    // 3. Read from the slice
+    x := my_slice[0] // 20
+    
+    // 4. Mutate memory THROUGH the slice!
+    my_slice[2] = 99 // This modifies arr[3]!
+    
+    // Return x (20) + arr[3] (99) = 119
+    return x + arr[3]
+}

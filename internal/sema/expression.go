@@ -31,6 +31,12 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		t = a.analyzeStructLiteral(e)
 	case *ast.FieldAccess:
 		t = a.analyzeFieldAccess(e)
+	case *ast.ArrayLiteral:
+		t = a.analyzeArrayLiteral(e)
+	case *ast.IndexExpr:
+		t = a.analyzeIndexExpr(e)
+	case *ast.SliceExpr:
+		t = a.analyzeSliceExpr(e)
 	default:
 		a.errorf(expr.Pos(), "expression type not recognized: %T", expr)
 		t = UnknownType{}
@@ -233,4 +239,89 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 	}
 
 	return st.Fields[idx].Type
+}
+
+func (a *Analyzer) analyzeArrayLiteral(e *ast.ArrayLiteral) Type {
+	if len(e.Elements) == 0 {
+		a.errorf(e.Pos(), "cannot infer type of empty array literal")
+		return UnknownType{}
+	}
+
+	firstType := a.analyzeExpr(e.Elements[0])
+	for i, elem := range e.Elements[1:] {
+		elemType := a.analyzeExpr(elem)
+		if !elemType.Equals(firstType) && !elemType.Equals(UnknownType{}) {
+			a.errorf(elem.Pos(), "array element %d type mismatch: expected '%s', got '%s'",
+				i+1, firstType.String(), elemType.String())
+		}
+	}
+
+	return ArrayType{Base: firstType, Size: len(e.Elements)}
+}
+
+func (a *Analyzer) analyzeIndexExpr(e *ast.IndexExpr) Type {
+	leftType := a.analyzeExpr(e.Left)
+	indexType := a.analyzeExpr(e.Index)
+
+	if leftType.Equals(UnknownType{}) || indexType.Equals(UnknownType{}) {
+		return UnknownType{}
+	}
+
+	var baseType Type
+
+	// Use a type switch to support indexing into BOTH Arrays and Slices
+	switch t := leftType.(type) {
+	case ArrayType:
+		baseType = t.Base
+	case SliceType:
+		baseType = t.Base
+	case StringType:
+		baseType = IntType{}
+	default:
+		a.errorf(e.Left.Pos(), "cannot index non-array/slice type '%s'", leftType.String())
+		return UnknownType{}
+	}
+
+	if !indexType.Equals(IntType{}) {
+		a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", indexType.String())
+		return UnknownType{}
+	}
+
+	return baseType
+}
+
+func (a *Analyzer) analyzeSliceExpr(e *ast.SliceExpr) Type {
+	leftType := a.analyzeExpr(e.Left)
+	if leftType.Equals(UnknownType{}) {
+		return UnknownType{}
+	}
+
+	var baseType Type
+	
+	// Use a type switch to safely unwrap the underlying type!
+	switch t := leftType.(type) {
+	case ArrayType:
+		baseType = t.Base
+	case SliceType:
+		baseType = t.Base
+	default:
+		a.errorf(e.Left.Pos(), "cannot slice non-array/slice type '%s'", leftType.String())
+		return UnknownType{}
+	}
+
+	if e.Low != nil {
+		lowType := a.analyzeExpr(e.Low)
+		if !lowType.Equals(IntType{}) && !lowType.Equals(UnknownType{}) {
+			a.errorf(e.Low.Pos(), "slice low index must be an integer, got '%s'", lowType.String())
+		}
+	}
+
+	if e.High != nil {
+		highType := a.analyzeExpr(e.High)
+		if !highType.Equals(IntType{}) && !highType.Equals(UnknownType{}) {
+			a.errorf(e.High.Pos(), "slice high index must be an integer, got '%s'", highType.String())
+		}
+	}
+
+	return SliceType{Base: baseType}
 }

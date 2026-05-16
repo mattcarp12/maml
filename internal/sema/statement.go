@@ -5,6 +5,8 @@ import "github.com/mattcarp12/maml/internal/ast"
 
 // Returns true if the block guarantees a return
 func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
+	a.pushScope()
+	defer a.popScope()
 	alwaysReturns := false
 	for _, stmt := range body.Statements {
 		if a.analyzeStmt(stmt) {
@@ -59,12 +61,31 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 			rvalType.String(), lvalType.String())
 	}
 
-	// check mutability if lval is a symbol
-	if ident, ok := s.LValue.(*ast.Identifier); ok {
-		sym := a.resolve(ident.Value)
-		if sym != nil && !sym.Mutable {
-			a.errorf(s.Pos(), "cannot assign to immutable variable '%s'", ident.Value)
+	// --- NEW MUTABILITY ENFORCEMENT ---
+
+	// RULE 1: The String Data Rule
+	// If the user is trying to index into a string (e.g., s[0] = 'a')
+	if indexExpr, ok := s.LValue.(*ast.IndexExpr); ok {
+		leftObjType := a.analyzeExpr(indexExpr.Left)
+		if leftObjType.Equals(StringType{}) {
+			a.errorf(s.Pos(), "strings are immutable and cannot be modified by index")
+			return false // Return early to prevent cascading errors
 		}
+	}
+
+	// RULE 2: The General Mutability Rule
+	// Trace the left-hand side down to its root variable name
+	rootIdent := a.getRootIdentifier(s.LValue)
+
+	if rootIdent != nil {
+		// We found the base variable! Use your existing resolve logic.
+		sym := a.resolve(rootIdent.Value)
+		if sym != nil && !sym.Mutable {
+			a.errorf(s.Pos(), "cannot mutate immutable variable '%s'", rootIdent.Value)
+		}
+	} else {
+		// Optional: If rootIdent is nil, they might be trying to assign to a literal (e.g. `10 = 5`)
+		a.errorf(s.Pos(), "cannot assign to non-variable expression")
 	}
 
 	return false
@@ -83,9 +104,6 @@ func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) bool {
 }
 
 func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
-	a.pushScope()
-	defer a.popScope()
-
 	if s.Init != nil {
 		a.analyzeStmt(s.Init)
 	}
@@ -102,4 +120,21 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 	a.analyzeBlockStmt(s.Body)
 
 	return false // for loops don't guarantee a return, even if the body does return
+}
+
+// getRootIdentifier peels back index and slice expressions to find the base variable.
+// e.g., arr[0][1] -> returns the ast.Identifier for "arr"
+func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
+	switch e := expr.(type) {
+	case *ast.Identifier:
+		return e
+	case *ast.IndexExpr:
+		return a.getRootIdentifier(e.Left)
+	case *ast.SliceExpr:
+		return a.getRootIdentifier(e.Left)
+	case *ast.FieldAccess:
+		return a.getRootIdentifier(e.Object)
+	default:
+		return nil // It's not a variable (e.g., trying to assign to `5 = 10`)
+	}
 }

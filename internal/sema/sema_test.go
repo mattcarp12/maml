@@ -702,7 +702,7 @@ func TestImmutableAssignment(t *testing.T) {
 				x = 10
 				return x
 			}`,
-			expectedErr: "cannot assign to immutable variable 'x'",
+			expectedErr: "cannot mutate immutable variable 'x'",
 		},
 	}
 
@@ -711,6 +711,288 @@ func TestImmutableAssignment(t *testing.T) {
 			errors, _ := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
 			assert.Contains(t, errors[0].Msg, tt.expectedErr)
+		})
+	}
+}
+
+func TestArrayLiteralSemanticAnalysis(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedErr  string
+		expectedType Type
+	}{
+		{
+			name: "valid int array",
+			input: `
+			fn main() int {
+				x := [1, 2, 3]
+				return x[0]
+			}`,
+			expectedErr:  "",
+			expectedType: ArrayType{Base: IntType{}, Size: 3},
+		},
+		{
+			name: "valid bool array",
+			input: `
+			fn main() int {
+				flags := [true, false, true]
+				return 0
+			}`,
+			expectedErr:  "",
+			expectedType: ArrayType{Base: BoolType{}, Size: 3},
+		},
+		{
+			name: "empty array literal",
+			input: `
+			fn main() int {
+				x := []
+				return 0
+			}`,
+			expectedErr: "cannot infer type of empty array literal",
+		},
+		{
+			name: "mixed array element types",
+			input: `
+			fn main() int {
+				x := [1, true, 3]
+				return 0
+			}`,
+			expectedErr: "array element 1 type mismatch: expected 'int', got 'bool'",
+		},
+		{
+			name: "nested array literals",
+			input: `
+			fn main() int {
+				x := [[1, 2], [3, 4]]
+				return 0
+			}`,
+			expectedErr: "",
+			expectedType: ArrayType{
+				Base: ArrayType{
+					Base: IntType{},
+					Size: 2,
+				},
+				Size: 2,
+			},
+		},
+		{
+			name: "array with expression elements",
+			input: `
+			fn main() int {
+				x := [1 + 2, 3 * 4]
+				return 0
+			}`,
+			expectedErr:  "",
+			expectedType: ArrayType{Base: IntType{}, Size: 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, typeMap := analyzeInput(t, tt.input)
+
+			if tt.expectedErr != "" {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+				return
+			}
+
+			require.Empty(t, errors)
+
+			var found bool
+
+			for _, typ := range typeMap {
+				if typ.Equals(tt.expectedType) {
+					found = true
+					break
+				}
+			}
+
+			assert.True(
+				t,
+				found,
+				"expected array type %s to exist in TypeMap",
+				tt.expectedType.String(),
+			)
+		})
+	}
+}
+
+func TestIndexExpressionSemanticAnalysis(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		expectedErr  string
+		expectedType Type
+	}{
+		{
+			name: "valid int array indexing",
+			input: `
+			fn main() int {
+				x := [1, 2, 3]
+				return x[1]
+			}`,
+			expectedErr:  "",
+			expectedType: IntType{},
+		},
+		{
+			name: "valid bool array indexing",
+			input: `
+			fn main() int {
+				flags := [true, false]
+				if (flags[0]) {
+					return 1
+				}
+				return 0
+			}`,
+			expectedErr:  "",
+			expectedType: BoolType{},
+		},
+		{
+			name: "indexing non-array type",
+			input: `
+			fn main() int {
+				x := 5
+				return x[0]
+			}`,
+			expectedErr: "cannot index non-array/slice type 'int'",
+		},
+		{
+			name: "non-integer index",
+			input: `
+			fn main() int {
+				x := [1, 2, 3]
+				return x[true]
+			}`,
+			expectedErr: "index must be an integer, got 'bool'",
+		},
+		{
+			name: "nested array indexing",
+			input: `
+			fn main() int {
+				matrix := [[1, 2], [3, 4]]
+				return matrix[0][1]
+			}`,
+			expectedErr:  "",
+			expectedType: IntType{},
+		},
+		{
+			name: "index expression with computed index",
+			input: `
+			fn main() int {
+				x := [10, 20, 30]
+				return x[1 + 1]
+			}`,
+			expectedErr:  "",
+			expectedType: IntType{},
+		},
+		{
+			name: "indexing result used in arithmetic",
+			input: `
+			fn main() int {
+				x := [1, 2, 3]
+				return x[0] + x[1]
+			}`,
+			expectedErr:  "",
+			expectedType: IntType{},
+		},
+		{
+			name: "indexing unknown identifier",
+			input: `
+			fn main() int {
+				return arr[0]
+			}`,
+			expectedErr: "undefined name 'arr'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, typeMap := analyzeInput(t, tt.input)
+
+			if tt.expectedErr != "" {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+				return
+			}
+
+			require.Empty(t, errors)
+
+			var found bool
+
+			for _, typ := range typeMap {
+				if typ.Equals(tt.expectedType) {
+					found = true
+					break
+				}
+			}
+
+			assert.True(
+				t,
+				found,
+				"expected type %s to exist in TypeMap",
+				tt.expectedType.String(),
+			)
+		})
+	}
+}
+
+func TestArrayAndIndexIntegration(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name: "array passed through variable",
+			input: `
+			fn main() int {
+				values := [1, 2, 3]
+				x := values[2]
+				return x
+			}`,
+		},
+		{
+			name: "array indexing inside function call",
+			input: `
+			fn identity(x int) int {
+				return x
+			}
+
+			fn main() int {
+				values := [1, 2, 3]
+				return identity(values[0])
+			}`,
+		},
+		{
+			name: "array indexing in conditional",
+			input: `
+			fn main() int {
+				flags := [true, false]
+
+				if (flags[0]) {
+					return 1
+				}
+
+				return 0
+			}`,
+		},
+		{
+			name: "nested indexing arithmetic",
+			input: `
+			fn main() int {
+				matrix := [[1, 2], [3, 4]]
+				return matrix[0][0] + matrix[1][1]
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, typeMap := analyzeInput(t, tt.input)
+
+			assert.Empty(t, errors)
+			assert.NotEmpty(t, typeMap)
 		})
 	}
 }

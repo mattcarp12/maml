@@ -128,7 +128,15 @@ func invokeClang(llvmIR, outName string) {
 	}
 	defer os.Remove(irFile) // Clean up the .ll file
 
-	cmd := exec.Command("clang", "-Wno-override-module", irFile, "-o", outName)
+	runtimeLibPath := "./runtime/zig-out/lib/libmamlrt.a"
+	cmd := exec.Command("clang", 
+		"-Wno-override-module", 
+		irFile, // our generated .ll file
+		runtimeLibPath, // Link maml runtime
+		"-Wl,-z,noexecstack",   // Silences the GNU-stack linker warning
+		"-o", outName,
+		"-lm",
+	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("❌ Clang build failed:\n%s\n", string(output))

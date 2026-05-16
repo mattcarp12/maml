@@ -22,6 +22,8 @@ type Codegen struct {
 	typeMap      map[ast.Node]sema.Type
 	typeCache    map[string]types.Type
 	labelCounter int
+	runtimeAlloc *ir.Func
+	runtimeFree  *ir.Func
 }
 
 // CGValue wraps an LLVM value with its MAML type and memory category.
@@ -32,11 +34,32 @@ type CGValue struct {
 }
 
 func New() *Codegen {
-	return &Codegen{
+	c := &Codegen{
 		module:     ir.NewModule(),
 		currentEnv: &Env{vars: make(map[string]value.Value)},
 		typeCache:  make(map[string]types.Type),
 	}
+	c.setupRuntimeFunctions()
+	return c
+}
+
+func (c *Codegen) setupRuntimeFunctions() {
+	// 1. Declare `maml_alloc`
+	// Signature: i8* maml_alloc(i64 size)
+	// Notice we use types.I64 for the size to match Zig's `usize` (assuming a 64-bit target)
+	c.runtimeAlloc = c.module.NewFunc(
+		"maml_alloc",
+		types.I8Ptr, // Returns a raw byte pointer
+		ir.NewParam("size", types.I64),
+	)
+
+	// 2. Declare `maml_free`
+	// Signature: void maml_free(i8* ptr)
+	c.runtimeFree = c.module.NewFunc(
+		"maml_free",
+		types.Void,
+		ir.NewParam("ptr", types.I8Ptr),
+	)
 }
 
 // Module returns the underlying LLVM IR module object.
@@ -122,6 +145,14 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 		// Use Module.NewStruct for named types so LLVM prints them nicely (e.g., %Point)
 		res := types.NewStruct(fields...)
 		result = res
+	case sema.ArrayType:
+		baseLLVMType := c.llvmTypeFor(v.Base)
+		result = types.NewArray(uint64(v.Size), baseLLVMType)
+	case sema.SliceType:
+		baseLLVMType := c.llvmTypeFor(v.Base)
+		slicePtr := types.NewPointer(baseLLVMType)
+		sliceLen, sliceCap := types.I32, types.I32
+		result = types.NewStruct(slicePtr, sliceLen, sliceCap)
 	default:
 		result = types.I32
 	}
