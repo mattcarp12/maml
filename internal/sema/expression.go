@@ -150,7 +150,7 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 	}
 
 	for i, arg := range e.Arguments {
-		argType := a.analyzeExpr(arg)
+		argType := a.analyzeExpr(arg.Argument)
 		paramType := fnType.Params[i]
 		if !argType.Equals(paramType) && !argType.Equals(UnknownType{}) {
 			a.errorf(e.Pos(), "argument %d type mismatch: expected '%s', got '%s'",

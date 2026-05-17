@@ -78,13 +78,23 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 		return nil
 	}
 
-	// Parse the return type
-	if !p.expectPeek(token.IDENT) {
-		return nil
-	}
-	returnType := &ast.NamedType{
-		Name: p.curToken.Literal,
-		Pos_: p.curPos(),
+	// // Parse the return type
+	// if !p.expectPeek(token.IDENT) {
+	// 	return nil
+	// }
+	// returnType := &ast.NamedType{
+	// 	Name: p.curToken.Literal,
+	// 	Pos_: p.curPos(),
+	// }
+
+	// allow for no return type (i.e., void) by making the return type optional
+	var returnType *ast.NamedType
+	if p.peekToken.Type == token.IDENT {
+		p.nextToken() // step onto the return type
+		returnType = &ast.NamedType{
+			Name: p.curToken.Literal,
+			Pos_: p.curPos(),
+		}
 	}
 
 	if !p.expectPeek(token.LBRACE) {
@@ -132,25 +142,36 @@ func (p *Parser) parseFnParams() []ast.Param {
 }
 
 func (p *Parser) parseParam() ast.Param {
-	// We enter with curToken sitting on the parameter Name (e.g., 'x')
 	param := ast.Param{
-		Name: p.curToken.Literal,
 		Pos_: p.curPos(),
 	}
+
+	// Check for mut or own modifiers
+	if p.curToken.Type == token.MUT {
+		param.Mut = true
+		p.nextToken() // step off 'mut'
+	} else if p.curToken.Type == token.OWN { // Assuming token.OWN exists
+		param.Own = true
+		p.nextToken() // step off 'own'
+	}
+
+	// We expect the token to now sit on the parameter Name (e.g., 'x')
+	if p.curToken.Type != token.IDENT {
+		p.AddError(fmt.Sprintf("expected parameter name, got %s", p.curToken.Type))
+		return param
+	}
+	param.Name = p.curToken.Literal
 
 	// We expect the very next token to be the Type (e.g., 'int')
 	if !p.expectPeek(token.IDENT) {
 		return param // Return what we have; the parser will register the error
 	}
 
-	// Note: Later, when you add Generic types like Result<A, B>,
-	// you will replace this block with a dedicated `p.parseTypeExpr()` function.
 	param.Type = &ast.NamedType{
 		Name: p.curToken.Literal,
 		Pos_: p.curPos(),
 	}
 
-	// We return with curToken sitting exactly on the Type identifier.
 	return param
 }
 

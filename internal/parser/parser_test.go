@@ -857,7 +857,7 @@ func TestParserErrors(t *testing.T) {
 		{
 			name:        "missing return type",
 			input:       "fn test() {",
-			expectedErr: "expected next token",
+			expectedErr: "",
 		},
 		{
 			name:        "unclosed block",
@@ -1153,6 +1153,150 @@ func TestParserErrorPositions(t *testing.T) {
 			assert.Contains(t, msg, "line")
 		}
 	})
+}
+
+func TestFunctionParameterModifiers(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []struct {
+			name string
+			mut  bool
+			own  bool
+		}
+	}{
+		{
+			name:  "mutable parameter",
+			input: "fn update(mut user User) {}",
+			expected: []struct {
+				name string
+				mut  bool
+				own  bool
+			}{
+				{"user", true, false},
+			},
+		},
+		{
+			name:  "owned parameter",
+			input: "fn consume(own data Buffer) {}",
+			expected: []struct {
+				name string
+				mut  bool
+				own  bool
+			}{
+				{"data", false, true},
+			},
+		},
+		{
+			name:  "mixed parameters",
+			input: "fn process(mut a int, own b string, c bool) {}",
+			expected: []struct {
+				name string
+				mut  bool
+				own  bool
+			}{
+				{"a", true, false},
+				{"b", false, true},
+				{"c", false, false},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			program := parseProgram(t, tt.input)
+			require.Len(t, program.Decls, 1)
+
+			fn, ok := program.Decls[0].(*ast.FnDecl)
+			require.True(t, ok)
+
+			require.Len(t, fn.Params, len(tt.expected))
+			for i, exp := range tt.expected {
+				assert.Equal(t, exp.name, fn.Params[i].Name)
+				assert.Equal(t, exp.mut, fn.Params[i].Mut, "Mut mismatch for param %s", exp.name)
+				assert.Equal(t, exp.own, fn.Params[i].Own, "Own mismatch for param %s", exp.name)
+			}
+		})
+	}
+}
+
+func TestCallArgumentModifiers(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []struct {
+			argString string
+			mut       bool
+			own       bool
+		}
+	}{
+		{
+			name:  "mutable borrow argument",
+			input: "return update(mut y)",
+			expected: []struct {
+				argString string
+				mut       bool
+				own       bool
+			}{
+				{"y", true, false},
+			},
+		},
+		{
+			name:  "owned transfer argument",
+			input: "return channel.send(own x)",
+			expected: []struct {
+				argString string
+				mut       bool
+				own       bool
+			}{
+				{"x", false, true},
+			},
+		},
+		{
+			name:  "mixed arguments",
+			input: "return mixed(mut a, own b, c)",
+			expected: []struct {
+				argString string
+				mut       bool
+				own       bool
+			}{
+				{"a", true, false},
+				{"b", false, true},
+				{"c", false, false},
+			},
+		},
+		{
+			name:  "complex expression with ownership",
+			input: "return process(own data.clone())",
+			expected: []struct {
+				argString string
+				mut       bool
+				own       bool
+			}{
+				{"(data.clone)()", false, true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmts := parseFunctionBody(t, tt.input)
+			require.Len(t, stmts, 1)
+
+			retStmt, ok := stmts[0].(*ast.ReturnStmt)
+			require.True(t, ok)
+
+			callExpr, ok := retStmt.Value.(*ast.CallExpr)
+			require.True(t, ok, "expected *ast.CallExpr, got %T", retStmt.Value)
+
+			require.Len(t, callExpr.Arguments, len(tt.expected))
+			for i, exp := range tt.expected {
+				assert.Equal(t, exp.argString, callExpr.Arguments[i].Argument.String())
+				assert.Equal(t, exp.mut, callExpr.Arguments[i].Mut, "Mut mismatch for arg %d", i)
+				assert.Equal(t, exp.own, callExpr.Arguments[i].Own, "Own mismatch for arg %d", i)
+			}
+		})
+	}
 }
 
 // =============================================================================

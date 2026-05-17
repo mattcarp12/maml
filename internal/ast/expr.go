@@ -116,14 +116,14 @@ func (al *ArrayLiteral) exprNode() {}
 
 type CallExpr struct {
 	Function  Expr
-	Arguments []Expr
+	Arguments []CallArg
 	Pos_      Position
 }
 
 func (ce *CallExpr) Pos() Position { return ce.Pos_ }
 func (ce *CallExpr) End() Position {
 	if len(ce.Arguments) > 0 {
-		return ce.Arguments[len(ce.Arguments)-1].End() // Rough estimation
+		return ce.Arguments[len(ce.Arguments)-1].End()
 	}
 	return ce.Function.End()
 }
@@ -135,6 +135,30 @@ func (ce *CallExpr) String() string {
 	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
 }
 func (ce *CallExpr) exprNode() {}
+
+type CallArg struct {
+	Argument Expr
+	Mut      bool
+	Own      bool
+	Pos_     Position
+}
+
+func (ca *CallArg) Pos() Position { return ca.Pos_ }
+func (ca *CallArg) End() Position {
+	if ca.Argument != nil {
+		return ca.Argument.End()
+	}
+	return ca.Pos_
+}
+func (ca *CallArg) String() string {
+	prefix := ""
+	if ca.Mut {
+		prefix = "mut "
+	} else if ca.Own {
+		prefix = "own "
+	}
+	return fmt.Sprintf("%s%s", prefix, ca.Argument.String())
+}
 
 type InfixExpr struct {
 	Left     Expr

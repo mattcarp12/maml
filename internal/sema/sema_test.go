@@ -212,8 +212,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 								&ast.ExprStmt{
 									Value: &ast.CallExpr{
 										Function: &ast.Identifier{Value: "puts"},
-										Arguments: []ast.Expr{
-											&ast.StringLiteral{Value: "hello"},
+										Arguments: []ast.CallArg{
+											{Argument: &ast.StringLiteral{Value: "hello"}},
 										},
 									},
 								},
@@ -238,7 +238,7 @@ func TestAnalyzer_Analyze(t *testing.T) {
 								&ast.ExprStmt{
 									Value: &ast.CallExpr{
 										Function:  &ast.Identifier{Value: "puts"},
-										Arguments: []ast.Expr{},
+										Arguments: []ast.CallArg{},
 									},
 								},
 								&ast.ReturnStmt{Value: &ast.IntLiteral{Value: 0}},

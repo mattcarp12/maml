@@ -9,8 +9,18 @@ const (
 )
 
 type Symbol struct {
-	Kind    SymbolKind
-	Name    string
-	Mutable bool
-	Type    Type
+	Kind        SymbolKind
+	Name        string
+	Mutable     bool
+	Type        Type
+	Invalidated bool
+	ParamMode   ParamMode
 }
+
+type ParamMode int
+
+const (
+	ParamBorrow    ParamMode = iota // default: fn f(x T)
+	ParamMutBorrow                  // fn f(mut x T)
+	ParamOwned                      // fn f(own x T)
+)

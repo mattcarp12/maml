@@ -46,7 +46,7 @@ func (d *DeclareStmt) String() string {
 	op := token.DEFINE.String()
 	format := "%s %s %s"
 	if d.Mutable {
-		format += "mut "
+		format = "mut " + format
 	}
 	return fmt.Sprintf(format, d.Name, op, d.Value.String())
 }

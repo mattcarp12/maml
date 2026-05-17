@@ -61,6 +61,7 @@ const (
 	MUT    // mut
 	RETURN // return
 	FOR    // for
+	OWN    // own
 )
 
 var keywords = map[string]TokenType{
@@ -78,6 +79,7 @@ var keywords = map[string]TokenType{
 	"mut":    MUT,
 	"return": RETURN,
 	"for":    FOR,
+	"own":    OWN,
 }
 
 func LookupIdent(ident string) TokenType {

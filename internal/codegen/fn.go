@@ -18,23 +18,22 @@ func (c *Codegen) compileFnDecl(n *ast.FnDecl) error {
 		llvmParams = append(llvmParams, ir.NewParam(p.Name, paramType))
 	}
 
-	// Dynamically resolve the return type instead of hardcoding I32
 	retSemaType, ok := c.typeMap[n.ReturnType]
 	if !ok {
 		return fmt.Errorf("codegen error: unresolved return type for function '%s'", n.Name)
 	}
 	retLLVMType := c.llvmTypeFor(retSemaType)
 
-	funcType := ir.NewFunc(n.Name, retLLVMType, llvmParams...)
-	c.module.Funcs = append(c.module.Funcs, funcType)
-	c.currentBlock = funcType.NewBlock("entry")
+	fn := c.module.NewFunc(n.Name, retLLVMType, llvmParams...)
+	c.currentBlock = fn.NewBlock("entry")
 
 	c.pushEnv()
 	defer c.popEnv()
 
+	// Store parameters in allocas
 	for i, p := range n.Params {
-		alloc := c.currentBlock.NewAlloca(funcType.Params[i].Typ)
-		c.currentBlock.NewStore(funcType.Params[i], alloc)
+		alloc := c.currentBlock.NewAlloca(fn.Params[i].Typ)
+		c.currentBlock.NewStore(fn.Params[i], alloc)
 		c.setVar(p.Name, alloc)
 	}
 

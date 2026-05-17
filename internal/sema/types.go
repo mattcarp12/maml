@@ -10,6 +10,7 @@ type Type interface {
 	Equals(Type) bool
 	IsReferenceType() bool // True if it's heap-allocated or passed via pointer under the hood
 	SizeInBytes() int      // Used by CodeGen to allocate the right amount of space
+	Alignment() int        // Boundary requirement for this type
 }
 
 // --- INT ---
@@ -18,7 +19,8 @@ type IntType struct{}
 func (t IntType) String() string         { return "int" }
 func (t IntType) Equals(other Type) bool { _, ok := other.(IntType); return ok }
 func (t IntType) IsReferenceType() bool  { return false }
-func (t IntType) SizeInBytes() int       { return 8 } // 64-bit int
+func (t IntType) SizeInBytes() int       { return 4 }
+func (t IntType) Alignment() int         { return 4 }
 
 // --- BOOL ---
 type BoolType struct{}
@@ -27,6 +29,7 @@ func (t BoolType) String() string         { return "bool" }
 func (t BoolType) Equals(other Type) bool { _, ok := other.(BoolType); return ok }
 func (t BoolType) IsReferenceType() bool  { return false }
 func (t BoolType) SizeInBytes() int       { return 1 } // 1 byte is enough for a bool
+func (t BoolType) Alignment() int         { return 1 }
 
 // --- STRING ///
 type StringType struct{}
@@ -35,6 +38,7 @@ func (t StringType) String() string         { return "string" }
 func (t StringType) Equals(other Type) bool { _, ok := other.(StringType); return ok }
 func (t StringType) IsReferenceType() bool  { return true }
 func (t StringType) SizeInBytes() int       { return 16 } // e.g., 8 bytes for pointer, 8 for length
+func (t StringType) Alignment() int         { return 8 }  // Largest field is a pointer (8)
 
 // --- STRUCT ---
 // Structs are generally value types (allocated on the stack/inline) unless explicitly boxed.
@@ -57,12 +61,40 @@ func (t *StructType) GetFieldIndex(name string) int {
 	return -1
 }
 func (t *StructType) IsReferenceType() bool { return false }
+func (t *StructType) Alignment() int {
+	maxAlign := 1 // Default minimum alignment
+	for _, f := range t.Fields {
+		align := f.Type.Alignment()
+		if align > maxAlign {
+			maxAlign = align
+		}
+	}
+	return maxAlign
+}
+
 func (t *StructType) SizeInBytes() int {
 	size := 0
+	maxAlign := t.Alignment()
+
 	for _, f := range t.Fields {
+		align := f.Type.Alignment()
+
+		// 1. Calculate internal padding:
+		// If the current size isn't a multiple of this field's alignment, push it forward.
+		if size%align != 0 {
+			size += align - (size % align)
+		}
+
+		// 2. Add the actual field size
 		size += f.Type.SizeInBytes()
 	}
-	// Note: A real compiler would also calculate padding/alignment here!
+
+	// 3. Calculate trailing padding:
+	// The entire struct must be padded to a multiple of its largest alignment requirement.
+	if size%maxAlign != 0 {
+		size += maxAlign - (size % maxAlign)
+	}
+
 	return size
 }
 
@@ -90,6 +122,9 @@ func (t ArrayType) IsReferenceType() bool { return false }
 func (t ArrayType) SizeInBytes() int {
 	return t.Base.SizeInBytes() * t.Size
 }
+func (t ArrayType) Alignment() int {
+	return t.Base.Alignment()
+}
 
 // --- SLICE ---
 type SliceType struct {
@@ -104,10 +139,8 @@ func (t SliceType) Equals(other Type) bool {
 
 // Slices are dynamic, meaning they are just lightweight headers pointing to a heap array.
 func (t SliceType) IsReferenceType() bool { return true }
-func (t SliceType) SizeInBytes() int {
-	// e.g., 24 bytes: 8 for Pointer, 8 for Length, 8 for Capacity
-	return 24
-}
+func (t SliceType) SizeInBytes() int      { return 24 } // 8 + 8 + 4 + 4 = 24
+func (t SliceType) Alignment() int        { return 8 }  // Largest field is a pointer
 
 // --- FUNCTION ---
 type FunctionType struct {
@@ -138,6 +171,7 @@ func (t *FunctionType) Equals(other Type) bool {
 // Function variables are essentially function pointers.
 func (t *FunctionType) IsReferenceType() bool { return true }
 func (t *FunctionType) SizeInBytes() int      { return 8 } // Just a pointer
+func (t *FunctionType) Alignment() int        { return 8 }
 
 // --- UNKNOWN ---
 type UnknownType struct{}
@@ -146,3 +180,4 @@ func (t UnknownType) String() string         { return "unknown" }
 func (t UnknownType) Equals(other Type) bool { _, ok := other.(UnknownType); return ok }
 func (t UnknownType) IsReferenceType() bool  { return false }
 func (t UnknownType) SizeInBytes() int       { return 0 }
+func (t UnknownType) Alignment() int         { return 1 }

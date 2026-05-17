@@ -43,11 +43,20 @@ func (p *Program) String() string {
 type Param struct {
 	Name string
 	Type TypeExpr
+	Mut  bool
+	Own  bool
 	Pos_ Position
 }
 
-func (p *Param) String() string { return fmt.Sprintf("%s: %s", p.Name, p.Type.String()) }
-
+func (p *Param) String() string { 
+	prefix := ""
+	if p.Mut {
+		prefix = "mut "
+	} else if p.Own {
+		prefix = "own "
+	}
+	return fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String()) 
+}
 // FnDecl represents a function definition.
 type FnDecl struct {
 	Name       string

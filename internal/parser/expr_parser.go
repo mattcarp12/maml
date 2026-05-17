@@ -175,13 +175,56 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 		Pos_:     p.curPos(), // position of the '('
 	}
 
-	callExpr.Arguments = p.parseExpressionList(token.RPAREN)
+	callExpr.Arguments = p.parseCallArguments(token.RPAREN)
 
-	// parseExpressionList returns nil only when the closing token was
-	// missing entirely (not when the list is merely empty). In that case
-	// we still want to return a partial CallExpr so the caller has as much
-	// information as possible, but we signal the failure with the nil slice.
 	return callExpr
+}
+
+// Add this function to handle CallArgs specifically
+func (p *Parser) parseCallArguments(end token.TokenType) []ast.CallArg {
+	var args []ast.CallArg
+
+	// Empty list, e.g. `add()`
+	if p.peekToken.Type == end {
+		p.nextToken()
+		return args
+	}
+
+	// At least one element
+	p.nextToken()
+	args = append(args, p.parseCallArg())
+
+	for p.peekToken.Type == token.COMMA {
+		p.nextToken() // onto ','
+		p.nextToken() // onto start of next arg
+		args = append(args, p.parseCallArg())
+	}
+
+	if !p.expectPeek(end) {
+		return args
+	}
+
+	return args
+}
+
+// Add this function to parse individual arguments with mut/own logic
+func (p *Parser) parseCallArg() ast.CallArg {
+	arg := ast.CallArg{
+		Pos_: p.curPos(),
+	}
+
+	switch p.curToken.Type {
+	case token.MUT:
+		arg.Mut = true
+		p.nextToken()
+	case token.OWN:
+		arg.Own = true
+		p.nextToken()
+	}
+
+	// Parse the actual expression
+	arg.Argument = p.parseExpression(LOWEST)
+	return arg
 }
 
 // parseExpressionList reads a comma-separated list of expressions until it

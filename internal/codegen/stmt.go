@@ -7,7 +7,58 @@ import (
 	"github.com/mattcarp12/maml/internal/ast"
 )
 
-func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
+// compileBlockStmt is the main entry point for compiling blocks.
+// It returns the last yield value (used by IfExpr, etc.)
+func (c *Codegen) compileBlockStmt(n *ast.BlockStmt) (value.Value, error) {
+	c.pushEnv()
+	defer c.popEnv()
+	c.pushScope()
+	defer c.popScope()
+
+	var lastYield value.Value
+
+	for _, stmt := range n.Statements {
+		if err := c.visitStmt(stmt, &lastYield); err != nil {
+			return nil, err
+		}
+	}
+
+	return lastYield, nil
+}
+
+// visitStmt now accepts a pointer to lastYield so YieldStmt can update it
+func (c *Codegen) visitStmt(stmt ast.Stmt, lastYield *value.Value) error {
+	if stmt == nil {
+		return nil
+	}
+
+	switch s := stmt.(type) {
+	case *ast.DeclareStmt:
+		return c.visitDeclareStmt(s)
+	case *ast.AssignStmt:
+		return c.visitAssignStmt(s)
+	case *ast.ReturnStmt:
+		return c.visitReturnStmt(s)
+	case *ast.YieldStmt:
+		return c.visitYieldStmt(s, lastYield)
+	case *ast.ExprStmt:
+		return c.visitExprStmt(s)
+	case *ast.ForStmt:
+		return c.visitForStmt(s)
+	case *ast.BlockStmt:
+		// Nested block: compile it but ignore its yield (only top-level yields matter for IfExpr etc.)
+		_, err := c.compileBlockStmt(s)
+		return err
+	default:
+		return fmt.Errorf("unsupported statement type: %T", stmt)
+	}
+}
+
+// ===================================================================
+// Individual Visit Methods
+// ===================================================================
+
+func (c *Codegen) visitDeclareStmt(n *ast.DeclareStmt) error {
 	valCG, err := c.evaluateExpression(n.Value)
 	if err != nil {
 		return err
@@ -22,38 +73,8 @@ func (c *Codegen) compileDeclareStmt(n *ast.DeclareStmt) error {
 		c.setVar(n.Name, alloc)
 	}
 
-	// --- ARC RETAIN & TRACK ---
-	if isHeapManaged(valCG.Type) {
-		rawPtr := c.getRawHeapPointer(valCG) // Use our safe extractor!
-		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Retain], rawPtr)
-		c.trackForRelease(rawPtr) // Track the raw i8* pointer directly
-	}
-
-	return nil
-}
-
-func (c *Codegen) compileAssignStmt(n *ast.AssignStmt) error {
-	rvalCG, err := c.evaluateExpression(n.RValue)
-	if err != nil {
-		return err
-	}
-
-	rval := c.load(rvalCG)
-
-	lvalVal, err := c.evaluateExpression(n.LValue)
-	if err != nil {
-		return err
-	}
-
-	if !lvalVal.IsAddress {
-		return fmt.Errorf("left-hand side of assignment must be an addressable variable")
-	}
-
-	c.currentBlock.NewStore(rval, lvalVal.V)
-
-	// --- ARC RETAIN & TRACK ---
-	if isHeapManaged(rvalCG.Type) {
-		rawPtr := c.getRawHeapPointer(rvalCG) // Use our safe extractor!
+	if valCG.Type.IsReferenceType() {
+		rawPtr := c.getRawHeapPointer(valCG)
 		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Retain], rawPtr)
 		c.trackForRelease(rawPtr)
 	}
@@ -61,75 +82,68 @@ func (c *Codegen) compileAssignStmt(n *ast.AssignStmt) error {
 	return nil
 }
 
-func (c *Codegen) compileReturnStmt(n *ast.ReturnStmt) error {
+func (c *Codegen) visitAssignStmt(n *ast.AssignStmt) error {
+	rvalCG, err := c.evaluateExpression(n.RValue)
+	if err != nil {
+		return err
+	}
+
+	rval := c.load(rvalCG)
+
+	lvalCG, err := c.evaluateExpression(n.LValue)
+	if err != nil {
+		return err
+	}
+
+	if !lvalCG.IsAddress {
+		return fmt.Errorf("left-hand side of assignment must be an addressable variable")
+	}
+
+	c.currentBlock.NewStore(rval, lvalCG.V)
+
+	if rvalCG.Type.IsReferenceType() {
+		rawPtr := c.getRawHeapPointer(rvalCG)
+		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Retain], rawPtr)
+		c.trackForRelease(rawPtr)
+	}
+
+	return nil
+}
+
+func (c *Codegen) visitReturnStmt(n *ast.ReturnStmt) error {
 	valCG, err := c.evaluateExpression(n.Value)
 	if err != nil {
 		return err
 	}
 
-	c.currentBlock.NewRet(c.load(valCG)) // Load it before returning
+	c.currentBlock.NewRet(c.load(valCG))
 	return nil
 }
 
-func (c *Codegen) compileBlockStmt(n *ast.BlockStmt) (value.Value, error) {
-	c.pushEnv()
-	defer c.popEnv()
-	c.pushScope()
-	defer c.popScope()
-
-	var lastYield value.Value
-	for _, stmt := range n.Statements {
-		switch s := stmt.(type) {
-		case *ast.DeclareStmt:
-			if err := c.compileDeclareStmt(s); err != nil {
-				return nil, err
-			}
-		case *ast.ReturnStmt:
-			if err := c.compileReturnStmt(s); err != nil {
-				return nil, err
-			}
-		case *ast.YieldStmt:
-			valCG, err := c.evaluateExpression(s.Value)
-			if err != nil {
-				return nil, err
-			}
-			lastYield = c.load(valCG)
-		case *ast.ExprStmt:
-			if err := c.compileExprStmt(s); err != nil {
-				return nil, err
-			}
-		case *ast.AssignStmt:
-			if err := c.compileAssignStmt(s); err != nil {
-				return nil, err
-			}
-		case *ast.ForStmt:
-			if err := c.compileForStmt(s); err != nil {
-				return nil, err
-			}
-		default:
-			return nil, fmt.Errorf("unsupported statement type: %T", stmt)
-		}
+func (c *Codegen) visitYieldStmt(n *ast.YieldStmt, lastYield *value.Value) error {
+	valCG, err := c.evaluateExpression(n.Value)
+	if err != nil {
+		return err
 	}
-	return lastYield, nil
+	*lastYield = c.load(valCG) // Update the last yield value
+	return nil
 }
 
-func (c *Codegen) compileExprStmt(n *ast.ExprStmt) error {
+func (c *Codegen) visitExprStmt(n *ast.ExprStmt) error {
 	_, err := c.evaluateExpression(n.Value)
 	return err
 }
 
-func (c *Codegen) compileForStmt(s *ast.ForStmt) error {
-	// 1. Run Init (if it exists) in the current block
+func (c *Codegen) visitForStmt(s *ast.ForStmt) error {
+	// Init
 	if s.Init != nil {
-		// You'll need to call your statement dispatcher here
-		// e.g., c.compileDeclareStmt or c.compileAssignStmt
 		switch initStmt := s.Init.(type) {
 		case *ast.DeclareStmt:
-			if err := c.compileDeclareStmt(initStmt); err != nil {
+			if err := c.visitDeclareStmt(initStmt); err != nil {
 				return err
 			}
 		case *ast.AssignStmt:
-			if err := c.compileAssignStmt(initStmt); err != nil {
+			if err := c.visitAssignStmt(initStmt); err != nil {
 				return err
 			}
 		default:
@@ -137,16 +151,14 @@ func (c *Codegen) compileForStmt(s *ast.ForStmt) error {
 		}
 	}
 
-	// 2. Create the LLVM blocks
 	fn := c.currentBlock.Parent
 	condBlk := fn.NewBlock(c.newLabel("for_cond"))
 	bodyBlk := fn.NewBlock(c.newLabel("for_body"))
 	exitBlk := fn.NewBlock(c.newLabel("for_exit"))
 
-	// Jump into the condition block
 	c.currentBlock.NewBr(condBlk)
 
-	// --- 3. CONDITION BLOCK ---
+	// Condition
 	c.currentBlock = condBlk
 	if s.Condition != nil {
 		condCG, err := c.evaluateExpression(s.Condition)
@@ -155,22 +167,21 @@ func (c *Codegen) compileForStmt(s *ast.ForStmt) error {
 		}
 		c.currentBlock.NewCondBr(c.load(condCG), bodyBlk, exitBlk)
 	} else {
-		// Infinite loop: unconditionally jump to body
 		c.currentBlock.NewBr(bodyBlk)
 	}
 
-	// --- 4. BODY BLOCK ---
+	// Body
 	c.currentBlock = bodyBlk
 	_, err := c.compileBlockStmt(s.Body)
 	if err != nil {
 		return err
 	}
 
+	// Post
 	if s.Post != nil {
-		// Execute post statement (e.g., assignment)
 		switch postStmt := s.Post.(type) {
 		case *ast.AssignStmt:
-			if err := c.compileAssignStmt(postStmt); err != nil {
+			if err := c.visitAssignStmt(postStmt); err != nil {
 				return err
 			}
 		default:
@@ -178,10 +189,8 @@ func (c *Codegen) compileForStmt(s *ast.ForStmt) error {
 		}
 	}
 
-	// Jump BACK to the top of the loop!
 	c.currentBlock.NewBr(condBlk)
 
-	// --- 5. EXIT BLOCK ---
 	c.currentBlock = exitBlk
 	return nil
 }
