@@ -48,15 +48,18 @@ type Param struct {
 	Pos_ Position
 }
 
-func (p *Param) String() string { 
+func (p *Param) String() string {
 	prefix := ""
 	if p.Mut {
 		prefix = "mut "
 	} else if p.Own {
 		prefix = "own "
 	}
-	return fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String()) 
+	return fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String())
 }
+func (p *Param) Pos() Position { return p.Pos_ }
+func (p *Param) End() Position { return p.Type.End() }
+
 // FnDecl represents a function definition.
 type FnDecl struct {
 	Name       string

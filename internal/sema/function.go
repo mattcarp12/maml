@@ -13,8 +13,17 @@ func (a *Analyzer) registerFunctions(program *ast.Program) {
 
 func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	paramTypes := make([]Type, len(v.Params))
+	paramModes := make([]ParamMode, len(v.Params))
 	for i, p := range v.Params {
 		paramTypes[i] = a.resolveAstType(p.Type)
+		switch {
+		case p.Own:
+			paramModes[i] = ParamOwned
+		case p.Mut:
+			paramModes[i] = ParamMutBorrow
+		default:
+			paramModes[i] = ParamBorrow
+		}
 	}
 	retType := a.resolveAstType(v.ReturnType)
 
@@ -22,7 +31,7 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 		Kind:    FuncSymbol,
 		Name:    v.Name,
 		Mutable: false,
-		Type:    &FunctionType{Params: paramTypes, Return: retType},
+		Type:    &FunctionType{Params: paramTypes, ParamModes: paramModes, Return: retType},
 	}
 }
 
@@ -35,14 +44,29 @@ func (a *Analyzer) analyzeFunctionBodies(program *ast.Program) {
 }
 
 func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
-	// Bind parameters
 	for _, param := range v.Params {
 		pType := a.resolveAstType(param.Type)
+		var mode ParamMode
+		var mutable bool
+		switch {
+		case param.Own:
+			mode = ParamOwned
+			// Inside the function, an owned parameter is mutable —
+			// the callee has full ownership and may do anything with it.
+			mutable = true
+		case param.Mut:
+			mode = ParamMutBorrow
+			mutable = true
+		default:
+			mode = ParamBorrow
+			mutable = false
+		}
 		a.scope.symbols[param.Name] = &Symbol{
-			Kind:    VarSymbol,
-			Name:    param.Name,
-			Mutable: false,
-			Type:    pType,
+			Kind:      VarSymbol,
+			Name:      param.Name,
+			Mutable:   mutable,
+			Type:      pType,
+			ParamMode: mode,
 		}
 	}
 

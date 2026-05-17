@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/token"
@@ -73,28 +74,15 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 	// parseFnParams assumes curToken is '(' and will return with curToken on ')'
 	params := p.parseFnParams()
 	if params == nil && p.curToken.Type != token.RPAREN {
-		// parseFnParams already recorded an error; bail so ParseProgram
-		// can synchronise to the next declaration.
 		return nil
 	}
 
-	// // Parse the return type
-	// if !p.expectPeek(token.IDENT) {
-	// 	return nil
-	// }
-	// returnType := &ast.NamedType{
-	// 	Name: p.curToken.Literal,
-	// 	Pos_: p.curPos(),
-	// }
-
-	// allow for no return type (i.e., void) by making the return type optional
-	var returnType *ast.NamedType
-	if p.peekToken.Type == token.IDENT {
-		p.nextToken() // step onto the return type
-		returnType = &ast.NamedType{
-			Name: p.curToken.Literal,
-			Pos_: p.curPos(),
-		}
+	// REPLACED: allow for no return type, or use parseTypeExpr
+	// Since parseFnParams leaves us sitting on ')', we look ahead to see
+	// if the NEXT token starts a type.
+	var returnType ast.TypeExpr
+	if p.peekToken.Type == token.IDENT || p.peekToken.Type == token.LBRACKET {
+		returnType = p.parseTypeExpr()
 	}
 
 	if !p.expectPeek(token.LBRACE) {
@@ -150,7 +138,7 @@ func (p *Parser) parseParam() ast.Param {
 	if p.curToken.Type == token.MUT {
 		param.Mut = true
 		p.nextToken() // step off 'mut'
-	} else if p.curToken.Type == token.OWN { // Assuming token.OWN exists
+	} else if p.curToken.Type == token.OWN {
 		param.Own = true
 		p.nextToken() // step off 'own'
 	}
@@ -162,15 +150,8 @@ func (p *Parser) parseParam() ast.Param {
 	}
 	param.Name = p.curToken.Literal
 
-	// We expect the very next token to be the Type (e.g., 'int')
-	if !p.expectPeek(token.IDENT) {
-		return param // Return what we have; the parser will register the error
-	}
-
-	param.Type = &ast.NamedType{
-		Name: p.curToken.Literal,
-		Pos_: p.curPos(),
-	}
+	// REPLACED: Hand off to parseTypeExpr
+	param.Type = p.parseTypeExpr()
 
 	return param
 }
@@ -247,4 +228,47 @@ func (p *Parser) parseProductType() *ast.ProductType {
 	}
 
 	return pt
+}
+
+// parseTypeExpr parses a type signature (e.g., int, []int, [5]int)
+func (p *Parser) parseTypeExpr() ast.TypeExpr {
+	startPos := p.curPos()
+
+	// Case 1: Slice or Array types starting with '['
+	if p.peekToken.Type == token.LBRACKET {
+		p.nextToken() // Step onto '['
+
+		// Is it a slice? `[]T`
+		if p.peekToken.Type == token.RBRACKET {
+			p.nextToken()                 // Step onto ']'
+			baseType := p.parseTypeExpr() // Recursively parse the base type
+			return &ast.SliceType{Base: baseType, Pos_: startPos}
+		}
+
+		// Or is it a fixed-size array? `[5]T`
+		if !p.expectPeek(token.INT) {
+			return nil // expectPeek will automatically log an error
+		}
+
+		size, _ := strconv.ParseInt(p.curToken.Literal, 10, 64)
+
+		if !p.expectPeek(token.RBRACKET) {
+			return nil
+		}
+
+		baseType := p.parseTypeExpr() // Recursively parse the base type
+		return &ast.ArrayType{Size: size, Base: baseType, Pos_: startPos}
+	}
+
+	// Case 2: Standard Named Types like 'int', 'string', 'User'
+	if p.peekToken.Type == token.IDENT {
+		p.nextToken() // Step onto the identifier
+		return &ast.NamedType{
+			Name: p.curToken.Literal,
+			Pos_: startPos,
+		}
+	}
+
+	p.AddError(fmt.Sprintf("expected a type, got %s", p.peekToken.Type))
+	return nil
 }

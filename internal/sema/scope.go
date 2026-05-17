@@ -13,14 +13,14 @@ func newGlobalScope() *Scope {
 		types:   make(map[string]Type),
 	}
 
-	// Register built-ins
 	global.symbols["puts"] = &Symbol{
 		Kind:    FuncSymbol,
 		Name:    "puts",
 		Mutable: false,
 		Type: &FunctionType{
-			Params: []Type{StringType{}},
-			Return: IntType{},
+			Params:     []Type{StringType{}},
+			ParamModes: []ParamMode{ParamBorrow},
+			Return:     IntType{},
 		},
 	}
 
@@ -35,10 +35,16 @@ func (a *Analyzer) pushScope() {
 	}
 }
 
+// popScope drops the current scope and cleans up alias tracking for every
+// symbol that is going out of scope.
 func (a *Analyzer) popScope() {
-	if a.scope != nil && a.scope.parent != nil {
-		a.scope = a.scope.parent
+	if a.scope == nil || a.scope.parent == nil {
+		return
 	}
+	for name := range a.scope.symbols {
+		a.removeAlias(name)
+	}
+	a.scope = a.scope.parent
 }
 
 func (a *Analyzer) resolve(name string) *Symbol {

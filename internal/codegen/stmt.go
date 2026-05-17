@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 
+	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
 )
@@ -65,19 +66,16 @@ func (c *Codegen) visitDeclareStmt(n *ast.DeclareStmt) error {
 	}
 
 	if valCG.IsAddress {
-		c.setVar(n.Name, valCG.V)
+		c.setVar(n.Name, valCG.V, valCG.IsHeap)
 	} else {
 		llvmType := c.llvmTypeFor(valCG.Type)
 		alloc := c.currentBlock.NewAlloca(llvmType)
 		c.currentBlock.NewStore(valCG.V, alloc)
-		c.setVar(n.Name, alloc)
+		c.setVar(n.Name, alloc, valCG.IsHeap)
 	}
 
-	if valCG.Type.IsReferenceType() {
-		rawPtr := c.getRawHeapPointer(valCG)
-		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Retain], rawPtr)
-		c.trackForRelease(rawPtr)
-	}
+	// NEW: Only Retain and Track if it's ACTUALLY on the heap!
+	c.trackDeepForRelease(valCG)
 
 	return nil
 }
@@ -101,11 +99,7 @@ func (c *Codegen) visitAssignStmt(n *ast.AssignStmt) error {
 
 	c.currentBlock.NewStore(rval, lvalCG.V)
 
-	if rvalCG.Type.IsReferenceType() {
-		rawPtr := c.getRawHeapPointer(rvalCG)
-		c.currentBlock.NewCall(c.runtimeFuncs[Maml_Retain], rawPtr)
-		c.trackForRelease(rawPtr)
-	}
+	c.trackDeepForRelease(rvalCG)
 
 	return nil
 }
@@ -116,6 +110,24 @@ func (c *Codegen) visitReturnStmt(n *ast.ReturnStmt) error {
 		return err
 	}
 
+	// 1. The returned value escapes the current frame!
+	// Strip it and its inner fields out of the ARC tracker.
+	c.untrackDeepFromRelease(valCG)
+
+	// 2. Manual Scope Flush!
+	// Because this return could happen nested deeply inside if-blocks,
+	// we must clean up ALL active variables in the entire function frame right now.
+	for pageIdx := len(c.scopeStack) - 1; pageIdx >= 0; pageIdx-- {
+		page := c.scopeStack[pageIdx]
+		for i := len(page) - 1; i >= 0; i-- {
+			ptr := page[i]
+			rawPtr := c.currentBlock.NewBitCast(ptr, types.I8Ptr)
+			c.currentBlock.NewCall(c.runtimeFuncs[Maml_Release], rawPtr)
+		}
+	}
+
+	// 3. Terminate the block cleanly. (The deferred popScopes will see this
+	// terminator and gracefully back down).
 	c.currentBlock.NewRet(c.load(valCG))
 	return nil
 }

@@ -44,3 +44,26 @@ func (g *GenericType) String() string {
 	return fmt.Sprintf("%s[%s]", g.Name, strings.Join(params, ", "))
 }
 func (g *GenericType) typeNode() {}
+
+type SliceType struct {
+	Base TypeExpr
+	Pos_ Position
+}
+
+func (s *SliceType) Pos() Position  { return s.Pos_ }
+func (s *SliceType) End() Position  { return s.Base.End() }
+func (s *SliceType) String() string { return "[]" + s.Base.String() }
+func (s *SliceType) typeNode()      {}
+
+type ArrayType struct {
+	Size int64
+	Base TypeExpr
+	Pos_ Position
+}
+
+func (a *ArrayType) Pos() Position { return a.Pos_ }
+func (a *ArrayType) End() Position { return a.Base.End() }
+func (a *ArrayType) String() string {
+	return fmt.Sprintf("[%d]%s", a.Size, a.Base.String())
+}
+func (a *ArrayType) typeNode() {}

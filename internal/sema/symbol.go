@@ -20,7 +20,7 @@ type Symbol struct {
 type ParamMode int
 
 const (
-	ParamBorrow    ParamMode = iota // default: fn f(x T)
+	ParamBorrow    ParamMode = iota // fn f(x T)
 	ParamMutBorrow                  // fn f(mut x T)
 	ParamOwned                      // fn f(own x T)
 )

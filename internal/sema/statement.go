@@ -3,7 +3,6 @@ package sema
 
 import "github.com/mattcarp12/maml/internal/ast"
 
-// Returns true if the block guarantees a return on all paths
 func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
 	a.pushScope()
 	defer a.popScope()
@@ -11,24 +10,19 @@ func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
 	alwaysReturns := false
 	for i, stmt := range body.Statements {
 		if alwaysReturns {
-			// Any statement after a guaranteed return is unreachable
 			a.errorf(stmt.Pos(), "unreachable code after return statement")
-			// Still analyze it for other errors, but don't change alwaysReturns
 			a.analyzeStmt(stmt)
 			continue
 		}
 		if a.analyzeStmt(stmt) {
 			alwaysReturns = true
-			// Check if there are more statements after this one
 			if i < len(body.Statements)-1 {
-				// We'll catch them in the next iterations
 			}
 		}
 	}
 	return alwaysReturns
 }
 
-// Returns true if the statement guarantees a return on all paths
 func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 	switch s := stmt.(type) {
 	case *ast.DeclareStmt:
@@ -42,8 +36,7 @@ func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 		return false
 	case *ast.ExprStmt:
 		if ifExpr, ok := s.Value.(*ast.IfExpr); ok {
-			// Analyze types + return path
-			a.analyzeExpr(s.Value) // this calls analyzeIfExpr
+			a.analyzeExpr(s.Value)
 			return a.analyzeIfExprReturns(ifExpr)
 		}
 		a.analyzeExpr(s.Value)
@@ -60,6 +53,43 @@ func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
 		a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
 		return false
 	}
+
+	if s.Mutable {
+		if ident, ok := s.Value.(*ast.Identifier); ok {
+			src := a.resolve(ident.Value)
+			if src != nil {
+				if src.Invalidated {
+					a.errorf(s.Pos(), "use of moved variable '%s'", ident.Value)
+					return false
+				}
+				if !src.Mutable {
+					a.errorf(s.Pos(),
+						"cannot acquire mutable ownership of immutable variable '%s': use %s.clone()",
+						ident.Value, ident.Value)
+					return false
+				}
+				// Mutable acquisition is a move: source must have no active aliases.
+				if a.hasActiveAliases(ident.Value) {
+					a.errorf(s.Pos(),
+						"cannot acquire mutable ownership of '%s': it has active immutable aliases",
+						ident.Value)
+					return false
+				}
+				// Transfer ownership.
+				src.Invalidated = true
+				a.removeAlias(ident.Value)
+			}
+		}
+	} else {
+		// Immutable declaration: if the RHS is an identifier, record an alias.
+		if ident, ok := s.Value.(*ast.Identifier); ok {
+			src := a.resolve(ident.Value)
+			if src != nil && !src.Invalidated && !src.Mutable {
+				a.recordAlias(s.Name, ident.Value)
+			}
+		}
+	}
+
 	a.scope.symbols[s.Name] = &Symbol{
 		Kind:    VarSymbol,
 		Name:    s.Name,
@@ -78,30 +108,27 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 			rvalType.String(), lvalType.String())
 	}
 
-	// --- NEW MUTABILITY ENFORCEMENT ---
-
-	// RULE 1: The String Data Rule
-	// If the user is trying to index into a string (e.g., s[0] = 'a')
 	if indexExpr, ok := s.LValue.(*ast.IndexExpr); ok {
 		leftObjType := a.analyzeExpr(indexExpr.Left)
 		if leftObjType.Equals(StringType{}) {
 			a.errorf(s.Pos(), "strings are immutable and cannot be modified by index")
-			return false // Return early to prevent cascading errors
+			return false
 		}
 	}
 
-	// RULE 2: The General Mutability Rule
-	// Trace the left-hand side down to its root variable name
 	rootIdent := a.getRootIdentifier(s.LValue)
-
 	if rootIdent != nil {
-		// We found the base variable! Use your existing resolve logic.
 		sym := a.resolve(rootIdent.Value)
-		if sym != nil && !sym.Mutable {
-			a.errorf(s.Pos(), "cannot mutate immutable variable '%s'", rootIdent.Value)
+		if sym != nil {
+			if sym.Invalidated {
+				a.errorf(s.Pos(), "use of moved variable '%s'", rootIdent.Value)
+				return false
+			}
+			if !sym.Mutable {
+				a.errorf(s.Pos(), "cannot mutate immutable variable '%s'", rootIdent.Value)
+			}
 		}
 	} else {
-		// Optional: If rootIdent is nil, they might be trying to assign to a literal (e.g. `10 = 5`)
 		a.errorf(s.Pos(), "cannot assign to non-variable expression")
 	}
 
@@ -125,7 +152,6 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 		a.analyzeStmt(s.Init)
 	}
 
-	// Detect infinite loop: `for (true) { ... }`
 	isInfiniteLoop := false
 	if s.Condition != nil {
 		condType := a.analyzeExpr(s.Condition)
@@ -136,7 +162,6 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 			isInfiniteLoop = true
 		}
 	} else {
-		// No condition means unconditional loop (e.g., `for { ... }`)
 		isInfiniteLoop = true
 	}
 
@@ -146,8 +171,6 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 
 	bodyReturns := a.analyzeBlockStmt(s.Body)
 
-	// An infinite loop that always returns in its body guarantees a return
-	// (it either loops forever or returns — effectively guarantees return)
 	if isInfiniteLoop && bodyReturns {
 		return true
 	}
@@ -155,8 +178,6 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 	return false
 }
 
-// getRootIdentifier peels back index and slice expressions to find the base variable.
-// e.g., arr[0][1] -> returns the ast.Identifier for "arr"
 func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
 	switch e := expr.(type) {
 	case *ast.Identifier:
@@ -168,23 +189,16 @@ func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
 	case *ast.FieldAccess:
 		return a.getRootIdentifier(e.Object)
 	default:
-		return nil // It's not a variable (e.g., trying to assign to `5 = 10`)
+		return nil
 	}
 }
 
-// analyzeIfExprReturns determines if an IfExpr used as a statement
-// guarantees a return on all paths.
 func (a *Analyzer) analyzeIfExprReturns(e *ast.IfExpr) bool {
-	// We already analyzed the condition in analyzeIfExpr, but it's safe to re-analyze
 	a.analyzeExpr(e.Condition)
-
 	consequenceReturns := a.analyzeBlockStmt(e.Consequence)
-
 	if e.Alternative == nil {
-		return false // if without else cannot guarantee return
+		return false
 	}
-
 	alternativeReturns := a.analyzeBlockStmt(e.Alternative)
-
 	return consequenceReturns && alternativeReturns
 }

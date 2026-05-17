@@ -9,6 +9,7 @@ import (
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/escape"
 	"github.com/mattcarp12/maml/internal/sema"
 )
 
@@ -72,12 +73,12 @@ func (c *Codegen) visitBoolLiteral(e *ast.BoolLiteral) (CGValue, error) {
 }
 
 func (c *Codegen) visitIdentifier(e *ast.Identifier) (CGValue, error) {
-	alloc, exists := c.resolveVar(e.Value)
+	info, exists := c.resolveVar(e.Value)
 	if !exists {
 		return CGValue{}, fmt.Errorf("undefined variable: %s", e.Value)
 	}
 	semaType := c.typeMap[e]
-	return CGValue{V: alloc, Type: semaType, IsAddress: true}, nil
+	return CGValue{V: info.V, Type: semaType, IsAddress: true, IsHeap: info.IsHeap}, nil
 }
 
 func (c *Codegen) visitInfixExpr(e *ast.InfixExpr) (CGValue, error) {
@@ -112,6 +113,8 @@ func (c *Codegen) visitInfixExpr(e *ast.InfixExpr) (CGValue, error) {
 		res = c.currentBlock.NewMul(left, right)
 	case "/":
 		res = c.currentBlock.NewSDiv(left, right)
+	case "%":
+		res = c.currentBlock.NewSRem(left, right)
 	case "<":
 		res = c.currentBlock.NewICmp(enum.IPredSLT, left, right)
 	case ">":
@@ -289,6 +292,9 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 		return CGValue{}, fmt.Errorf("function %s not found in LLVM module", ident.Value)
 	}
 
+	// We need the function type to check parameter modes
+	fnType := c.typeMap[e.Function].(*sema.FunctionType)
+
 	var llvmArgs []value.Value
 	for i, arg := range e.Arguments {
 		argCG, err := c.evaluateExpression(arg.Argument)
@@ -304,17 +310,37 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 			}
 		}
 
+		// NEW: Ownership Transfer!
+		// If we are passing this argument as 'own' and it's currently on the heap,
+		// we must stop tracking it. The callee now owns the responsibility to release it.
+		// (We only check custom functions, ignore puts which is C-interop)
+		if ident.Value != "puts" && fnType.ParamModes[i] == sema.ParamOwned && argCG.IsHeap {
+			rawPtr := c.getRawHeapPointer(argCG)
+			c.untrackFromRelease(rawPtr)
+		}
+
 		llvmArgs = append(llvmArgs, val)
 	}
 
 	res := c.currentBlock.NewCall(targetFunc, llvmArgs...)
 	semaType := c.typeMap[e]
-	return CGValue{V: res, Type: semaType, IsAddress: false}, nil
+
+	// If the function returns a reference type OR a composite type
+	// (Struct/Array), we treat its internal data as heap-managed because it
+	// survived the callee's frame.
+	isHeap := false
+	if semaType != nil {
+		isHeap = semaType.IsReferenceType() || c.isCompositeType(semaType)
+	}
+
+	return CGValue{V: res, Type: semaType, IsAddress: false, IsHeap: isHeap}, nil
 }
 
 func (c *Codegen) visitStructLiteral(e *ast.StructLiteral) (CGValue, error) {
 	semaType := c.typeMap[e]
 	llvmType := c.llvmTypeFor(semaType)
+
+	// Structs are ALWAYS stack value types
 	structPtr := c.currentBlock.NewAlloca(llvmType)
 
 	for _, field := range e.Fields {
@@ -331,7 +357,7 @@ func (c *Codegen) visitStructLiteral(e *ast.StructLiteral) (CGValue, error) {
 		c.currentBlock.NewStore(val, fieldPtr)
 	}
 
-	return CGValue{V: structPtr, Type: semaType, IsAddress: true}, nil
+	return CGValue{V: structPtr, Type: semaType, IsAddress: true, IsHeap: false}, nil
 }
 
 func (c *Codegen) visitFieldAccess(e *ast.FieldAccess) (CGValue, error) {
@@ -361,6 +387,8 @@ func (c *Codegen) visitStringLiteral(e *ast.StringLiteral) (CGValue, error) {
 
 	semaType := c.typeMap[e]
 	strLLVMType := c.llvmTypeFor(semaType)
+
+	// String headers are ALWAYS stack allocated. Backing array is global.
 	structAlloc := c.currentBlock.NewAlloca(strLLVMType)
 
 	zero := constant.NewInt(types.I32, 0)
@@ -375,24 +403,28 @@ func (c *Codegen) visitStringLiteral(e *ast.StringLiteral) (CGValue, error) {
 	p1 := c.currentBlock.NewGetElementPtr(strLLVMType, structAlloc, zero, constant.NewInt(types.I32, 1))
 	c.currentBlock.NewStore(constant.NewInt(types.I32, int64(strLen)), p1)
 
-	return CGValue{V: structAlloc, Type: semaType, IsAddress: true}, nil
+	return CGValue{V: structAlloc, Type: semaType, IsAddress: true, IsHeap: false}, nil
 }
 
 func (c *Codegen) visitArrayLiteral(e *ast.ArrayLiteral) (CGValue, error) {
 	semaType := c.typeMap[e]
 	arrType := c.llvmTypeFor(semaType)
 
-	// 1. Ask the Semantic Analyzer exactly how many bytes this padded array needs!
-	sizeVal := constant.NewInt(types.I64, int64(semaType.SizeInBytes()))
+	isHeap := c.escapeMap[e] == escape.StateHeap
+	var arrayAlloc value.Value
 
-	// 2. Call our runtime allocator directly
-	rawHeapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_Alloc], sizeVal)
+	if isHeap {
+		// HEAP ALLOCATION
+		sizeVal := constant.NewInt(types.I64, int64(semaType.SizeInBytes()))
+		rawHeapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_Alloc], sizeVal)
+		arrayAlloc = c.currentBlock.NewBitCast(rawHeapPtr, types.NewPointer(arrType))
 
-	// 3. Bitcast the raw i8* back into our Array pointer type
-	arrayAlloc := c.currentBlock.NewBitCast(rawHeapPtr, types.NewPointer(arrType))
-
-	// 4. Track this pointer so it gets released when the scope ends
-	c.trackForRelease(rawHeapPtr)
+		// Note: We don't trackForRelease here directly for array literals;
+		// the DeclareStmt/AssignStmt will handle ARC tracking when bound to a variable.
+	} else {
+		// STACK ALLOCATION (The fast path!)
+		arrayAlloc = c.currentBlock.NewAlloca(arrType)
+	}
 
 	for i, elem := range e.Elements {
 		elemCG, err := c.evaluateExpression(elem)
@@ -407,7 +439,7 @@ func (c *Codegen) visitArrayLiteral(e *ast.ArrayLiteral) (CGValue, error) {
 		c.currentBlock.NewStore(elemVal, elemPtr)
 	}
 
-	return CGValue{V: arrayAlloc, Type: semaType, IsAddress: true}, nil
+	return CGValue{V: arrayAlloc, Type: semaType, IsAddress: true, IsHeap: isHeap}, nil
 }
 
 func (c *Codegen) visitIndexExpr(e *ast.IndexExpr) (CGValue, error) {
@@ -599,5 +631,5 @@ func (c *Codegen) visitSliceExpr(e *ast.SliceExpr) (CGValue, error) {
 	ptr3 := c.currentBlock.NewGetElementPtr(sliceLLVMType, sliceAlloc, zero, constant.NewInt(types.I32, 3))
 	c.currentBlock.NewStore(newCap, ptr3)
 
-	return CGValue{V: sliceAlloc, Type: semaType, IsAddress: true}, nil
+	return CGValue{V: sliceAlloc, Type: semaType, IsAddress: true, IsHeap: leftCG.IsHeap}, nil
 }

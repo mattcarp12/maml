@@ -61,6 +61,16 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 				a.errorf(t.Pos(), "unknown type %s", t.Name)
 			}
 		}
+
+	// NEW: Handle []T
+	case *ast.SliceType:
+		baseType := a.resolveAstType(t.Base)
+		resolvedType = SliceType{Base: baseType}
+
+	// NEW: Handle [N]T
+	case *ast.ArrayType:
+		baseType := a.resolveAstType(t.Base)
+		resolvedType = ArrayType{Base: baseType, Size: int(t.Size)}
 	}
 
 	a.TypeMap[expr] = resolvedType

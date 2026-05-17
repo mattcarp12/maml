@@ -219,3 +219,60 @@ func isNilDecl(d ast.Decl) bool {
 		return false
 	}
 }
+
+// parseList is a generic helper for parsing comma/newline separated lists.
+// It supports:
+//   - optional commas on multiline lists
+//   - required commas on single-line lists
+//   - trailing commas
+//   - good error recovery
+// func parseList[T any](
+// 	p *Parser,
+// 	parseItem func() T,
+// 	end token.TokenType,
+// ) []T {
+// 	var items []T
+
+// 	p.skipNewlines()
+
+// 	// Empty list: `()` or `{}`
+// 	if p.peekToken.Type == end {
+// 		p.nextToken()
+// 		return items
+// 	}
+
+// 	// Parse first item
+// 	p.nextToken()
+// 	if item := parseItem(); item != nil {
+// 		items = append(items, item)
+// 	}
+
+// 	for {
+// 		p.skipNewlines()
+
+// 		if p.peekToken.Type == end {
+// 			p.nextToken() // consume closing token
+// 			break
+// 		}
+
+// 		// Handle optional comma
+// 		if p.peekToken.Type == token.COMMA {
+// 			p.nextToken() // eat comma
+// 			p.skipNewlines()
+
+// 			// Trailing comma allowed
+// 			if p.peekToken.Type == end {
+// 				p.nextToken()
+// 				break
+// 			}
+// 		}
+
+// 		// Parse next item
+// 		p.nextToken()
+// 		if item := parseItem(); item != nil {
+// 			items = append(items, item)
+// 		}
+// 	}
+
+// 	return items
+// }

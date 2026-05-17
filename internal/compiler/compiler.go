@@ -9,6 +9,7 @@ import (
 	"github.com/llir/llvm/ir"
 	"github.com/mattcarp12/maml/internal/ast"
 	"github.com/mattcarp12/maml/internal/codegen"
+	"github.com/mattcarp12/maml/internal/escape"
 	"github.com/mattcarp12/maml/internal/lexer"
 	"github.com/mattcarp12/maml/internal/parser"
 	"github.com/mattcarp12/maml/internal/sema"
@@ -69,9 +70,13 @@ func (c *Compiler) Compile(src string) (*Result, error) {
 		return nil, errors.New(sb.String())
 	}
 
+	// 3. Escape Analysis
+	escapeAnalyzer := escape.New(typeMap)
+	escapeMap := escapeAnalyzer.Analyze(program)
+
 	// 3. Code Generation
 	cg := codegen.New()
-	if err := cg.Generate(program, typeMap); err != nil {
+	if err := cg.Generate(program, typeMap, escapeMap); err != nil {
 		return nil, fmt.Errorf("codegen error: %w", err)
 	}
 

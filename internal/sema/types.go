@@ -144,8 +144,9 @@ func (t SliceType) Alignment() int        { return 8 }  // Largest field is a po
 
 // --- FUNCTION ---
 type FunctionType struct {
-	Params []Type
-	Return Type
+	Params     []Type
+	ParamModes []ParamMode
+	Return     Type
 }
 
 func (t *FunctionType) String() string {

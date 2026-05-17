@@ -25,8 +25,7 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		t = a.analyzePrefixExpr(e)
 	case *ast.IfExpr:
 		t = a.analyzeIfExpr(e)
-		// Also analyze control flow for when used as statement
-		_ = a.analyzeIfExprReturns(e) // ignore return value here
+		_ = a.analyzeIfExprReturns(e)
 	case *ast.CallExpr:
 		t = a.analyzeCallExpr(e)
 	case *ast.StructLiteral:
@@ -48,10 +47,15 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 	return t
 }
 
+// analyzeIdentifier resolves the symbol and guards against use-after-move.
 func (a *Analyzer) analyzeIdentifier(e *ast.Identifier) Type {
 	sym := a.resolve(e.Value)
 	if sym == nil {
 		a.errorf(e.Pos(), "undefined name '%s'", e.Value)
+		return UnknownType{}
+	}
+	if sym.Invalidated {
+		a.errorf(e.Pos(), "use of moved variable '%s'", e.Value)
 		return UnknownType{}
 	}
 	return sym.Type
@@ -128,11 +132,12 @@ func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
 	}
 	last := block.Statements[len(block.Statements)-1]
 	if yield, ok := last.(*ast.YieldStmt); ok {
-		return a.TypeMap[yield.Value] // Note: assumes it was already analyzed
+		return a.TypeMap[yield.Value]
 	}
 	return UnknownType{}
 }
 
+// analyzeCallExpr type-checks a call and enforces ownership transfer for own arguments.
 func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 	fnTypeExpr := a.analyzeExpr(e.Function)
 	fnType, ok := fnTypeExpr.(*FunctionType)
@@ -153,10 +158,103 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 		argType := a.analyzeExpr(arg.Argument)
 		paramType := fnType.Params[i]
 		if !argType.Equals(paramType) && !argType.Equals(UnknownType{}) {
-			a.errorf(e.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
+			a.errorf(arg.Argument.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
 				i, paramType.String(), argType.String())
 		}
+
+		paramMode := fnType.ParamModes[i]
+
+		switch paramMode {
+		case ParamBorrow:
+			// Only plain pass allowed. mut and own are both illegal.
+			if arg.Mut {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter is an immutable borrow, remove 'mut' at call site", i)
+				continue
+			}
+			if arg.Own {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter is an immutable borrow, remove 'own' at call site", i)
+				continue
+			}
+			if ident, ok := arg.Argument.(*ast.Identifier); ok {
+				src := a.resolve(ident.Value)
+				if src != nil && src.Invalidated {
+					a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
+				}
+			}
+
+		case ParamMutBorrow:
+			// Only f(mut x) allowed, and source must be mutable.
+			if arg.Own {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter is a mutable borrow, use 'mut' not 'own' at call site", i)
+				continue
+			}
+			if !arg.Mut {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter is declared 'mut', call site must pass with 'mut'", i)
+				continue
+			}
+			ident, ok := arg.Argument.(*ast.Identifier)
+			if !ok {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: 'mut' can only be applied to a named variable", i)
+				continue
+			}
+			src := a.resolve(ident.Value)
+			if src == nil {
+				continue
+			}
+			if src.Invalidated {
+				a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
+				continue
+			}
+			if !src.Mutable {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: cannot mutably borrow immutable variable '%s'", i, ident.Value)
+				continue
+			}
+			// Mutable borrow: ownership stays with caller, no invalidation.
+
+		case ParamOwned:
+			// Only f(own x) allowed. Plain pass and mut are both illegal.
+			if arg.Mut {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter requires ownership transfer, use 'own' not 'mut' at call site", i)
+				continue
+			}
+			if !arg.Own {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: parameter is declared 'own', call site must pass with 'own'", i)
+				continue
+			}
+			ident, ok := arg.Argument.(*ast.Identifier)
+			if !ok {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: 'own' can only transfer ownership of a named variable", i)
+				continue
+			}
+			src := a.resolve(ident.Value)
+			if src == nil {
+				continue
+			}
+			if src.Invalidated {
+				a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
+				continue
+			}
+			// own requires unique ownership — shared immutable values cannot be transferred.
+			if a.hasActiveAliases(ident.Value) {
+				a.errorf(arg.Argument.Pos(),
+					"argument %d: cannot transfer ownership of '%s': value has active immutable aliases", i, ident.Value)
+				continue
+			}
+			// Source may be mutable or immutable — both may be transferred if unique.
+			src.Invalidated = true
+			a.removeAlias(ident.Value)
+		}
 	}
+
 	return fnType.Return
 }
 
@@ -172,7 +270,6 @@ func (a *Analyzer) analyzeStructLiteral(e *ast.StructLiteral) Type {
 		a.checkStructFieldLiteral(structDef, &f, seen)
 	}
 
-	// Check missing fields
 	if len(seen) < len(structDef.Fields) {
 		missing := a.getMissingFields(structDef, seen)
 		a.errorf(e.Pos(), "missing fields in struct literal: %s", strings.Join(missing, ", "))
@@ -273,7 +370,6 @@ func (a *Analyzer) analyzeIndexExpr(e *ast.IndexExpr) Type {
 
 	var baseType Type
 
-	// Use a type switch to support indexing into BOTH Arrays and Slices
 	switch t := leftType.(type) {
 	case ArrayType:
 		baseType = t.Base
@@ -302,7 +398,6 @@ func (a *Analyzer) analyzeSliceExpr(e *ast.SliceExpr) Type {
 
 	var baseType Type
 
-	// Use a type switch to safely unwrap the underlying type!
 	switch t := leftType.(type) {
 	case ArrayType:
 		baseType = t.Base

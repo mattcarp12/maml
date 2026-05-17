@@ -7,12 +7,18 @@ import (
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
 	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/escape"
 	"github.com/mattcarp12/maml/internal/sema"
 )
 
+type VarInfo struct {
+	V      value.Value
+	IsHeap bool
+}
+
 type Env struct {
 	parent *Env
-	vars   map[string]value.Value
+	vars   map[string]VarInfo
 }
 
 type Codegen struct {
@@ -20,6 +26,7 @@ type Codegen struct {
 	currentBlock *ir.Block
 	currentEnv   *Env
 	typeMap      map[ast.Node]sema.Type
+	escapeMap    map[ast.Node]escape.EscapeState
 	typeCache    map[string]types.Type
 	labelCounter int
 	runtimeFuncs map[RuntimeFunc]*ir.Func
@@ -30,12 +37,13 @@ type CGValue struct {
 	V         value.Value
 	Type      sema.Type
 	IsAddress bool
+	IsHeap    bool
 }
 
 func New() *Codegen {
 	c := &Codegen{
 		module:       ir.NewModule(),
-		currentEnv:   &Env{vars: make(map[string]value.Value)},
+		currentEnv:   &Env{vars: make(map[string]VarInfo)},
 		typeCache:    make(map[string]types.Type),
 		runtimeFuncs: make(map[RuntimeFunc]*ir.Func),
 		scopeStack:   make([][]value.Value, 0),
@@ -50,7 +58,7 @@ func (c *Codegen) Module() *ir.Module {
 }
 
 func (c *Codegen) pushEnv() {
-	c.currentEnv = &Env{parent: c.currentEnv, vars: make(map[string]value.Value)}
+	c.currentEnv = &Env{parent: c.currentEnv, vars: make(map[string]VarInfo)}
 }
 
 func (c *Codegen) popEnv() {
@@ -59,30 +67,34 @@ func (c *Codegen) popEnv() {
 	}
 }
 
-func (c *Codegen) resolveVar(name string) (value.Value, bool) {
+func (c *Codegen) resolveVar(name string) (VarInfo, bool) {
 	for e := c.currentEnv; e != nil; e = e.parent {
 		if val, ok := e.vars[name]; ok {
 			return val, true
 		}
 	}
-	return nil, false
+	return VarInfo{}, false
 }
 
-func (c *Codegen) setVar(name string, val value.Value) {
-	c.currentEnv.vars[name] = val
+func (c *Codegen) setVar(name string, val value.Value, isHeap bool) {
+	c.currentEnv.vars[name] = VarInfo{V: val, IsHeap: isHeap}
 }
 
 // Generate is the main entry point
-func (c *Codegen) Generate(node ast.Node, typeMap map[ast.Node]sema.Type) error {
+func (c *Codegen) Generate(node ast.Node, typeMap map[ast.Node]sema.Type, escapeMap map[ast.Node]escape.EscapeState) error {
 	if typeMap != nil {
 		c.typeMap = typeMap
+	}
+
+	if escapeMap != nil {
+		c.escapeMap = escapeMap
 	}
 
 	var err error
 	switch n := node.(type) {
 	case *ast.Program:
 		for _, decl := range n.Decls {
-			if err := c.Generate(decl, nil); err != nil {
+			if err := c.Generate(decl, nil, nil); err != nil {
 				return err
 			}
 		}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/llir/llvm/ir"
 	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/escape"
 )
 
 func (c *Codegen) compileFnDecl(n *ast.FnDecl) error {
@@ -34,7 +35,12 @@ func (c *Codegen) compileFnDecl(n *ast.FnDecl) error {
 	for i, p := range n.Params {
 		alloc := c.currentBlock.NewAlloca(fn.Params[i].Typ)
 		c.currentBlock.NewStore(fn.Params[i], alloc)
-		c.setVar(p.Name, alloc)
+
+		// NEW: Look up the heap status of this parameter from the escape analyzer
+		isHeap := c.escapeMap[&n.Params[i]] == escape.StateHeap
+
+		// Pass the isHeap flag to setVar!
+		c.setVar(p.Name, alloc, isHeap)
 	}
 
 	_, err := c.compileBlockStmt(n.Body)
