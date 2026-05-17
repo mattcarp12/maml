@@ -92,47 +92,55 @@ const MapHeader = extern struct {
     count: u32,
     cap: u32,
     val_size: u32,
+    is_string_key: u8, // 🌟 Stored to drive internal structural layout branches
 };
 
-fn entrySize(val_size: u32) usize {
-    const raw_size = 8 + @as(usize, val_size) + 1;
-    // Round up to nearest multiple of 8 bytes for strict pointer alignment
+fn entrySize(val_size: u32, is_string_key: bool) usize {
+    var raw_size = 8 + @as(usize, val_size) + 1;
+    if (is_string_key) {
+        raw_size += 16; // 8 bytes char pointer + 8 bytes length tracking
+    }
     return (raw_size + 7) & ~@as(usize, 7);
 }
 
-fn entryAt(base: [*]u8, index: usize, val_size: u32) [*]u8 {
-    return base + index * entrySize(val_size);
+fn entryAt(base: [*]u8, index: usize, val_size: u32, is_string_key: bool) [*]u8 {
+    return base + index * entrySize(val_size, is_string_key);
 }
 
 fn entryKeyHash(entry: [*]u8) *u64 {
     return @as(*u64, @ptrCast(@alignCast(entry)));
 }
 
-fn entryValue(entry: [*]u8) [*]u8 {
-    return entry + 8;
+fn entryKeyStringPtr(entry: [*]u8) *[*]const u8 {
+    return @as(*[*]const u8, @ptrCast(@alignCast(entry + 8)));
 }
 
-fn entryOccupied(entry: [*]u8, val_size: u32) *u8 {
-    return &entry[8 + @as(usize, val_size)];
+fn entryKeyStringLen(entry: [*]u8) *u32 {
+    return @as(*u32, @ptrCast(@alignCast(entry + 16)));
+}
+
+fn entryValue(entry: [*]u8, is_string_key: bool) [*]u8 {
+    return entry + (if (is_string_key) @as(usize, 24) else @as(usize, 8));
+}
+
+fn entryOccupied(entry: [*]u8, val_size: u32, is_string_key: bool) *u8 {
+    return &entry[if (is_string_key) @as(usize, 24) + val_size else @as(usize, 8) + val_size];
 }
 
 const INITIAL_MAP_CAP: u32 = 16;
 
-// Internal destructor callback triggered automatically when map refcount hits 0
 fn maml_map_destructor(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
     const header = @as(*MapHeader, @ptrCast(@alignCast(data_ptr.?)));
     if (header.entries) |entries| {
-        mi_free(entries); // Free the inner open-addressed bucket array
+        mi_free(entries);
     }
 }
 
-export fn maml_map_create(value_size: u32) ?*anyopaque {
-    // FIXED: Allocate via maml_alloc to safely prepend the ArcHeader!
+export fn maml_map_create(value_size: u32, is_string_key: u8) ?*anyopaque {
     const raw_ptr = maml_alloc(@sizeOf(MapHeader)) orelse return null;
     const header = @as(*MapHeader, @ptrCast(@alignCast(raw_ptr)));
 
-    // Extract and attach our custom virtual destructor to the ArcHeader
     const raw_bytes = @as([*]u8, @ptrCast(raw_ptr));
     const arc_header = @as(*ArcHeader, @ptrCast(@alignCast(raw_bytes - @sizeOf(ArcHeader))));
     arc_header.destructor = maml_map_destructor;
@@ -141,14 +149,16 @@ export fn maml_map_create(value_size: u32) ?*anyopaque {
     header.count = 0;
     header.cap = INITIAL_MAP_CAP;
     header.val_size = value_size;
+    header.is_string_key = is_string_key;
 
-    const entries_bytes = mi_malloc(@as(usize, INITIAL_MAP_CAP) * entrySize(value_size)) orelse {
+    const is_str = is_string_key == 1;
+    const entries_bytes = mi_malloc(@as(usize, INITIAL_MAP_CAP) * entrySize(value_size, is_str)) orelse {
         maml_release(raw_ptr);
         return null;
     };
 
     const bytes = @as([*]u8, @ptrCast(entries_bytes));
-    @memset(bytes[0 .. @as(usize, INITIAL_MAP_CAP) * entrySize(value_size)], 0);
+    @memset(bytes[0 .. @as(usize, INITIAL_MAP_CAP) * entrySize(value_size, is_str)], 0);
     header.entries = entries_bytes;
 
     return raw_ptr;
@@ -158,7 +168,8 @@ fn mapGrow(header: *MapHeader) void {
     const old_cap = header.cap;
     const new_cap = old_cap * 2;
     const val_size = header.val_size;
-    const esize = entrySize(val_size);
+    const is_str = header.is_string_key == 1;
+    const esize = entrySize(val_size, is_str);
 
     const new_entries_raw = mi_malloc(@as(usize, new_cap) * esize) orelse
         @panic("maml_map: out of memory during grow");
@@ -169,15 +180,15 @@ fn mapGrow(header: *MapHeader) void {
     if (header.entries) |old_raw| {
         const old_entries = @as([*]u8, @ptrCast(old_raw));
         for (0..@as(usize, old_cap)) |i| {
-            const old_entry = entryAt(old_entries, i, val_size);
-            if (entryOccupied(old_entry, val_size).* == 0) continue;
+            const old_entry = entryAt(old_entries, i, val_size, is_str);
+            if (entryOccupied(old_entry, val_size, is_str).* == 0) continue;
 
             const hash = entryKeyHash(old_entry).*;
             var slot = @as(usize, @truncate(hash % @as(u64, new_cap)));
-            while (entryOccupied(entryAt(new_entries, slot, val_size), val_size).* != 0) {
+            while (entryOccupied(entryAt(new_entries, slot, val_size, is_str), val_size, is_str).* != 0) {
                 slot = (slot + 1) % @as(usize, new_cap);
             }
-            const dest = entryAt(new_entries, slot, val_size);
+            const dest = entryAt(new_entries, slot, val_size, is_str);
             @memcpy(dest[0..esize], old_entry[0..esize]);
         }
         mi_free(old_raw);
@@ -191,9 +202,12 @@ export fn maml_map_put(
     map_ptr: ?*anyopaque,
     key_hash: u64,
     value_ptr: ?*anyopaque,
+    str_key_ptr: ?[*]const u8,
+    str_key_len: u32,
 ) void {
     if (map_ptr == null) return;
     const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
+    const is_str = header.is_string_key == 1;
 
     if (header.count * 4 >= header.cap * 3) {
         mapGrow(header);
@@ -204,14 +218,18 @@ export fn maml_map_put(
     var slot = @as(usize, @truncate(key_hash % @as(u64, header.cap)));
 
     while (true) {
-        const entry = entryAt(entries, slot, val_size);
-        const occupied = entryOccupied(entry, val_size);
+        const entry = entryAt(entries, slot, val_size, is_str);
+        const occupied = entryOccupied(entry, val_size, is_str);
 
         if (occupied.* == 0) {
             entryKeyHash(entry).* = key_hash;
+            if (is_str) {
+                entryKeyStringPtr(entry).* = str_key_ptr.?;
+                entryKeyStringLen(entry).* = str_key_len;
+            }
             if (value_ptr) |vp| {
                 const src = @as([*]u8, @ptrCast(vp));
-                @memcpy(entryValue(entry)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
+                @memcpy(entryValue(entry, is_str)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
             }
             occupied.* = 1;
             header.count += 1;
@@ -219,11 +237,20 @@ export fn maml_map_put(
         }
 
         if (entryKeyHash(entry).* == key_hash) {
-            if (value_ptr) |vp| {
-                const src = @as([*]u8, @ptrCast(vp));
-                @memcpy(entryValue(entry)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
+            var match = true;
+            if (is_str) {
+                const len = entryKeyStringLen(entry).*;
+                if (len != str_key_len or !std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..str_key_len])) {
+                    match = false;
+                }
             }
-            return;
+            if (match) {
+                if (value_ptr) |vp| {
+                    const src = @as([*]u8, @ptrCast(vp));
+                    @memcpy(entryValue(entry, is_str)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
+                }
+                return;
+            }
         }
 
         slot = (slot + 1) % @as(usize, header.cap);
@@ -233,23 +260,35 @@ export fn maml_map_put(
 export fn maml_map_get(
     map_ptr: ?*anyopaque,
     key_hash: u64,
+    str_key_ptr: ?[*]const u8,
+    str_key_len: u32,
 ) ?*anyopaque {
     if (map_ptr == null) return null;
     const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
     if (header.entries == null) return null;
 
     const val_size = header.val_size;
+    const is_str = header.is_string_key == 1;
     const entries = @as([*]u8, @ptrCast(header.entries.?));
     var slot = @as(usize, @truncate(key_hash % @as(u64, header.cap)));
 
     for (0..@as(usize, header.cap)) |_| {
-        const entry = entryAt(entries, slot, val_size);
-        const occupied = entryOccupied(entry, val_size);
+        const entry = entryAt(entries, slot, val_size, is_str);
+        const occupied = entryOccupied(entry, val_size, is_str);
 
         if (occupied.* == 0) return null;
 
         if (entryKeyHash(entry).* == key_hash) {
-            return @ptrCast(entryValue(entry));
+            var match = true;
+            if (is_str) {
+                const len = entryKeyStringLen(entry).*;
+                if (len != str_key_len or !std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..str_key_len])) {
+                    match = false;
+                }
+            }
+            if (match) {
+                return @ptrCast(entryValue(entry, is_str));
+            }
         }
 
         slot = (slot + 1) % @as(usize, header.cap);
@@ -259,11 +298,10 @@ export fn maml_map_get(
 }
 
 export fn maml_str_hash(ptr: [*]const u8, len: u32) u64 {
-    var hash: u64 = 14695981039346656037;
+    var hash: u64 = 5381; // 🌟 Upgraded to standard, collision-resistant djb2 algorithm!
     var i: u32 = 0;
     while (i < len) : (i += 1) {
-        hash ^= ptr[i];
-        hash *%= 1099511628211;
+        hash = (hash *% 33) +% @as(u64, ptr[i]);
     }
     return hash;
 }

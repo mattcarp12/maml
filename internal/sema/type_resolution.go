@@ -89,6 +89,16 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 			}
 			key := a.resolveAstType(t.Params[0])
 			val := a.resolveAstType(t.Params[1])
+
+			// FIXED: Strict scalar hashability enforcement
+			switch key.(type) {
+			case IntType, StringType, BoolType:
+				// Allowed scalar keys
+			default:
+				a.errorf(t.Pos(), "map key type '%s' is not hashable; only int, string, and bool are permitted", key.String())
+				return UnknownType{}
+			}
+
 			resolvedType = MapType{Key: key, Value: val}
 
 		case "Option":

@@ -297,13 +297,16 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 			p3 := c.currentBlock.NewGetElementPtr(llvmType, containerAlloc, zero, constant.NewInt(types.I32, 3))
 			c.currentBlock.NewStore(zero, p3)
 		} else if _, isMap := semaType.(sema.MapType); isMap {
-			// Maps are opaque 8-byte pointer handles to Zig maps.
-			// We call maml_map_create(value_size) to initialize it!
 			valSize := constant.NewInt(types.I32, int64(semaType.(sema.MapType).Value.SizeInBytes()))
-			runtimeMapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapCreate], valSize)
-			c.currentBlock.NewStore(runtimeMapPtr, containerAlloc)
 
-			// Track the map pointer for Escape Analysis / ARC tracking!
+			// Check if the map key type is a string
+			isStrKey := constant.NewInt(types.I8, 0)
+			if _, isStr := semaType.(sema.MapType).Key.(sema.StringType); isStr {
+				isStrKey = constant.NewInt(types.I8, 1)
+			}
+
+			runtimeMapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapCreate], valSize, isStrKey)
+			c.currentBlock.NewStore(runtimeMapPtr, containerAlloc)
 			c.trackForRelease(runtimeMapPtr, true)
 		}
 
@@ -753,18 +756,19 @@ func (c *Codegen) generateVectorPush(vecCG CGValue, vecTy sema.VectorType, argEx
 
 func (c *Codegen) generateMapPut(mapCG CGValue, mapTy sema.MapType, keyExpr, valExpr ast.Expr) (CGValue, error) {
 	mapPtr := c.load(mapCG)
-
 	keyCG, _ := c.evaluateExpression(keyExpr)
 	keyVal := c.load(keyCG)
+
 	var keyHash value.Value
+	var strPtr value.Value = constant.NewNull(types.I8Ptr)
+	var strLen value.Value = constant.NewInt(types.I32, 0)
 
 	if _, isStr := keyCG.Type.(sema.StringType); isStr {
-		// 🌟 FIXED: Extract string header fields and call the real hash function!
-		strPtr := c.currentBlock.NewExtractValue(keyVal, 0)
-		strLen := c.currentBlock.NewExtractValue(keyVal, 1)
+		strPtr = c.currentBlock.NewExtractValue(keyVal, 0)
+		strLen = c.currentBlock.NewExtractValue(keyVal, 1)
 		keyHash = c.currentBlock.NewCall(c.runtimeFuncs[Maml_StrHash], strPtr, strLen)
 	} else {
-		keyHash = c.currentBlock.NewZExt(keyVal, types.I64) // Int identity hash
+		keyHash = c.currentBlock.NewZExt(keyVal, types.I64)
 	}
 
 	valCG, _ := c.evaluateExpression(valExpr)
@@ -773,26 +777,30 @@ func (c *Codegen) generateMapPut(mapCG CGValue, mapTy sema.MapType, keyExpr, val
 	c.currentBlock.NewStore(valVal, valAlloc)
 	valRawPtr := c.currentBlock.NewBitCast(valAlloc, types.I8Ptr)
 
-	c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapPut], mapPtr, keyHash, valRawPtr)
+	// Forward string attributes securely
+	c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapPut], mapPtr, keyHash, valRawPtr, strPtr, strLen)
 	return CGValue{}, nil
 }
 
 func (c *Codegen) generateMapGet(mapCG CGValue, mapTy sema.MapType, keyExpr ast.Expr) (CGValue, error) {
 	mapPtr := c.load(mapCG)
-
 	keyCG, _ := c.evaluateExpression(keyExpr)
 	keyVal := c.load(keyCG)
+
 	var keyHash value.Value
+	var strPtr value.Value = constant.NewNull(types.I8Ptr)
+	var strLen value.Value = constant.NewInt(types.I32, 0)
 
 	if _, isStr := keyCG.Type.(sema.StringType); isStr {
-		strPtr := c.currentBlock.NewExtractValue(keyVal, 0)
-		strLen := c.currentBlock.NewExtractValue(keyVal, 1)
+		strPtr = c.currentBlock.NewExtractValue(keyVal, 0)
+		strLen = c.currentBlock.NewExtractValue(keyVal, 1)
 		keyHash = c.currentBlock.NewCall(c.runtimeFuncs[Maml_StrHash], strPtr, strLen)
 	} else {
 		keyHash = c.currentBlock.NewZExt(keyVal, types.I64)
 	}
 
-	rawPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapGet], mapPtr, keyHash)
+	// Forward string attributes securely
+	rawPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapGet], mapPtr, keyHash, strPtr, strLen)
 	typedValPtr := c.currentBlock.NewBitCast(rawPtr, types.NewPointer(c.llvmTypeFor(mapTy.Value)))
 
 	return CGValue{V: typedValPtr, Type: mapTy.Value, IsAddress: true}, nil

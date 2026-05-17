@@ -63,10 +63,12 @@ func (c *Codegen) setupRuntimeFuncs() {
 		ir.NewParam("item_size", types.I32),
 	)
 
+	// Inside setupRuntimeFuncs():
 	c.runtimeFuncs[Maml_MapCreate] = c.module.NewFunc(
 		"maml_map_create",
 		types.I8Ptr,
 		ir.NewParam("value_size", types.I32),
+		ir.NewParam("is_string_key", types.I8),
 	)
 
 	c.runtimeFuncs[Maml_MapPut] = c.module.NewFunc(
@@ -75,6 +77,8 @@ func (c *Codegen) setupRuntimeFuncs() {
 		ir.NewParam("map_ptr", types.I8Ptr),
 		ir.NewParam("key_hash", types.I64),
 		ir.NewParam("value_ptr", types.I8Ptr),
+		ir.NewParam("str_key_ptr", types.I8Ptr),
+		ir.NewParam("str_key_len", types.I32),
 	)
 
 	c.runtimeFuncs[Maml_MapGet] = c.module.NewFunc(
@@ -82,6 +86,8 @@ func (c *Codegen) setupRuntimeFuncs() {
 		types.I8Ptr,
 		ir.NewParam("map_ptr", types.I8Ptr),
 		ir.NewParam("key_hash", types.I64),
+		ir.NewParam("str_key_ptr", types.I8Ptr),
+		ir.NewParam("str_key_len", types.I32),
 	)
 
 	c.runtimeFuncs[Maml_StrHash] = c.module.NewFunc(

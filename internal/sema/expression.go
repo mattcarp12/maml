@@ -168,25 +168,28 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 	for i, arg := range e.Arguments {
 		actualType := a.analyzeExpr(arg.Argument)
 		expectedType := fnType.Params[i]
+		paramMode := fnType.ParamModes[i] // Ensure we look up param mode first!
 
-		// NEW: Implicit Coercion Guard
-		if sliceTy, isSlice := expectedType.(SliceType); isSlice {
-			// Coerce from Array: [N]T -> []T
-			if arrTy, isArr := actualType.(ArrayType); isArr && arrTy.Base.Equals(sliceTy.Base) {
-				actualType = expectedType // Coercion valid!
+		// Check if coercion is applicable
+		isCoercible := false
+		if _, isSlice := expectedType.(SliceType); isSlice {
+			if arrTy, isArr := actualType.(ArrayType); isArr && arrTy.Base.Equals(expectedType.(SliceType).Base) {
+				isCoercible = true
 			}
-			// Coerce from Vector: Vec<T> -> []T
-			if vecTy, isVec := actualType.(VectorType); isVec && vecTy.Base.Equals(sliceTy.Base) {
-				actualType = expectedType // Coercion valid!
+			if vecTy, isVec := actualType.(VectorType); isVec && vecTy.Base.Equals(expectedType.(SliceType).Base) {
+				// Safety Check: Slices are non-owning views. You cannot transfer ownership of a view!
+				if paramMode == ParamOwned {
+					a.errorf(arg.Argument.Pos(), "cannot pass owning Vec<T> as owned slice type []T; use a borrowed or mutable view")
+				}
+				isCoercible = true
 			}
 		}
 
-		if !actualType.Equals(expectedType) && !actualType.Equals(UnknownType{}) {
+		// Validate equality using the coercion condition
+		if !isCoercible && !actualType.Equals(expectedType) && !actualType.Equals(UnknownType{}) {
 			a.errorf(arg.Argument.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
 				i, expectedType.String(), actualType.String())
 		}
-
-		paramMode := fnType.ParamModes[i]
 
 		switch paramMode {
 		case ParamBorrow:
