@@ -1,57 +1,269 @@
 const std = @import("std");
 
 extern "C" fn mi_malloc(size: usize) ?*anyopaque;
+extern "C" fn mi_realloc(p: ?*anyopaque, size: usize) ?*anyopaque;
 extern "C" fn mi_free(p: ?*anyopaque) void;
 
-// 1. Define our hidden header
+// -----------------------------------------------------------------------------
+// ARC Header
+// -----------------------------------------------------------------------------
+
 const ArcHeader = struct {
     count: usize,
+    // Optional virtual destructor hook for complex reference types
+    destructor: ?*const fn (?*anyopaque) void,
 };
 
-// 2. The upgraded Allocator
 export fn maml_alloc(size: usize) ?*anyopaque {
-    // Ask mimalloc for enough room for the header AND the data
     const total_size = @sizeOf(ArcHeader) + size;
     const raw_ptr = mi_malloc(total_size) orelse return null;
 
-    // Cast the raw memory to our Header struct and initialize the count to 1
     var header = @as(*ArcHeader, @ptrCast(@alignCast(raw_ptr)));
     header.count = 1;
+    header.destructor = null; // Default to no custom destructor
 
-    // Calculate the pointer to the ACTUAL data (skip past the 8-byte header)
     const raw_bytes = @as([*]u8, @ptrCast(raw_ptr));
-    const data_ptr = raw_bytes + @sizeOf(ArcHeader);
-
-    return @ptrCast(data_ptr);
+    return @ptrCast(raw_bytes + @sizeOf(ArcHeader));
 }
 
-// 3. The Retain function (Called when a variable is copied/assigned)
 export fn maml_retain(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
-
-    // Step BACKWARDS in memory to find the hidden header
     const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
-    const header_ptr = raw_bytes - @sizeOf(ArcHeader);
-    
-    var header = @as(*ArcHeader, @ptrCast(@alignCast(header_ptr)));
-    header.count += 1; // Increment the reference count!
+    const header = @as(*ArcHeader, @ptrCast(@alignCast(raw_bytes - @sizeOf(ArcHeader))));
+    header.count += 1;
 }
 
-// 4. The Release function (Called when a variable goes out of scope)
 export fn maml_release(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
-
-    // Step BACKWARDS in memory to find the hidden header
     const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
     const header_ptr = raw_bytes - @sizeOf(ArcHeader);
-    
-    var header = @as(*ArcHeader, @ptrCast(@alignCast(header_ptr)));
-    
-    // Decrement the count
+    const header = @as(*ArcHeader, @ptrCast(@alignCast(header_ptr)));
     header.count -= 1;
-    
-    // If nobody is looking at this memory anymore, nuke it!
     if (header.count == 0) {
+        // If a custom destructor is attached (like for maps), run it first!
+        if (header.destructor) |dtor| {
+            dtor(data_ptr);
+        }
         mi_free(@ptrCast(header_ptr));
     }
+}
+
+export fn maml_free(data_ptr: ?*anyopaque) void {
+    if (data_ptr == null) return;
+    const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
+    mi_free(@ptrCast(raw_bytes - @sizeOf(ArcHeader)));
+}
+
+// -----------------------------------------------------------------------------
+// Vec runtime
+// -----------------------------------------------------------------------------
+
+export fn maml_vec_grow(
+    raw_ptr: ?*anyopaque,
+    len: u32,
+    cap_ptr: *u32,
+    item_size: u32,
+) ?*anyopaque {
+    _ = len;
+
+    const old_cap = cap_ptr.*;
+    const new_cap: u32 = if (old_cap == 0) 8 else old_cap * 2;
+    const new_size = @as(usize, new_cap) * @as(usize, item_size);
+
+    const new_raw = if (raw_ptr == null)
+        mi_malloc(new_size)
+    else
+        mi_realloc(raw_ptr, new_size);
+
+    if (new_raw == null) {
+        @panic("maml_vec_grow: out of memory");
+    }
+
+    cap_ptr.* = new_cap;
+    return new_raw;
+}
+
+// -----------------------------------------------------------------------------
+// Map runtime
+// -----------------------------------------------------------------------------
+
+const MapHeader = extern struct {
+    entries: ?*anyopaque,
+    count: u32,
+    cap: u32,
+    val_size: u32,
+};
+
+fn entrySize(val_size: u32) usize {
+    const raw_size = 8 + @as(usize, val_size) + 1;
+    // Round up to nearest multiple of 8 bytes for strict pointer alignment
+    return (raw_size + 7) & ~@as(usize, 7);
+}
+
+fn entryAt(base: [*]u8, index: usize, val_size: u32) [*]u8 {
+    return base + index * entrySize(val_size);
+}
+
+fn entryKeyHash(entry: [*]u8) *u64 {
+    return @as(*u64, @ptrCast(@alignCast(entry)));
+}
+
+fn entryValue(entry: [*]u8) [*]u8 {
+    return entry + 8;
+}
+
+fn entryOccupied(entry: [*]u8, val_size: u32) *u8 {
+    return &entry[8 + @as(usize, val_size)];
+}
+
+const INITIAL_MAP_CAP: u32 = 16;
+
+// Internal destructor callback triggered automatically when map refcount hits 0
+fn maml_map_destructor(data_ptr: ?*anyopaque) void {
+    if (data_ptr == null) return;
+    const header = @as(*MapHeader, @ptrCast(@alignCast(data_ptr.?)));
+    if (header.entries) |entries| {
+        mi_free(entries); // Free the inner open-addressed bucket array
+    }
+}
+
+export fn maml_map_create(value_size: u32) ?*anyopaque {
+    // FIXED: Allocate via maml_alloc to safely prepend the ArcHeader!
+    const raw_ptr = maml_alloc(@sizeOf(MapHeader)) orelse return null;
+    const header = @as(*MapHeader, @ptrCast(@alignCast(raw_ptr)));
+
+    // Extract and attach our custom virtual destructor to the ArcHeader
+    const raw_bytes = @as([*]u8, @ptrCast(raw_ptr));
+    const arc_header = @as(*ArcHeader, @ptrCast(@alignCast(raw_bytes - @sizeOf(ArcHeader))));
+    arc_header.destructor = maml_map_destructor;
+
+    header.entries = null;
+    header.count = 0;
+    header.cap = INITIAL_MAP_CAP;
+    header.val_size = value_size;
+
+    const entries_bytes = mi_malloc(@as(usize, INITIAL_MAP_CAP) * entrySize(value_size)) orelse {
+        maml_release(raw_ptr);
+        return null;
+    };
+
+    const bytes = @as([*]u8, @ptrCast(entries_bytes));
+    @memset(bytes[0 .. @as(usize, INITIAL_MAP_CAP) * entrySize(value_size)], 0);
+    header.entries = entries_bytes;
+
+    return raw_ptr;
+}
+
+fn mapGrow(header: *MapHeader) void {
+    const old_cap = header.cap;
+    const new_cap = old_cap * 2;
+    const val_size = header.val_size;
+    const esize = entrySize(val_size);
+
+    const new_entries_raw = mi_malloc(@as(usize, new_cap) * esize) orelse
+        @panic("maml_map: out of memory during grow");
+
+    const new_entries = @as([*]u8, @ptrCast(new_entries_raw));
+    @memset(new_entries[0 .. @as(usize, new_cap) * esize], 0);
+
+    if (header.entries) |old_raw| {
+        const old_entries = @as([*]u8, @ptrCast(old_raw));
+        for (0..@as(usize, old_cap)) |i| {
+            const old_entry = entryAt(old_entries, i, val_size);
+            if (entryOccupied(old_entry, val_size).* == 0) continue;
+
+            const hash = entryKeyHash(old_entry).*;
+            var slot = @as(usize, @truncate(hash % @as(u64, new_cap)));
+            while (entryOccupied(entryAt(new_entries, slot, val_size), val_size).* != 0) {
+                slot = (slot + 1) % @as(usize, new_cap);
+            }
+            const dest = entryAt(new_entries, slot, val_size);
+            @memcpy(dest[0..esize], old_entry[0..esize]);
+        }
+        mi_free(old_raw);
+    }
+
+    header.entries = new_entries_raw;
+    header.cap = new_cap;
+}
+
+export fn maml_map_put(
+    map_ptr: ?*anyopaque,
+    key_hash: u64,
+    value_ptr: ?*anyopaque,
+) void {
+    if (map_ptr == null) return;
+    const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
+
+    if (header.count * 4 >= header.cap * 3) {
+        mapGrow(header);
+    }
+
+    const val_size = header.val_size;
+    const entries = @as([*]u8, @ptrCast(header.entries.?));
+    var slot = @as(usize, @truncate(key_hash % @as(u64, header.cap)));
+
+    while (true) {
+        const entry = entryAt(entries, slot, val_size);
+        const occupied = entryOccupied(entry, val_size);
+
+        if (occupied.* == 0) {
+            entryKeyHash(entry).* = key_hash;
+            if (value_ptr) |vp| {
+                const src = @as([*]u8, @ptrCast(vp));
+                @memcpy(entryValue(entry)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
+            }
+            occupied.* = 1;
+            header.count += 1;
+            return;
+        }
+
+        if (entryKeyHash(entry).* == key_hash) {
+            if (value_ptr) |vp| {
+                const src = @as([*]u8, @ptrCast(vp));
+                @memcpy(entryValue(entry)[0..@as(usize, val_size)], src[0..@as(usize, val_size)]);
+            }
+            return;
+        }
+
+        slot = (slot + 1) % @as(usize, header.cap);
+    }
+}
+
+export fn maml_map_get(
+    map_ptr: ?*anyopaque,
+    key_hash: u64,
+) ?*anyopaque {
+    if (map_ptr == null) return null;
+    const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
+    if (header.entries == null) return null;
+
+    const val_size = header.val_size;
+    const entries = @as([*]u8, @ptrCast(header.entries.?));
+    var slot = @as(usize, @truncate(key_hash % @as(u64, header.cap)));
+
+    for (0..@as(usize, header.cap)) |_| {
+        const entry = entryAt(entries, slot, val_size);
+        const occupied = entryOccupied(entry, val_size);
+
+        if (occupied.* == 0) return null;
+
+        if (entryKeyHash(entry).* == key_hash) {
+            return @ptrCast(entryValue(entry));
+        }
+
+        slot = (slot + 1) % @as(usize, header.cap);
+    }
+
+    return null;
+}
+
+export fn maml_str_hash(ptr: [*]const u8, len: u32) u64 {
+    var hash: u64 = 14695981039346656037;
+    var i: u32 = 0;
+    while (i < len) : (i += 1) {
+        hash ^= ptr[i];
+        hash *%= 1099511628211;
+    }
+    return hash;
 }

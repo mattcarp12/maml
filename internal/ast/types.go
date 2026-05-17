@@ -44,6 +44,7 @@ func (g *GenericType) String() string {
 	return fmt.Sprintf("%s[%s]", g.Name, strings.Join(params, ", "))
 }
 func (g *GenericType) typeNode() {}
+func (g *GenericType) exprNode() {}
 
 type SliceType struct {
 	Base TypeExpr

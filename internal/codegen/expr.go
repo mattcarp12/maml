@@ -271,6 +271,71 @@ func (c *Codegen) visitIfExpr(e *ast.IfExpr) (CGValue, error) {
 }
 
 func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
+	// NEW: Check for container constructors
+	if genType, isGen := e.Function.(*ast.GenericType); isGen {
+		semaType := c.typeMap[genType]
+		llvmType := c.llvmTypeFor(semaType)
+
+		// 1. Allocate space on the stack for the header structure
+		containerAlloc := c.currentBlock.NewAlloca(llvmType)
+
+		// 2. Zero-initialize the memory block cleanly
+		zero := constant.NewInt(types.I32, 0)
+		nullPtr := constant.NewNull(types.I8Ptr)
+
+		if _, isVec := semaType.(sema.VectorType); isVec {
+			// Vec structural offsets: { raw_ptr, data_ptr, len, cap }
+			p0 := c.currentBlock.NewGetElementPtr(llvmType, containerAlloc, zero, zero)
+			c.currentBlock.NewStore(nullPtr, p0)
+
+			p1 := c.currentBlock.NewGetElementPtr(llvmType, containerAlloc, zero, constant.NewInt(types.I32, 1))
+			c.currentBlock.NewStore(constant.NewNull(types.NewPointer(c.llvmTypeFor(semaType.(sema.VectorType).Base))), p1)
+
+			p2 := c.currentBlock.NewGetElementPtr(llvmType, containerAlloc, zero, constant.NewInt(types.I32, 2))
+			c.currentBlock.NewStore(zero, p2)
+
+			p3 := c.currentBlock.NewGetElementPtr(llvmType, containerAlloc, zero, constant.NewInt(types.I32, 3))
+			c.currentBlock.NewStore(zero, p3)
+		} else if _, isMap := semaType.(sema.MapType); isMap {
+			// Maps are opaque 8-byte pointer handles to Zig maps.
+			// We call maml_map_create(value_size) to initialize it!
+			valSize := constant.NewInt(types.I32, int64(semaType.(sema.MapType).Value.SizeInBytes()))
+			runtimeMapPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapCreate], valSize)
+			c.currentBlock.NewStore(runtimeMapPtr, containerAlloc)
+
+			// Track the map pointer for Escape Analysis / ARC tracking!
+			c.trackForRelease(runtimeMapPtr, true)
+		}
+
+		return CGValue{V: containerAlloc, Type: semaType, IsAddress: true, IsHeap: false}, nil
+	}
+
+	// NEW: Intercept methods called on containers
+	if fieldAccess, ok := e.Function.(*ast.FieldAccess); ok {
+		objCG, _ := c.evaluateExpression(fieldAccess.Object)
+		methodName := fieldAccess.Field.Value
+
+		if vecTy, isVec := objCG.Type.(sema.VectorType); isVec {
+			switch methodName {
+			case "push":
+				return c.generateVectorPush(objCG, vecTy, e.Arguments[0].Argument)
+			case "len":
+				// Extracts index 2 directly from the vector's header value!
+				vecVal := c.load(objCG)
+				length := c.currentBlock.NewExtractValue(vecVal, 2)
+				return CGValue{V: length, Type: sema.IntType{}, IsAddress: false}, nil
+			}
+		}
+		if mapTy, isMap := objCG.Type.(sema.MapType); isMap {
+			switch methodName {
+			case "put":
+				return c.generateMapPut(objCG, mapTy, e.Arguments[0].Argument, e.Arguments[1].Argument)
+			case "get":
+				return c.generateMapGet(objCG, mapTy, e.Arguments[0].Argument)
+			}
+		}
+	}
+
 	ident, isIdent := e.Function.(*ast.Identifier)
 	if !isIdent {
 		return CGValue{}, fmt.Errorf("unsupported function call: only direct calls to identifiers are supported")
@@ -632,4 +697,103 @@ func (c *Codegen) visitSliceExpr(e *ast.SliceExpr) (CGValue, error) {
 	c.currentBlock.NewStore(newCap, ptr3)
 
 	return CGValue{V: sliceAlloc, Type: semaType, IsAddress: true, IsHeap: leftCG.IsHeap}, nil
+}
+
+func (c *Codegen) generateVectorPush(vecCG CGValue, vecTy sema.VectorType, argExpr ast.Expr) (CGValue, error) {
+	llvmType := c.llvmTypeFor(vecTy)
+	baseType := c.llvmTypeFor(vecTy.Base)
+
+	zero := constant.NewInt(types.I32, 0)
+	lenPtr := c.currentBlock.NewGetElementPtr(llvmType, vecCG.V, zero, constant.NewInt(types.I32, 2))
+	capPtr := c.currentBlock.NewGetElementPtr(llvmType, vecCG.V, zero, constant.NewInt(types.I32, 3))
+
+	currentLen := c.currentBlock.NewLoad(types.I32, lenPtr)
+	currentCap := c.currentBlock.NewLoad(types.I32, capPtr)
+
+	fn := c.currentBlock.Parent
+	growBlk := fn.NewBlock(c.newLabel("vec_grow"))
+	insertBlk := fn.NewBlock(c.newLabel("vec_insert"))
+
+	isFull := c.currentBlock.NewICmp(enum.IPredEQ, currentLen, currentCap)
+	c.currentBlock.NewCondBr(isFull, growBlk, insertBlk)
+
+	// --- GROW BLOCK ---
+	c.currentBlock = growBlk
+	rawPtrPtr := c.currentBlock.NewGetElementPtr(llvmType, vecCG.V, zero, zero)
+	currentRawPtr := c.currentBlock.NewLoad(types.I8Ptr, rawPtrPtr)
+	itemSize := constant.NewInt(types.I32, int64(vecTy.Base.SizeInBytes()))
+
+	// FIXED: We pass capPtr directly (which is an LLVM pointer to i32) instead of currentCap!
+	newRawPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_VecGrow], currentRawPtr, currentLen, capPtr, itemSize)
+
+	typedDataPtr := c.currentBlock.NewBitCast(newRawPtr, types.NewPointer(baseType))
+
+	c.currentBlock.NewStore(newRawPtr, rawPtrPtr)
+	dataPtrPtr := c.currentBlock.NewGetElementPtr(llvmType, vecCG.V, zero, constant.NewInt(types.I32, 1))
+	c.currentBlock.NewStore(typedDataPtr, dataPtrPtr)
+	c.currentBlock.NewBr(insertBlk)
+
+	// --- INSERT BLOCK ---
+	c.currentBlock = insertBlk
+	freshDataPtrPtr := c.currentBlock.NewGetElementPtr(llvmType, vecCG.V, zero, constant.NewInt(types.I32, 1))
+	freshDataPtr := c.currentBlock.NewLoad(types.NewPointer(baseType), freshDataPtrPtr)
+	freshLen := c.currentBlock.NewLoad(types.I32, lenPtr)
+
+	itemCG, _ := c.evaluateExpression(argExpr)
+	itemVal := c.load(itemCG)
+
+	targetElemPtr := c.currentBlock.NewGetElementPtr(baseType, freshDataPtr, freshLen)
+	c.currentBlock.NewStore(itemVal, targetElemPtr)
+
+	newLen := c.currentBlock.NewAdd(freshLen, constant.NewInt(types.I32, 1))
+	c.currentBlock.NewStore(newLen, lenPtr)
+
+	return CGValue{}, nil
+}
+
+func (c *Codegen) generateMapPut(mapCG CGValue, mapTy sema.MapType, keyExpr, valExpr ast.Expr) (CGValue, error) {
+	mapPtr := c.load(mapCG)
+
+	keyCG, _ := c.evaluateExpression(keyExpr)
+	keyVal := c.load(keyCG)
+	var keyHash value.Value
+
+	if _, isStr := keyCG.Type.(sema.StringType); isStr {
+		// 🌟 FIXED: Extract string header fields and call the real hash function!
+		strPtr := c.currentBlock.NewExtractValue(keyVal, 0)
+		strLen := c.currentBlock.NewExtractValue(keyVal, 1)
+		keyHash = c.currentBlock.NewCall(c.runtimeFuncs[Maml_StrHash], strPtr, strLen)
+	} else {
+		keyHash = c.currentBlock.NewZExt(keyVal, types.I64) // Int identity hash
+	}
+
+	valCG, _ := c.evaluateExpression(valExpr)
+	valVal := c.load(valCG)
+	valAlloc := c.currentBlock.NewAlloca(c.llvmTypeFor(valCG.Type))
+	c.currentBlock.NewStore(valVal, valAlloc)
+	valRawPtr := c.currentBlock.NewBitCast(valAlloc, types.I8Ptr)
+
+	c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapPut], mapPtr, keyHash, valRawPtr)
+	return CGValue{}, nil
+}
+
+func (c *Codegen) generateMapGet(mapCG CGValue, mapTy sema.MapType, keyExpr ast.Expr) (CGValue, error) {
+	mapPtr := c.load(mapCG)
+
+	keyCG, _ := c.evaluateExpression(keyExpr)
+	keyVal := c.load(keyCG)
+	var keyHash value.Value
+
+	if _, isStr := keyCG.Type.(sema.StringType); isStr {
+		strPtr := c.currentBlock.NewExtractValue(keyVal, 0)
+		strLen := c.currentBlock.NewExtractValue(keyVal, 1)
+		keyHash = c.currentBlock.NewCall(c.runtimeFuncs[Maml_StrHash], strPtr, strLen)
+	} else {
+		keyHash = c.currentBlock.NewZExt(keyVal, types.I64)
+	}
+
+	rawPtr := c.currentBlock.NewCall(c.runtimeFuncs[Maml_MapGet], mapPtr, keyHash)
+	typedValPtr := c.currentBlock.NewBitCast(rawPtr, types.NewPointer(c.llvmTypeFor(mapTy.Value)))
+
+	return CGValue{V: typedValPtr, Type: mapTy.Value, IsAddress: true}, nil
 }

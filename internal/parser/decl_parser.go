@@ -263,8 +263,36 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 	// Case 2: Standard Named Types like 'int', 'string', 'User'
 	if p.peekToken.Type == token.IDENT {
 		p.nextToken() // Step onto the identifier
+		name := p.curToken.Literal
+
+		// NEW: If followed by '<', it's a compiler-known generic type!
+		if p.peekToken.Type == token.LT {
+			p.nextToken() // Step onto '<'
+
+			var params []ast.TypeExpr
+			// Parse first type argument
+			params = append(params, p.parseTypeExpr())
+
+			// Parse subsequent comma-separated arguments (e.g., Result<T, E>)
+			for p.peekToken.Type == token.COMMA {
+				p.nextToken() // Step onto ','
+				params = append(params, p.parseTypeExpr())
+			}
+
+			if !p.expectPeek(token.GT) { // Expect '>'
+				return nil
+			}
+
+			return &ast.GenericType{
+				Name:   name,
+				Params: params,
+				Pos_:   startPos,
+			}
+		}
+
+		// Standard named type (int, string, etc.)
 		return &ast.NamedType{
-			Name: p.curToken.Literal,
+			Name: name,
 			Pos_: startPos,
 		}
 	}

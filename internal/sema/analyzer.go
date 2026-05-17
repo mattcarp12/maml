@@ -25,12 +25,12 @@ func New() *Analyzer {
 	globalScope := newGlobalScope()
 
 	return &Analyzer{
-		scope:         globalScope,
-		errors:        []ast.CompileError{},
-		TypeMap:       make(map[ast.Node]Type),
+		scope:          globalScope,
+		errors:         []ast.CompileError{},
+		TypeMap:        make(map[ast.Node]Type),
 		expectedReturn: nil,
-		aliasMap:      make(map[string]string),
-		aliasRefCount: make(map[string]int),
+		aliasMap:       make(map[string]string),
+		aliasRefCount:  make(map[string]int),
 	}
 }
 
@@ -99,4 +99,10 @@ func (a *Analyzer) removeAlias(name string) {
 func (a *Analyzer) hasActiveAliases(name string) bool {
 	canon := a.canonicalName(name)
 	return a.aliasRefCount[canon] > 1
+}
+
+// Inside your global scope setup:
+func (a *Analyzer) injectCompilerKnownGlobals() {
+	// Let 'Some' be a pseudo-generic constructor function that gets type-inferred at call sites
+
 }

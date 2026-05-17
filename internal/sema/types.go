@@ -142,6 +142,75 @@ func (t SliceType) IsReferenceType() bool { return true }
 func (t SliceType) SizeInBytes() int      { return 24 } // 8 + 8 + 4 + 4 = 24
 func (t SliceType) Alignment() int        { return 8 }  // Largest field is a pointer
 
+// --- VECTOR ---
+type VectorType struct {
+	Base Type
+}
+
+func (t VectorType) String() string { return "Vec<" + t.Base.String() + ">" }
+func (t VectorType) Equals(other Type) bool {
+	o, ok := other.(VectorType)
+	return ok && t.Base.Equals(o.Base)
+}
+func (t VectorType) IsReferenceType() bool { return true } // Owning container
+func (t VectorType) SizeInBytes() int      { return 24 }   // ptr (8) + ptr (8) + len (4) + cap (4)
+func (t VectorType) Alignment() int        { return 8 }
+
+// --- MAP ---
+type MapType struct {
+	Key   Type
+	Value Type
+}
+
+func (t MapType) String() string {
+	return fmt.Sprintf("Map<%s, %s>", t.Key.String(), t.Value.String())
+}
+func (t MapType) Equals(other Type) bool {
+	o, ok := other.(MapType)
+	return ok && t.Key.Equals(o.Key) && t.Value.Equals(o.Value)
+}
+func (t MapType) IsReferenceType() bool { return true } // Maps are typically heap-allocated
+func (t MapType) SizeInBytes() int      { return 24 }   // ptr (8) + len (4) + cap (4) + padding (8)
+func (t MapType) Alignment() int        { return 8 }
+
+// --- OPTION ---
+type OptionType struct {
+	Base Type
+}
+
+func (t OptionType) String() string { return "Option<" + t.Base.String() + ">" }
+func (t OptionType) Equals(other Type) bool {
+	o, ok := other.(OptionType)
+	return ok && t.Base.Equals(o.Base)
+}
+func (t OptionType) IsReferenceType() bool { return t.Base.IsReferenceType() }
+func (t OptionType) SizeInBytes() int      { return t.Base.SizeInBytes() + 4 } // Data + discriminant tag
+func (t OptionType) Alignment() int        { return t.Base.Alignment() }
+
+// --- RESULT ---
+type ResultType struct {
+	Value Type
+	Error Type
+}
+
+func (t ResultType) String() string {
+	return "Result<" + t.Value.String() + "," + t.Error.String() + ">"
+}
+func (t ResultType) Equals(other Type) bool {
+	o, ok := other.(ResultType)
+	return ok && t.Value.Equals(o.Value) && t.Error.Equals(o.Error)
+}
+func (t ResultType) IsReferenceType() bool { return true }
+func (t ResultType) SizeInBytes() int {
+	// Max of value or error size + 4 byte discriminant tag
+	size := t.Value.SizeInBytes()
+	if t.Error.SizeInBytes() > size {
+		size = t.Error.SizeInBytes()
+	}
+	return size + 4
+}
+func (t ResultType) Alignment() int { return 8 }
+
 // --- FUNCTION ---
 type FunctionType struct {
 	Params     []Type

@@ -139,6 +139,17 @@ func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
 
 // analyzeCallExpr type-checks a call and enforces ownership transfer for own arguments.
 func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
+	// NEW: Check if we are invoking a constructor on a generic type symbol
+	if genType, isGen := e.Function.(*ast.GenericType); isGen {
+		resolvedType := a.resolveAstType(genType)
+
+		// Ensure constructors are called with 0 arguments for bootstrapping
+		if len(e.Arguments) != 0 {
+			a.errorf(e.Pos(), "container constructor expects 0 arguments")
+		}
+		return resolvedType
+	}
+
 	fnTypeExpr := a.analyzeExpr(e.Function)
 	fnType, ok := fnTypeExpr.(*FunctionType)
 	if !ok {
@@ -155,11 +166,24 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 	}
 
 	for i, arg := range e.Arguments {
-		argType := a.analyzeExpr(arg.Argument)
-		paramType := fnType.Params[i]
-		if !argType.Equals(paramType) && !argType.Equals(UnknownType{}) {
+		actualType := a.analyzeExpr(arg.Argument)
+		expectedType := fnType.Params[i]
+
+		// NEW: Implicit Coercion Guard
+		if sliceTy, isSlice := expectedType.(SliceType); isSlice {
+			// Coerce from Array: [N]T -> []T
+			if arrTy, isArr := actualType.(ArrayType); isArr && arrTy.Base.Equals(sliceTy.Base) {
+				actualType = expectedType // Coercion valid!
+			}
+			// Coerce from Vector: Vec<T> -> []T
+			if vecTy, isVec := actualType.(VectorType); isVec && vecTy.Base.Equals(sliceTy.Base) {
+				actualType = expectedType // Coercion valid!
+			}
+		}
+
+		if !actualType.Equals(expectedType) && !actualType.Equals(UnknownType{}) {
 			a.errorf(arg.Argument.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
-				i, paramType.String(), argType.String())
+				i, expectedType.String(), actualType.String())
 		}
 
 		paramMode := fnType.ParamModes[i]
@@ -324,6 +348,48 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 	objType := a.analyzeExpr(e.Object)
 	if objType.Equals(UnknownType{}) {
 		return UnknownType{}
+	}
+
+	// Intercept built-in methods on compiler-known Vector types
+	if vecTy, isVec := objType.(VectorType); isVec {
+		switch e.Field.Value {
+		case "push":
+			return &FunctionType{
+				Params:     []Type{vecTy.Base},
+				ParamModes: make([]ParamMode, 1), // Allocates default modes matching arg count
+				Return:     UnknownType{},        // Treat as a void expression
+			}
+		case "len":
+			return &FunctionType{
+				Params:     []Type{},
+				ParamModes: make([]ParamMode, 0),
+				Return:     IntType{},
+			}
+		default:
+			a.errorf(e.Field.Pos(), "unknown method '%s' on type '%s'", e.Field.Value, objType.String())
+			return UnknownType{}
+		}
+	}
+
+	// Intercept built-in methods on compiler-known Map types
+	if mapTy, isMap := objType.(MapType); isMap {
+		switch e.Field.Value {
+		case "put":
+			return &FunctionType{
+				Params:     []Type{mapTy.Key, mapTy.Value},
+				ParamModes: make([]ParamMode, 2),
+				Return:     UnknownType{},
+			}
+		case "get":
+			return &FunctionType{
+				Params:     []Type{mapTy.Key},
+				ParamModes: make([]ParamMode, 1),
+				Return:     mapTy.Value, // Returns the typed Value description dynamically!
+			}
+		default:
+			a.errorf(e.Field.Pos(), "unknown method '%s' on type '%s'", e.Field.Value, objType.String())
+			return UnknownType{}
+		}
 	}
 
 	st, ok := objType.(*StructType)

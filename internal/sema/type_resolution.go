@@ -71,6 +71,46 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 	case *ast.ArrayType:
 		baseType := a.resolveAstType(t.Base)
 		resolvedType = ArrayType{Base: baseType, Size: int(t.Size)}
+
+	case *ast.GenericType:
+		switch t.Name {
+		case "Vec":
+			if len(t.Params) != 1 {
+				a.errorf(t.Pos(), "Vec expects exactly 1 type argument, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			base := a.resolveAstType(t.Params[0])
+			resolvedType = VectorType{Base: base}
+
+		case "Map":
+			if len(t.Params) != 2 {
+				a.errorf(t.Pos(), "Map expects exactly 2 type arguments, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			key := a.resolveAstType(t.Params[0])
+			val := a.resolveAstType(t.Params[1])
+			resolvedType = MapType{Key: key, Value: val}
+
+		case "Option":
+			if len(t.Params) != 1 {
+				a.errorf(t.Pos(), "Option expects exactly 1 type argument, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			base := a.resolveAstType(t.Params[0])
+			resolvedType = OptionType{Base: base}
+
+		case "Result":
+			if len(t.Params) != 2 {
+				a.errorf(t.Pos(), "Result expects exactly 2 type arguments, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			val := a.resolveAstType(t.Params[0])
+			errTy := a.resolveAstType(t.Params[1])
+			resolvedType = ResultType{Value: val, Error: errTy}
+
+		default:
+			a.errorf(t.Pos(), "unknown generic type symbol %s", t.Name)
+		}
 	}
 
 	a.TypeMap[expr] = resolvedType

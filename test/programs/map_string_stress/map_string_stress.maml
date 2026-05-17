@@ -1,0 +1,9 @@
+fn main() int {
+    m := Map<string, int>()
+    
+    m.put("hello", 50)
+    m.put("world", 60)
+    
+    // Verifies FNV-1a hashing avoids collision strings of identical lengths
+    return m.get("hello") + m.get("world")
+}

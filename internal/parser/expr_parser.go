@@ -43,10 +43,36 @@ func (p *Parser) parseExpression(precedence int) ast.Expr {
 }
 
 func (p *Parser) parseIdentifier() ast.Expr {
-	return &ast.Identifier{
-		Value: p.curToken.Literal,
-		Pos_:  p.curPos(),
+	name := p.curToken.Literal
+	startPos := p.curPos()
+
+	// NEW: Intercept compiler-known generic types inside expressions!
+	if (name == "Vec" || name == "Map" || name == "Option" || name == "Result") && p.peekToken.Type == token.LT {
+		p.nextToken() // Step onto '<'
+
+		var params []ast.TypeExpr
+		// Reuse your existing type expression parser loops
+		params = append(params, p.parseTypeExpr())
+
+		for p.peekToken.Type == token.COMMA {
+			p.nextToken() // Step onto ','
+			params = append(params, p.parseTypeExpr())
+		}
+
+		if !p.expectPeek(token.GT) { // Expect '>'
+			return nil
+		}
+
+		// Because we added exprNode() above, returning this as an ast.Expr is fully legal!
+		return &ast.GenericType{
+			Name:   name,
+			Params: params,
+			Pos_:   startPos,
+		}
 	}
+
+	// Standard fallback for normal variables/identifiers
+	return &ast.Identifier{Value: name, Pos_: startPos}
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expr {

@@ -36,6 +36,28 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 	case sema.SliceType:
 		baseLLVM := c.llvmTypeFor(v.Base)
 		result = types.NewStruct(types.I8Ptr, types.NewPointer(baseLLVM), types.I32, types.I32)
+	case sema.VectorType:
+		// Vec<T> shares the exact same layout as a SliceType under the hood:
+		// { i8* raw_heap_ptr, T* data_ptr, i32 len, i32 cap }
+		baseLLVM := c.llvmTypeFor(v.Base)
+		result = types.NewStruct(types.I8Ptr, types.NewPointer(baseLLVM), types.I32, types.I32)
+
+	case sema.MapType:
+		// Map<K,V> is represented as a pointer to a runtime-managed hash table struct.
+		// The actual layout of the hash table is opaque to us; we just treat it as an i8*.
+		result = types.I8Ptr
+
+	case sema.OptionType:
+		// Represented as a tagged union struct: { T value, i32 discriminant }
+		baseLLVM := c.llvmTypeFor(v.Base)
+		result = types.NewStruct(baseLLVM, types.I32)
+
+	case sema.ResultType:
+		// Represented as a tagged union padding layout or sequential pairing for bootstrap:
+		// { val_type, err_type, i32 discriminant }
+		valLLVM := c.llvmTypeFor(v.Value)
+		errLLVM := c.llvmTypeFor(v.Error)
+		result = types.NewStruct(valLLVM, errLLVM, types.I32)
 	default:
 		result = types.I32
 	}
@@ -109,12 +131,22 @@ func (c *Codegen) getRawHeapPointer(valCG CGValue) value.Value {
 			// extract the pointer at index 0 directly from the value!
 			return c.currentBlock.NewExtractValue(valCG.V, 0)
 		}
-		
+
 		// If it's an addressable pointer, use GEP and Load
 		zero := constant.NewInt(types.I32, 0)
 		structType := c.llvmTypeFor(t)
 		field0Ptr := c.currentBlock.NewGetElementPtr(structType, valCG.V, zero, zero)
 		return c.currentBlock.NewLoad(types.I8Ptr, field0Ptr)
+
+	case sema.MapType:
+		// If it's passed by address (stored in a local variable), load the pointer value.
+		// If it's a direct R-Value (like a function return), return it directly.
+		return c.load(valCG)
+
+	case sema.VectorType:
+		// Vec<T> shares the exact same layout as a SliceType under the hood:
+		// { i8* raw_heap_ptr, T* data_ptr, i32 len, i32 cap }
+		return c.load(valCG)
 
 	default:
 		return constant.NewNull(types.I8Ptr)

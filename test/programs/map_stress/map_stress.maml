@@ -1,0 +1,10 @@
+fn main() int {
+    m := Map<int, int>()
+    
+    m.put(42, 100)
+    m.put(7, 150)
+    m.put(42, 100) // Tests hash overwriting (updates 100 to 100)
+    
+    // 100 + 150 = 250 (Safely fits under 256!)
+    return m.get(42) + m.get(7)
+}

@@ -12,6 +12,11 @@ const (
 	Maml_Free
 	Maml_Retain
 	Maml_Release
+	Maml_VecGrow
+	Maml_MapCreate
+	Maml_MapGet
+	Maml_MapPut
+	Maml_StrHash
 )
 
 func (c *Codegen) setupRuntimeFuncs() {
@@ -47,5 +52,42 @@ func (c *Codegen) setupRuntimeFuncs() {
 		"maml_release",
 		types.Void,
 		ir.NewParam("ptr", types.I8Ptr),
+	)
+
+	c.runtimeFuncs[Maml_VecGrow] = c.module.NewFunc(
+		"maml_vec_grow",
+		types.I8Ptr,
+		ir.NewParam("raw_ptr", types.I8Ptr),
+		ir.NewParam("len", types.I32),
+		ir.NewParam("cap_ptr", types.NewPointer(types.I32)),
+		ir.NewParam("item_size", types.I32),
+	)
+
+	c.runtimeFuncs[Maml_MapCreate] = c.module.NewFunc(
+		"maml_map_create",
+		types.I8Ptr,
+		ir.NewParam("value_size", types.I32),
+	)
+
+	c.runtimeFuncs[Maml_MapPut] = c.module.NewFunc(
+		"maml_map_put",
+		types.Void,
+		ir.NewParam("map_ptr", types.I8Ptr),
+		ir.NewParam("key_hash", types.I64),
+		ir.NewParam("value_ptr", types.I8Ptr),
+	)
+
+	c.runtimeFuncs[Maml_MapGet] = c.module.NewFunc(
+		"maml_map_get",
+		types.I8Ptr,
+		ir.NewParam("map_ptr", types.I8Ptr),
+		ir.NewParam("key_hash", types.I64),
+	)
+
+	c.runtimeFuncs[Maml_StrHash] = c.module.NewFunc(
+		"maml_str_hash",
+		types.I64,
+		ir.NewParam("ptr", types.I8Ptr),
+		ir.NewParam("len", types.I32),
 	)
 }
