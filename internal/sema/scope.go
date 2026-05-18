@@ -1,4 +1,3 @@
-// sema/scope.go
 package sema
 
 type Scope struct {
@@ -35,14 +34,9 @@ func (a *Analyzer) pushScope() {
 	}
 }
 
-// popScope drops the current scope and cleans up alias tracking for every
-// symbol that is going out of scope.
 func (a *Analyzer) popScope() {
 	if a.scope == nil || a.scope.parent == nil {
 		return
-	}
-	for name := range a.scope.symbols {
-		a.removeAlias(name)
 	}
 	a.scope = a.scope.parent
 }

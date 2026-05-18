@@ -1,4 +1,3 @@
-// sema/statement.go
 package sema
 
 import "github.com/mattcarp12/maml/internal/ast"
@@ -33,9 +32,6 @@ func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 		a.analyzeExpr(s.Value)
 		return false
 	case *ast.ExprStmt:
-		// If the expression is an if-expr used as a statement, we need its
-		// return-path guarantee. analyzeIfExprAsStmt handles both type-checking
-		// and return-path analysis in a single traversal.
 		if ifExpr, ok := s.Value.(*ast.IfExpr); ok {
 			return a.analyzeIfExprAsStmt(ifExpr)
 		}
@@ -55,44 +51,6 @@ func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
 	if _, exists := a.scope.symbols[s.Name]; exists {
 		a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
 		return false
-	}
-
-	if s.Mutable {
-		if ident, ok := s.Value.(*ast.Identifier); ok {
-			src := a.resolve(ident.Value)
-			if src != nil {
-				if src.Invalidated {
-					a.errorf(s.Pos(), "use of moved variable '%s'", ident.Value)
-					return false
-				}
-				// Variant constructors are value literals and are always assignable
-				if src.Kind != VariantSymbol {
-					if !src.Mutable {
-						a.errorf(s.Pos(),
-							"cannot acquire mutable ownership of immutable variable '%s': use %s.clone()",
-							ident.Value, ident.Value)
-						return false
-					}
-					if a.hasActiveAliases(ident.Value) {
-						a.errorf(s.Pos(),
-							"cannot acquire mutable ownership of '%s': it has active immutable aliases",
-							ident.Value)
-						return false
-					}
-					src.Invalidated = true
-					a.removeAlias(ident.Value)
-				}
-			}
-		}
-	} else {
-		if ident, ok := s.Value.(*ast.Identifier); ok {
-			src := a.resolve(ident.Value)
-			// Record alias regardless of source mutability — an immutable binding
-			// of a mutable value still counts as an alias for ownership transfer purposes.
-			if src != nil && !src.Invalidated {
-				a.recordAlias(s.Name, ident.Value)
-			}
-		}
 	}
 
 	a.scope.symbols[s.Name] = &Symbol{
@@ -122,18 +80,7 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 	}
 
 	rootIdent := a.getRootIdentifier(s.LValue)
-	if rootIdent != nil {
-		sym := a.resolve(rootIdent.Value)
-		if sym != nil {
-			if sym.Invalidated {
-				a.errorf(s.Pos(), "use of moved variable '%s'", rootIdent.Value)
-				return false
-			}
-			if !sym.Mutable {
-				a.errorf(s.Pos(), "cannot mutate immutable variable '%s'", rootIdent.Value)
-			}
-		}
-	} else {
+	if rootIdent == nil {
 		a.errorf(s.Pos(), "cannot assign to non-variable expression")
 	}
 
@@ -152,11 +99,7 @@ func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) bool {
 	return true
 }
 
-// analyzeForStmt pushes a scope around the entire for construct so that
-// variables declared in Init (e.g. mut i := 0) are scoped to the loop
-// and not visible in the enclosing block.
 func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
-	// Push a scope for the entire for statement — Init lives here.
 	a.pushScope()
 	defer a.popScope()
 

@@ -54,20 +54,14 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 	return t
 }
 
-// analyzeIdentifier resolves the symbol and guards against use-after-move.
 func (a *Analyzer) analyzeIdentifier(e *ast.Identifier) Type {
 	sym := a.resolve(e.Value)
 	if sym == nil {
 		a.errorf(e.Pos(), "undefined name '%s'", e.Value)
 		return UnknownType{}
 	}
-	if sym.Invalidated {
-		a.errorf(e.Pos(), "use of moved variable '%s'", e.Value)
-		return UnknownType{}
-	}
 	return sym.Type
 }
-
 func (a *Analyzer) analyzeInfixExpr(e *ast.InfixExpr) Type {
 	left := a.analyzeExpr(e.Left)
 	right := a.analyzeExpr(e.Right)
@@ -210,7 +204,7 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 				return UnknownType{}
 			}
 			innerType := a.analyzeExpr(e.Arguments[0].Argument)
-			return OptionType{Base: innerType}
+			return NewOptionType(innerType)
 
 		case "None":
 			if len(e.Arguments) != 0 {
@@ -220,7 +214,7 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 			// None without a known inner type — UnknownType base will be resolved
 			// by context (the variable declaration or function return type).
 			// For now return a sentinel; type inference would fix this properly.
-			return OptionType{Base: UnknownType{}}
+			return NewOptionType(UnknownType{})
 
 		case "Ok":
 			if len(e.Arguments) != 1 {
@@ -229,7 +223,7 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 			}
 			innerType := a.analyzeExpr(e.Arguments[0].Argument)
 			// Error type is unknown at construction — resolved by context.
-			return ResultType{Value: innerType, Error: UnknownType{}}
+			return NewResultType(innerType, UnknownType{})
 
 		case "Err":
 			if len(e.Arguments) != 1 {
@@ -237,7 +231,7 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 				return UnknownType{}
 			}
 			errType := a.analyzeExpr(e.Arguments[0].Argument)
-			return ResultType{Value: UnknownType{}, Error: errType}
+			return NewResultType(UnknownType{}, errType)
 		}
 	}
 
@@ -259,117 +253,20 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 	for i, arg := range e.Arguments {
 		actualType := a.analyzeExpr(arg.Argument)
 		expectedType := fnType.Params[i]
-		paramMode := fnType.ParamModes[i] // Ensure we look up param mode first!
 
-		// Check if coercion is applicable
 		isCoercible := false
 		if _, isSlice := expectedType.(SliceType); isSlice {
 			if arrTy, isArr := actualType.(ArrayType); isArr && arrTy.Base.Equals(expectedType.(SliceType).Base) {
 				isCoercible = true
 			}
 			if vecTy, isVec := actualType.(VectorType); isVec && vecTy.Base.Equals(expectedType.(SliceType).Base) {
-				// Safety Check: Slices are non-owning views. You cannot transfer ownership of a view!
-				if paramMode == ParamOwned {
-					a.errorf(arg.Argument.Pos(), "cannot pass owning Vec<T> as owned slice type []T; use a borrowed or mutable view")
-				}
 				isCoercible = true
 			}
 		}
 
-		// Validate equality using the coercion condition
 		if !isCoercible && !actualType.Equals(expectedType) && !actualType.Equals(UnknownType{}) {
 			a.errorf(arg.Argument.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
 				i, expectedType.String(), actualType.String())
-		}
-
-		switch paramMode {
-		case ParamBorrow:
-			// Only plain pass allowed. mut and own are both illegal.
-			if arg.Mut {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter is an immutable borrow, remove 'mut' at call site", i)
-				continue
-			}
-			if arg.Own {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter is an immutable borrow, remove 'own' at call site", i)
-				continue
-			}
-			if ident, ok := arg.Argument.(*ast.Identifier); ok {
-				src := a.resolve(ident.Value)
-				if src != nil && src.Invalidated {
-					a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-				}
-			}
-
-		case ParamMutBorrow:
-			// Only f(mut x) allowed, and source must be mutable.
-			if arg.Own {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter is a mutable borrow, use 'mut' not 'own' at call site", i)
-				continue
-			}
-			if !arg.Mut {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter is declared 'mut', call site must pass with 'mut'", i)
-				continue
-			}
-			ident, ok := arg.Argument.(*ast.Identifier)
-			if !ok {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: 'mut' can only be applied to a named variable", i)
-				continue
-			}
-			src := a.resolve(ident.Value)
-			if src == nil {
-				continue
-			}
-			if src.Invalidated {
-				a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-				continue
-			}
-			if !src.Mutable {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: cannot mutably borrow immutable variable '%s'", i, ident.Value)
-				continue
-			}
-			// Mutable borrow: ownership stays with caller, no invalidation.
-
-		case ParamOwned:
-			// Only f(own x) allowed. Plain pass and mut are both illegal.
-			if arg.Mut {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter requires ownership transfer, use 'own' not 'mut' at call site", i)
-				continue
-			}
-			if !arg.Own {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: parameter is declared 'own', call site must pass with 'own'", i)
-				continue
-			}
-			ident, ok := arg.Argument.(*ast.Identifier)
-			if !ok {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: 'own' can only transfer ownership of a named variable", i)
-				continue
-			}
-			src := a.resolve(ident.Value)
-			if src == nil {
-				continue
-			}
-			if src.Invalidated {
-				a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-				continue
-			}
-			// own requires unique ownership — shared immutable values cannot be transferred.
-			if a.hasActiveAliases(ident.Value) {
-				a.errorf(arg.Argument.Pos(),
-					"argument %d: cannot transfer ownership of '%s': value has active immutable aliases", i, ident.Value)
-				continue
-			}
-			// Source may be mutable or immutable — both may be transferred if unique.
-			src.Invalidated = true
-			a.removeAlias(ident.Value)
 		}
 	}
 
@@ -642,3 +539,4 @@ func (a *Analyzer) analyzeVariantLiteral(e *ast.StructLiteral, sym *Symbol) Type
 
 	return sumType
 }
+

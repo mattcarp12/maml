@@ -174,59 +174,42 @@ func (t MapType) SizeInBytes() int      { return 24 }   // ptr (8) + len (4) + c
 func (t MapType) Alignment() int        { return 8 }
 
 // --- OPTION ---
-type OptionType struct {
-	Base Type
+func NewOptionType(base Type) *SumType {
+	return &SumType{
+		Name: fmt.Sprintf("Option<%s>", base.String()),
+		Variants: []SumVariant{
+			{
+				Name:         "Some",
+				Discriminant: 0,
+				Fields:       []StructField{{Name: "value", Type: base}},
+			},
+			{
+				Name:         "None",
+				Discriminant: 1,
+				Fields:       []StructField{}, // Empty for unit variant
+			},
+		},
+	}
 }
-
-func (t OptionType) String() string { return "Option<" + t.Base.String() + ">" }
-func (t OptionType) Equals(other Type) bool {
-	o, ok := other.(OptionType)
-	if !ok {
-		return false
-	}
-	// UnknownType base acts as a wildcard — allows None to match Option<T>.
-	if _, isUnknown := t.Base.(UnknownType); isUnknown {
-		return true
-	}
-	if _, isUnknown := o.Base.(UnknownType); isUnknown {
-		return true
-	}
-	return t.Base.Equals(o.Base)
-}
-func (t OptionType) IsReferenceType() bool { return t.Base.IsReferenceType() }
-func (t OptionType) SizeInBytes() int      { return t.Base.SizeInBytes() + 4 } // Data + discriminant tag
-func (t OptionType) Alignment() int        { return t.Base.Alignment() }
 
 // --- RESULT ---
-type ResultType struct {
-	Value Type
-	Error Type
-}
-
-func (t ResultType) String() string {
-	return "Result<" + t.Value.String() + "," + t.Error.String() + ">"
-}
-func (t ResultType) Equals(other Type) bool {
-	o, ok := other.(ResultType)
-	if !ok {
-		return false
+func NewResultType(value Type, err Type) *SumType {
+	return &SumType{
+		Name: fmt.Sprintf("Result<%s, %s>", value.String(), err.String()),
+		Variants: []SumVariant{
+			{
+				Name:         "Ok",
+				Discriminant: 0,
+				Fields:       []StructField{{Name: "value", Type: value}},
+			},
+			{
+				Name:         "Err",
+				Discriminant: 1,
+				Fields:       []StructField{{Name: "error", Type: err}},
+			},
+		},
 	}
-	valMatch := t.Value.Equals(o.Value) ||
-		isUnknown(t.Value) || isUnknown(o.Value)
-	errMatch := t.Error.Equals(o.Error) ||
-		isUnknown(t.Error) || isUnknown(o.Error)
-	return valMatch && errMatch
 }
-func (t ResultType) IsReferenceType() bool { return true }
-func (t ResultType) SizeInBytes() int {
-	// Max of value or error size + 4 byte discriminant tag
-	size := t.Value.SizeInBytes()
-	if t.Error.SizeInBytes() > size {
-		size = t.Error.SizeInBytes()
-	}
-	return size + 4
-}
-func (t ResultType) Alignment() int { return 8 }
 
 // --- SUM TYPE ---
 

@@ -439,85 +439,26 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 }
 
 func (c *Codegen) visitVariantConstructor(name string, e *ast.CallExpr) (CGValue, error) {
-	semaType := c.typeMap[e]
-	if semaType == nil {
-		return CGValue{}, fmt.Errorf("visitVariantConstructor: no type for %s call", name)
+	// 1. Retrieve the under-the-hood SumType resolved by sema
+	sumTy, ok := c.typeMap[e].(*sema.SumType)
+	if !ok {
+		return CGValue{}, fmt.Errorf("expected sum type for variant constructor %s", name)
 	}
 
-	llvmType := c.llvmTypeFor(semaType)
-	alloc := c.currentBlock.NewAlloca(llvmType)
-	zero := constant.NewInt(types.I32, 0)
+	// 2. Find the target variant description (e.g., "Some", "None")
+	variant := sumTy.GetVariant(name)
 
-	switch name {
-	case "Some":
-		// Option layout: { base_type value, i32 discriminant }
-		// Set payload (field 0).
-		payloadCG, err := c.evaluateExpression(e.Arguments[0].Argument)
-		if err != nil {
-			return CGValue{}, err
-		}
-		payloadVal := c.load(payloadCG)
-		payloadPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
-		c.currentBlock.NewStore(payloadVal, payloadPtr)
-		// Set discriminant (field 1) = 1.
-		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 1))
-		c.currentBlock.NewStore(constant.NewInt(types.I32, 1), discrimPtr)
-
-	case "None":
-		// Option layout: { base_type value, i32 discriminant }
-		// Zero the payload (field 0) — type is unknown but we still need to
-		// zero-initialize the memory so the struct is well-formed.
-		payloadPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
-		optTy := semaType.(sema.OptionType)
-		c.currentBlock.NewStore(c.zeroValue(optTy.Base), payloadPtr)
-		// Set discriminant (field 1) = 0.
-		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 1))
-		c.currentBlock.NewStore(constant.NewInt(types.I32, 0), discrimPtr)
-
-	case "Ok":
-		// Result layout: { val_type value, err_type error, i32 discriminant }
-		// Set value (field 0).
-		valCG, err := c.evaluateExpression(e.Arguments[0].Argument)
-		if err != nil {
-			return CGValue{}, err
-		}
-		valVal := c.load(valCG)
-		valPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
-		c.currentBlock.NewStore(valVal, valPtr)
-		// Zero the error field (field 1).
-		resTy := semaType.(sema.ResultType)
-		errPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 1))
-		c.currentBlock.NewStore(c.zeroValue(resTy.Error), errPtr)
-		// Set discriminant (field 2) = 1.
-		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 2))
-		c.currentBlock.NewStore(constant.NewInt(types.I32, 1), discrimPtr)
-
-	case "Err":
-		// Result layout: { val_type value, err_type error, i32 discriminant }
-		// Zero the value field (field 0).
-		resTy := semaType.(sema.ResultType)
-		valPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
-		c.currentBlock.NewStore(c.zeroValue(resTy.Value), valPtr)
-		// Set error (field 1).
-		errCG, err := c.evaluateExpression(e.Arguments[0].Argument)
-		if err != nil {
-			return CGValue{}, err
-		}
-		errVal := c.load(errCG)
-		errPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 1))
-		c.currentBlock.NewStore(errVal, errPtr)
-		// Set discriminant (field 2) = 0.
-		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
-			constant.NewInt(types.I32, 2))
-		c.currentBlock.NewStore(constant.NewInt(types.I32, 0), discrimPtr)
+	// 3. Map positional CallExpr arguments to named fields expected by emitVariantConstruct
+	var fields []ast.StructField
+	for i, arg := range e.Arguments {
+		fields = append(fields, ast.StructField{
+			Name:  &ast.Identifier{Value: variant.Fields[i].Name},
+			Value: arg.Argument,
+		})
 	}
 
-	return CGValue{V: alloc, Type: semaType, IsAddress: true, IsHeap: false}, nil
+	// 4. Delegate entirely to your unified tagged-union code generator!
+	return c.emitVariantConstruct(sumTy, variant, fields)
 }
 
 // zeroValue returns the LLVM zero constant for a given sema type.

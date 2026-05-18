@@ -1,0 +1,20 @@
+type Message =
+	| Quit
+	| Move { x int, y int }
+	| Write { text string }
+
+fn process(msg Message) int {
+	return match msg {
+		case Quit { => 10 }
+		case Move{x: mx, y: my} { => mx + my }
+		case Write{text: mt} { => 50 }
+	}
+}
+
+fn main() int {
+	m1 := Quit
+	m2 := Move{x: 5, y: 5}
+	m3 := Write{text: "test"}
+
+	return process(m1) + process(m2) + process(m3)
+}

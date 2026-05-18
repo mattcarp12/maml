@@ -1,4 +1,3 @@
-// sema/symbol.go
 package sema
 
 type SymbolKind string
@@ -10,20 +9,19 @@ const (
 )
 
 type Symbol struct {
-	Kind        SymbolKind
-	Name        string
-	Mutable     bool
-	Type        Type
-	Invalidated bool
-	ParamMode   ParamMode
-	SumType     *SumType    // for variant symbols, the sum type they belong to
-	Variant     *SumVariant // for variant symbols, the variant they represent
+	Kind      SymbolKind
+	Name      string
+	Type      Type
+	Mutable   bool       // Defined at point of declaration (e.g., mut x := ...)
+	ParamMode ParamMode  // How this variable behaves across a function boundary
+	SumType   *SumType   // For variant symbols, the sum type they belong to
+	Variant   *SumVariant // For variant symbols, the variant they represent
 }
 
 type ParamMode int
 
 const (
-	ParamBorrow    ParamMode = iota // fn f(x T)
-	ParamMutBorrow                  // fn f(mut x T)
-	ParamOwned                      // fn f(own x T)
+	ParamBorrow ParamMode = iota // fn f(x T)
+	ParamMutBorrow               // fn f(mut x T)
+	ParamOwned                   // fn f(own x T)
 )

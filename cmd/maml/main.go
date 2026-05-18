@@ -11,6 +11,8 @@ import (
 	"github.com/mattcarp12/maml/internal/compiler"
 )
 
+const runtimeLibPath = "./runtime/zig-out/lib/libmamlrt.a"
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -55,7 +57,10 @@ func buildCmd(args []string) {
 	file := fs.Arg(0)
 
 	llvmIR := runCompilerCore(file, *printIR)
-	invokeClang(llvmIR, *out)
+	if err := compiler.InvokeClang(llvmIR, *out, runtimeLibPath); err != nil {
+		fmt.Printf("❌ %v\n", err)
+		os.Exit(1)
+	}
 
 	absPath, _ := filepath.Abs(*out)
 	fmt.Printf("✅ Build successful: %s\n", absPath)
@@ -74,12 +79,14 @@ func runCmd(args []string) {
 
 	llvmIR := runCompilerCore(file, *printIR)
 
-	// Create a temporary hidden executable for 'run'
 	outName := filepath.Join(os.TempDir(), "maml_run_tmp")
-	invokeClang(llvmIR, outName)
+	if err := compiler.InvokeClang(llvmIR, outName, runtimeLibPath); err != nil {
+		fmt.Printf("❌ %v\n", err)
+		os.Exit(1)
+	}
+	defer os.Remove(outName)
 
 	executeBinary(outName)
-	os.Remove(outName) // Clean up the temp binary
 }
 
 func checkCmd(args []string) {
@@ -93,17 +100,14 @@ func checkCmd(args []string) {
 	file := fs.Arg(0)
 
 	c := compiler.New()
-	// Check runs the full pipeline but we just ignore the IR output
-	// If it fails lexing, parsing, or semantic analysis, err will be populated.
 	_, err := c.CompileFile(file)
 	if err != nil {
 		fmt.Printf("❌ Check failed:\n%s\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ Check passed: No syntax or semantic errors.")
+	fmt.Println("✅ Check passed: No syntax, semantic, or ownership errors.")
 }
 
-// runCompilerCore handles the MAML pipeline up through LLVM IR generation
 func runCompilerCore(file string, printIR bool) string {
 	c := compiler.New()
 	llvmIR, err := c.CompileFile(file)
@@ -119,32 +123,6 @@ func runCompilerCore(file string, printIR bool) string {
 	return llvmIR
 }
 
-// invokeClang handles shelling out to Clang to compile the IR to machine code
-func invokeClang(llvmIR, outName string) {
-	irFile := outName + ".ll"
-	if err := os.WriteFile(irFile, []byte(llvmIR), 0644); err != nil {
-		fmt.Printf("Failed to write IR: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.Remove(irFile) // Clean up the .ll file
-
-	runtimeLibPath := "./runtime/zig-out/lib/libmamlrt.a"
-	cmd := exec.Command("clang",
-		"-Wno-override-module",
-		irFile,               // our generated .ll file
-		runtimeLibPath,       // Link maml runtime
-		"-Wl,-z,noexecstack", // Silences the GNU-stack linker warning
-		"-o", outName,
-		"-lm",
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("❌ Clang build failed:\n%s\n", string(output))
-		os.Exit(1)
-	}
-}
-
-// executeBinary runs the compiled executable and pipes its stdout/stderr
 func executeBinary(exeName string) {
 	cmd := exec.Command(exeName)
 	cmd.Stdout = os.Stdout

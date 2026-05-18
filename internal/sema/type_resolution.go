@@ -134,6 +134,23 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 
 			resolvedType = MapType{Key: key, Value: val}
 
+		case "Option":
+			if len(t.Params) != 1 {
+				a.errorf(t.Pos(), "Option expects exactly 1 type argument, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			base := a.resolveAstType(t.Params[0])
+			resolvedType = NewOptionType(base)
+
+		case "Result":
+			if len(t.Params) != 2 {
+				a.errorf(t.Pos(), "Result expects exactly 2 type arguments, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			val := a.resolveAstType(t.Params[0])
+			err := a.resolveAstType(t.Params[1])
+			resolvedType = NewResultType(val, err)
+
 		default:
 			if found := a.lookupCustomType(t.Name); found != nil {
 				// Generic user types not yet supported — error clearly.

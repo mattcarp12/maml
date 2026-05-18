@@ -48,17 +48,6 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 		// The actual layout of the hash table is opaque to us; we just treat it as an i8*.
 		result = types.I8Ptr
 
-	case sema.OptionType:
-		// Represented as a tagged union struct: { T value, i32 discriminant }
-		baseLLVM := c.llvmTypeFor(v.Base)
-		result = types.NewStruct(baseLLVM, types.I32)
-
-	case sema.ResultType:
-		// Represented as a tagged union padding layout or sequential pairing for bootstrap:
-		// { val_type, err_type, i32 discriminant }
-		valLLVM := c.llvmTypeFor(v.Value)
-		errLLVM := c.llvmTypeFor(v.Error)
-		result = types.NewStruct(valLLVM, errLLVM, types.I32)
 	case *sema.SumType:
 		// Layout: { i32 discriminant, [MaxPayload x i8] payload }
 		maxPayload := v.MaxPayloadSize()
