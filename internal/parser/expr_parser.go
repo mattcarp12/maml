@@ -71,6 +71,16 @@ func (p *Parser) parseIdentifier() ast.Expr {
 		}
 	}
 
+	// Unit variant constructors: None emitted as a zero-arg CallExpr so that
+	// codegen can treat all constructors uniformly.
+	if name == "None" && p.peekToken.Type != token.LPAREN {
+		return &ast.CallExpr{
+			Function:  &ast.Identifier{Value: "None", Pos_: startPos},
+			Arguments: nil,
+			Pos_:      startPos,
+		}
+	}
+
 	// Standard fallback for normal variables/identifiers
 	return &ast.Identifier{Value: name, Pos_: startPos}
 }

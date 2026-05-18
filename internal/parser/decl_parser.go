@@ -32,7 +32,13 @@ func (p *Parser) ParseProgram() *ast.Program {
 			continue
 		}
 
-		p.nextToken()
+		// p.nextToken()
+
+		// Only advance if we're not already positioned at a decl keyword.
+        // parseSumType (and similar) may leave curToken on 'fn'/'type'.
+        if p.curToken.Type != token.FN && p.curToken.Type != token.TYPE {
+            p.nextToken()
+        }
 	}
 
 	return program
@@ -50,7 +56,7 @@ func (p *Parser) parseDecl() ast.Decl {
 		return p.parseTypeDecl()
 	default:
 		err := fmt.Sprintf(
-			"found %+v. only function declarations are supported at the top level for now",
+			"found %+v. only function and type declarations are supported at the top level",
 			p.curToken,
 		)
 		p.AddError(err)
@@ -157,37 +163,77 @@ func (p *Parser) parseParam() ast.Param {
 }
 
 func (p *Parser) parseTypeDecl() *ast.TypeDecl {
-	td := &ast.TypeDecl{
-		Pos_: p.curPos(),
-	}
+	td := &ast.TypeDecl{Pos_: p.curPos()}
 
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
-
 	td.Name = &ast.NamedType{Name: p.curToken.Literal, Pos_: p.curPos()}
 
-	// Explicitly require '=' so a malformed `type Point { ... }` (missing =)
-	// gets a clear error instead of silently misparse.
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
 	}
 
-	p.nextToken() // step onto the token after '='
+	p.nextToken()
+	p.skipNewlines()
 
 	switch p.curToken.Type {
 	case token.LBRACE:
 		td.Rhs = p.parseProductType()
+	case token.SEPARATOR: // '|'
+		td.Rhs = p.parseSumType()
 	default:
-		err := fmt.Sprintf("found %+v. only product types are supported for now", p.curToken)
-		p.AddError(err)
+		p.AddError(fmt.Sprintf("expected '{' or '|' in type declaration, got %s", p.curToken.Type))
 		return nil
 	}
-	p.skipNewlines()
 
+	p.skipNewlines()
 	return td
 }
 
+func (p *Parser) parseSumType() *ast.SumType {
+	st := &ast.SumType{Pos_: p.curPos()}
+
+	for p.curToken.Type == token.SEPARATOR {
+		variant := p.parseSumVariant()
+		if variant == nil {
+			return nil
+		}
+		st.Variants = append(st.Variants, *variant)
+		p.skipNewlines()
+	}
+
+	st.End_ = p.curPos()
+	return st
+}
+
+func (p *Parser) parseSumVariant() *ast.SumVariant {
+	// curToken is '|'
+	pos := p.curPos()
+
+	if !p.expectPeek(token.IDENT) {
+		return nil
+	}
+	name := p.curToken.Literal
+
+	variant := &ast.SumVariant{Name: name, Pos_: pos}
+
+	// Optional payload block: { field type, ... }
+	if p.peekToken.Type == token.LBRACE {
+		p.nextToken() // step onto '{'
+		// Reuse parseProductType which handles the { field type, ... } syntax.
+		pt := p.parseProductType()
+		if pt == nil {
+			return nil
+		}
+		variant.Fields = pt.Fields
+	}
+
+	p.nextToken() // step past variant (onto next '|' or end)
+	p.skipNewlines()
+
+	return variant
+}
 func (p *Parser) parseProductType() *ast.ProductType {
 	pt := &ast.ProductType{
 		Pos_: p.curPos(),

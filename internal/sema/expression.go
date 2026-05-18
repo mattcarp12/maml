@@ -25,11 +25,18 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		t = a.analyzePrefixExpr(e)
 	case *ast.IfExpr:
 		t = a.analyzeIfExpr(e)
-		_ = a.analyzeIfExprReturns(e)
+	case *ast.MatchExpr:
+		t = a.analyzeMatchExpr(e)
 	case *ast.CallExpr:
 		t = a.analyzeCallExpr(e)
 	case *ast.StructLiteral:
-		t = a.analyzeStructLiteral(e)
+		// Check if this is a variant constructor (e.g. Circle{radius: 5})
+		// before falling through to struct literal analysis.
+		if sym := a.resolve(e.Type.Value); sym != nil && sym.Kind == VariantSymbol {
+			t = a.analyzeVariantLiteral(e, sym)
+		} else {
+			t = a.analyzeStructLiteral(e)
+		}
 	case *ast.FieldAccess:
 		t = a.analyzeFieldAccess(e)
 	case *ast.ArrayLiteral:
@@ -98,6 +105,10 @@ func (a *Analyzer) analyzePrefixExpr(e *ast.PrefixExpr) Type {
 	}
 }
 
+// analyzeIfExpr handles an if-expression used as an expression (i.e. it yields
+// a value via =>). It performs a single traversal of both branches and returns
+// the yielded type. Return-path analysis is NOT done here — see
+// analyzeIfExprAsStmt for the statement context.
 func (a *Analyzer) analyzeIfExpr(e *ast.IfExpr) Type {
 	cond := a.analyzeExpr(e.Condition)
 	if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
@@ -126,6 +137,46 @@ func (a *Analyzer) analyzeIfExpr(e *ast.IfExpr) Type {
 	return elseYield
 }
 
+// analyzeIfExprAsStmt handles an if-expression used as a standalone statement.
+// It performs a single traversal of both branches, computes the yield type,
+// and also returns whether the statement guarantees a return on all paths.
+// This replaces the old pattern of calling analyzeExpr + analyzeIfExprReturns
+// separately, which caused each block to be analyzed twice.
+func (a *Analyzer) analyzeIfExprAsStmt(e *ast.IfExpr) bool {
+	cond := a.analyzeExpr(e.Condition)
+	if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
+		a.errorf(e.Pos(), "IF condition must be a boolean")
+	}
+
+	// Store the type result so analyzeExpr's TypeMap entry is populated,
+	// matching the behaviour callers expect after analyzeExpr(ifExpr).
+	consequenceReturns := a.analyzeBlockStmt(e.Consequence)
+	thenYield := a.extractYieldType(e.Consequence)
+
+	if e.Alternative == nil {
+		a.TypeMap[e] = thenYield
+		return false // if without else cannot guarantee return on all paths
+	}
+
+	alternativeReturns := a.analyzeBlockStmt(e.Alternative)
+	elseYield := a.extractYieldType(e.Alternative)
+
+	if !thenYield.Equals(UnknownType{}) && !elseYield.Equals(UnknownType{}) {
+		if !thenYield.Equals(elseYield) {
+			a.errorf(e.Pos(), "type mismatch: if branches yield different types ('%s' vs '%s')",
+				thenYield.String(), elseYield.String())
+		}
+	}
+
+	yieldType := elseYield
+	if !thenYield.Equals(UnknownType{}) {
+		yieldType = thenYield
+	}
+	a.TypeMap[e] = yieldType
+
+	return consequenceReturns && alternativeReturns
+}
+
 func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
 	if len(block.Statements) == 0 {
 		return UnknownType{}
@@ -148,6 +199,46 @@ func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
 			a.errorf(e.Pos(), "container constructor expects 0 arguments")
 		}
 		return resolvedType
+	}
+
+	// Intercept variant constructors: Some(x), None, Ok(x), Err(e)
+	if ident, ok := e.Function.(*ast.Identifier); ok {
+		switch ident.Value {
+		case "Some":
+			if len(e.Arguments) != 1 {
+				a.errorf(e.Pos(), "Some expects exactly 1 argument, got %d", len(e.Arguments))
+				return UnknownType{}
+			}
+			innerType := a.analyzeExpr(e.Arguments[0].Argument)
+			return OptionType{Base: innerType}
+
+		case "None":
+			if len(e.Arguments) != 0 {
+				a.errorf(e.Pos(), "None takes no arguments")
+				return UnknownType{}
+			}
+			// None without a known inner type — UnknownType base will be resolved
+			// by context (the variable declaration or function return type).
+			// For now return a sentinel; type inference would fix this properly.
+			return OptionType{Base: UnknownType{}}
+
+		case "Ok":
+			if len(e.Arguments) != 1 {
+				a.errorf(e.Pos(), "Ok expects exactly 1 argument, got %d", len(e.Arguments))
+				return UnknownType{}
+			}
+			innerType := a.analyzeExpr(e.Arguments[0].Argument)
+			// Error type is unknown at construction — resolved by context.
+			return ResultType{Value: innerType, Error: UnknownType{}}
+
+		case "Err":
+			if len(e.Arguments) != 1 {
+				a.errorf(e.Pos(), "Err expects exactly 1 argument, got %d", len(e.Arguments))
+				return UnknownType{}
+			}
+			errType := a.analyzeExpr(e.Arguments[0].Argument)
+			return ResultType{Value: UnknownType{}, Error: errType}
+		}
 	}
 
 	fnTypeExpr := a.analyzeExpr(e.Function)
@@ -353,19 +444,27 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 		return UnknownType{}
 	}
 
-	// Intercept built-in methods on compiler-known Vector types
+	// Built-in methods on Vec<T>
 	if vecTy, isVec := objType.(VectorType); isVec {
 		switch e.Field.Value {
 		case "push":
+			// push takes the element by value (immutable borrow — caller retains ownership).
 			return &FunctionType{
 				Params:     []Type{vecTy.Base},
-				ParamModes: make([]ParamMode, 1), // Allocates default modes matching arg count
-				Return:     UnknownType{},        // Treat as a void expression
+				ParamModes: []ParamMode{ParamBorrow},
+				Return:     UnknownType{},
+			}
+		case "push_own":
+			// push_own takes ownership of the element.
+			return &FunctionType{
+				Params:     []Type{vecTy.Base},
+				ParamModes: []ParamMode{ParamOwned},
+				Return:     UnknownType{},
 			}
 		case "len":
 			return &FunctionType{
 				Params:     []Type{},
-				ParamModes: make([]ParamMode, 0),
+				ParamModes: []ParamMode{},
 				Return:     IntType{},
 			}
 		default:
@@ -374,20 +473,22 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 		}
 	}
 
-	// Intercept built-in methods on compiler-known Map types
+	// Built-in methods on Map<K, V>
 	if mapTy, isMap := objType.(MapType); isMap {
 		switch e.Field.Value {
 		case "put":
+			// put takes both key and value by immutable borrow.
 			return &FunctionType{
 				Params:     []Type{mapTy.Key, mapTy.Value},
-				ParamModes: make([]ParamMode, 2),
+				ParamModes: []ParamMode{ParamBorrow, ParamBorrow},
 				Return:     UnknownType{},
 			}
 		case "get":
+			// get takes the key by immutable borrow, returns the value type.
 			return &FunctionType{
 				Params:     []Type{mapTy.Key},
-				ParamModes: make([]ParamMode, 1),
-				Return:     mapTy.Value, // Returns the typed Value description dynamically!
+				ParamModes: []ParamMode{ParamBorrow},
+				Return:     mapTy.Value,
 			}
 		default:
 			a.errorf(e.Field.Pos(), "unknown method '%s' on type '%s'", e.Field.Value, objType.String())
@@ -492,4 +593,52 @@ func (a *Analyzer) analyzeSliceExpr(e *ast.SliceExpr) Type {
 	}
 
 	return SliceType{Base: baseType}
+}
+
+func (a *Analyzer) analyzeVariantLiteral(e *ast.StructLiteral, sym *Symbol) Type {
+	variant := sym.Variant
+	sumType := sym.SumType
+
+	if variant.IsUnit() && len(e.Fields) > 0 {
+		a.errorf(e.Pos(), "unit variant '%s' takes no fields", variant.Name)
+		return sumType
+	}
+
+	// Check fields match the variant's declared fields.
+	seen := make(map[string]bool)
+	for _, f := range e.Fields {
+		name := f.Name.Value
+		if seen[name] {
+			a.errorf(f.Name.Pos(), "duplicate field '%s' in variant literal", name)
+			continue
+		}
+		seen[name] = true
+
+		// Find the field in the variant definition.
+		found := false
+		for _, vf := range variant.Fields {
+			if vf.Name == name {
+				found = true
+				actual := a.analyzeExpr(f.Value)
+				if !actual.Equals(vf.Type) && !actual.Equals(UnknownType{}) {
+					a.errorf(f.Value.Pos(),
+						"type mismatch for field '%s': expected '%s', got '%s'",
+						name, vf.Type.String(), actual.String())
+				}
+				break
+			}
+		}
+		if !found {
+			a.errorf(f.Name.Pos(), "variant '%s' has no field '%s'", variant.Name, name)
+		}
+	}
+
+	// Check for missing fields.
+	for _, vf := range variant.Fields {
+		if !seen[vf.Name] {
+			a.errorf(e.Pos(), "missing field '%s' in variant '%s'", vf.Name, variant.Name)
+		}
+	}
+
+	return sumType
 }

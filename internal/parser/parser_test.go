@@ -847,7 +847,7 @@ func TestParserErrors(t *testing.T) {
 		{
 			name:        "invalid statement at top level",
 			input:       "123",
-			expectedErr: "only function declarations are supported at the top level",
+			expectedErr: "only function and type declarations are supported at the top level",
 		},
 		{
 			name:        "missing type in param",

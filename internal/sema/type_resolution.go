@@ -10,8 +10,12 @@ func (a *Analyzer) discoverTypes(program *ast.Program) {
 				a.errorf(td.Pos(), "type '%s' already defined", td.Name.Name)
 				continue
 			}
-			// Register shell
-			a.scope.types[td.Name.Name] = &StructType{Name: td.Name.Name}
+			switch td.Rhs.(type) {
+			case *ast.ProductType:
+				a.scope.types[td.Name.Name] = &StructType{Name: td.Name.Name}
+			case *ast.SumType:
+				a.scope.types[td.Name.Name] = &SumType{Name: td.Name.Name}
+			}
 		}
 	}
 }
@@ -26,18 +30,47 @@ func (a *Analyzer) resolveTypeBodies(program *ast.Program) {
 
 func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
 	existingType := a.scope.types[v.Name.Name]
-	st, ok := existingType.(*StructType)
-	if !ok {
-		return
-	}
 
-	if pt, ok := v.Rhs.(*ast.ProductType); ok {
-		for _, f := range pt.Fields {
+	switch rhs := v.Rhs.(type) {
+	case *ast.ProductType:
+		st, ok := existingType.(*StructType)
+		if !ok {
+			return
+		}
+		for _, f := range rhs.Fields {
 			fieldType := a.resolveAstType(f.Type)
-			st.Fields = append(st.Fields, StructField{
-				Name: f.Name,
-				Type: fieldType,
-			})
+			st.Fields = append(st.Fields, StructField{Name: f.Name, Type: fieldType})
+		}
+
+	case *ast.SumType:
+		st, ok := existingType.(*SumType)
+		if !ok {
+			return
+		}
+		for i, astVariant := range rhs.Variants {
+			variant := SumVariant{
+				Name:         astVariant.Name,
+				Discriminant: i,
+			}
+			for _, f := range astVariant.Fields {
+				fieldType := a.resolveAstType(f.Type)
+				variant.Fields = append(variant.Fields, StructField{
+					Name: f.Name,
+					Type: fieldType,
+				})
+			}
+			st.Variants = append(st.Variants, variant)
+
+			// Register the variant name as a symbol in global scope so that
+			// Circle{...} and Point are recognized as constructors.
+			a.scope.symbols[astVariant.Name] = &Symbol{
+				Kind:    VariantSymbol,
+				Name:    astVariant.Name,
+				Mutable: false,
+				Type:    st,
+				SumType: st,
+				Variant: &st.Variants[i],
+			}
 		}
 	}
 }
@@ -101,25 +134,14 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 
 			resolvedType = MapType{Key: key, Value: val}
 
-		case "Option":
-			if len(t.Params) != 1 {
-				a.errorf(t.Pos(), "Option expects exactly 1 type argument, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			base := a.resolveAstType(t.Params[0])
-			resolvedType = OptionType{Base: base}
-
-		case "Result":
-			if len(t.Params) != 2 {
-				a.errorf(t.Pos(), "Result expects exactly 2 type arguments, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			val := a.resolveAstType(t.Params[0])
-			errTy := a.resolveAstType(t.Params[1])
-			resolvedType = ResultType{Value: val, Error: errTy}
-
 		default:
-			a.errorf(t.Pos(), "unknown generic type symbol %s", t.Name)
+			if found := a.lookupCustomType(t.Name); found != nil {
+				// Generic user types not yet supported — error clearly.
+				a.errorf(t.Pos(), "type '%s' is not a generic type", t.Name)
+				return UnknownType{}
+			}
+			a.errorf(t.Pos(), "unknown generic type '%s'", t.Name)
+			return UnknownType{}
 		}
 	}
 

@@ -100,9 +100,3 @@ func (a *Analyzer) hasActiveAliases(name string) bool {
 	canon := a.canonicalName(name)
 	return a.aliasRefCount[canon] > 1
 }
-
-// Inside your global scope setup:
-func (a *Analyzer) injectCompilerKnownGlobals() {
-	// Let 'Some' be a pseudo-generic constructor function that gets type-inferred at call sites
-
-}

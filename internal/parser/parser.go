@@ -20,6 +20,7 @@ type Parser struct {
 	l              *lexer.Lexer
 	curToken       token.Token
 	peekToken      token.Token
+	peek2Token     token.Token
 	parseErrors    []ParseError // replaces the old []string errors field
 	maxErrors      int
 	prefixParseFns map[token.TokenType]prefixParseFn
@@ -33,8 +34,9 @@ func New(l *lexer.Lexer) *Parser {
 		maxErrors:   defaultMaxErrors,
 	}
 	p.setParseFns()
-	p.nextToken()
-	p.nextToken()
+	p.nextToken() // Initialize curToken
+	p.nextToken() // Initialize peekToken
+	p.nextToken() // Initialize peek2Token
 	return p
 }
 
@@ -57,6 +59,7 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.NOT] = p.parsePrefixExpression
 	p.prefixParseFns[token.MINUS] = p.parsePrefixExpression // unary minus (was missing)
 	p.prefixParseFns[token.LBRACKET] = p.parseArrayLiteral
+	p.prefixParseFns[token.MATCH] = p.parseMatchExpression
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression

@@ -3,6 +3,7 @@ package codegen
 import (
 	"fmt"
 
+	"github.com/llir/llvm/ir"
 	"github.com/llir/llvm/ir/constant"
 	"github.com/llir/llvm/ir/types"
 	"github.com/llir/llvm/ir/value"
@@ -58,6 +59,18 @@ func (c *Codegen) llvmTypeFor(t sema.Type) types.Type {
 		valLLVM := c.llvmTypeFor(v.Value)
 		errLLVM := c.llvmTypeFor(v.Error)
 		result = types.NewStruct(valLLVM, errLLVM, types.I32)
+	case *sema.SumType:
+		// Layout: { i32 discriminant, [MaxPayload x i8] payload }
+		maxPayload := v.MaxPayloadSize()
+		if maxPayload == 0 {
+			// All-unit sum type: just the discriminant.
+			result = types.NewStruct(types.I32)
+		} else {
+			result = types.NewStruct(
+				types.I32,
+				types.NewArray(uint64(maxPayload), types.I8),
+			)
+		}
 	default:
 		result = types.I32
 	}
@@ -328,4 +341,18 @@ func (c *Codegen) untrackDeepFromRelease(valCG CGValue) {
 			}
 		}
 	}
+}
+
+func (c *Codegen) emitMemcpy(dst, src value.Value, size value.Value) {
+	if c.memcpyFunc == nil {
+		c.memcpyFunc = c.module.NewFunc(
+			"llvm.memcpy.p0i8.p0i8.i32",
+			types.Void,
+			ir.NewParam("dst", types.I8Ptr),
+			ir.NewParam("src", types.I8Ptr),
+			ir.NewParam("len", types.I32),
+			ir.NewParam("isvolatile", types.I1),
+		)
+	}
+	c.currentBlock.NewCall(c.memcpyFunc, dst, src, size, constant.False)
 }

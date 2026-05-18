@@ -119,3 +119,44 @@ func (pt *ProductType) String() string {
 	return fmt.Sprintf("{ %s }", strings.Join(fields, ", "))
 }
 func (pt *ProductType) typeNode() {} // Ensure TypeRhs interfaces match
+
+// SumVariant represents one arm of a sum type:
+//
+//	| Circle { radius int }
+//	| Point                    (unit variant, Fields is empty)
+type SumVariant struct {
+	Name   string
+	Fields []Param // empty for unit variants
+	Pos_   Position
+}
+
+func (sv *SumVariant) String() string {
+	if len(sv.Fields) == 0 {
+		return "| " + sv.Name
+	}
+	var fields []string
+	for _, f := range sv.Fields {
+		fields = append(fields, f.String())
+	}
+	return fmt.Sprintf("| %s { %s }", sv.Name, strings.Join(fields, ", "))
+}
+
+// SumType represents a user-defined sum type declaration RHS:
+//
+//	| Circle { radius int } | Rect { width int, height int } | Point
+type SumType struct {
+	Variants []SumVariant
+	Pos_     Position
+	End_     Position
+}
+
+func (st *SumType) Pos() Position { return st.Pos_ }
+func (st *SumType) End() Position { return st.End_ }
+func (st *SumType) String() string {
+	var parts []string
+	for _, v := range st.Variants {
+		parts = append(parts, v.String())
+	}
+	return strings.Join(parts, "\n")
+}
+func (st *SumType) typeNode() {}

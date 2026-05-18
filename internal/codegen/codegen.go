@@ -31,6 +31,8 @@ type Codegen struct {
 	labelCounter int
 	runtimeFuncs map[RuntimeFunc]*ir.Func
 	scopeStack   [][]value.Value
+	bindingTypes map[string]sema.Type
+	memcpyFunc   *ir.Func
 }
 
 type CGValue struct {
@@ -47,6 +49,7 @@ func New() *Codegen {
 		typeCache:    make(map[string]types.Type),
 		runtimeFuncs: make(map[RuntimeFunc]*ir.Func),
 		scopeStack:   make([][]value.Value, 0),
+		bindingTypes: make(map[string]sema.Type),
 	}
 	c.scopeStack = append(c.scopeStack, []value.Value{})
 	c.setupRuntimeFuncs()

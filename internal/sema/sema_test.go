@@ -1834,3 +1834,719 @@ func TestOwnershipAndBorrowing(t *testing.T) {
 		})
 	}
 }
+
+func TestSumTypeDeclaration(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "simple sum type with unit variants",
+			input: `
+			type Direction =
+				| North
+				| South
+				| East
+				| West
+
+			fn main() int {
+				return 0
+			}`,
+		},
+		{
+			name: "sum type with payload variants",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Rect { width int, height int }
+				| Point
+
+			fn main() int {
+				return 0
+			}`,
+		},
+		{
+			name: "sum type with string payload",
+			input: `
+			type Message =
+				| Text { content string }
+				| Empty
+
+			fn main() int {
+				return 0
+			}`,
+		},
+		{
+			name: "duplicate type name is an error",
+			input: `
+			type Color =
+				| Red
+				| Green
+
+			type Color =
+				| Blue
+
+			fn main() int {
+				return 0
+			}`,
+			expectedErr: "type 'Color' already defined",
+		},
+		{
+			name: "unknown field type in variant",
+			input: `
+			type Foo =
+				| Bar { x UnknownType }
+
+			fn main() int {
+				return 0
+			}`,
+			expectedErr: "unknown type UnknownType",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				found := false
+				for _, e := range errors {
+					if strings.Contains(e.Msg, tt.expectedErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error %q, got: %v", tt.expectedErr, errors)
+			}
+		})
+	}
+}
+
+func TestVariantConstruction(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "construct unit variant",
+			input: `
+			type Direction =
+				| North
+				| South
+
+			fn main() int {
+				d := North
+				return 0
+			}`,
+		},
+		{
+			name: "construct payload variant",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				c := Circle{radius: 5}
+				return 0
+			}`,
+		},
+		{
+			name: "construct variant with multiple fields",
+			input: `
+			type Shape =
+				| Rect { width int, height int }
+				| Point
+
+			fn main() int {
+				r := Rect{width: 10, height: 20}
+				return 0
+			}`,
+		},
+		{
+			name: "variant field type mismatch",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				c := Circle{radius: true}
+				return 0
+			}`,
+			expectedErr: "type mismatch for field 'radius'",
+		},
+		{
+			name: "unknown field in variant",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				c := Circle{radius: 5, color: 3}
+				return 0
+			}`,
+			expectedErr: "variant 'Circle' has no field 'color'",
+		},
+		{
+			name: "missing field in variant",
+			input: `
+			type Shape =
+				| Rect { width int, height int }
+				| Point
+
+			fn main() int {
+				r := Rect{width: 10}
+				return 0
+			}`,
+			expectedErr: "missing field 'height' in variant 'Rect'",
+		},
+		{
+			name: "unit variant given fields is an error",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				p := Point{x: 1}
+				return 0
+			}`,
+			expectedErr: "unit variant 'Point' takes no fields",
+		},
+		{
+			name: "duplicate field in variant literal",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				c := Circle{radius: 5, radius: 10}
+				return 0
+			}`,
+			expectedErr: "duplicate field 'radius'",
+		},
+		{
+			name: "variant assigned to immutable binding",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				c := Circle{radius: 5}
+				return 0
+			}`,
+		},
+		{
+			name: "variant assigned to mutable binding",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn main() int {
+				mut c := Circle{radius: 5}
+				return 0
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				found := false
+				for _, e := range errors {
+					if strings.Contains(e.Msg, tt.expectedErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error %q, got: %v", tt.expectedErr, errors)
+			}
+		})
+	}
+}
+
+func TestMatchExprOnSumType(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		// -----------------------------------------------------------------------
+		// Basic exhaustiveness
+		// -----------------------------------------------------------------------
+		{
+			name: "exhaustive match on two-variant sum type",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn describe(t Toggle) int {
+				return match t {
+					case On { => 1 }
+					case Off { => 0 }
+				}
+			}
+
+			fn main() int {
+				return describe(On)
+			}`,
+		},
+		{
+			name: "non-exhaustive match missing one variant",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn describe(t Toggle) int {
+				return match t {
+					case On { => 1 }
+				}
+			}
+
+			fn main() int {
+				return describe(On)
+			}`,
+			expectedErr: "non-exhaustive match on 'Toggle': missing case 'Off'",
+		},
+		{
+			name: "wildcard makes match exhaustive",
+			input: `
+			type Direction =
+				| North
+				| South
+				| East
+				| West
+
+			fn is_north(d Direction) int {
+				return match d {
+					case North { => 1 }
+					case _ { => 0 }
+				}
+			}
+
+			fn main() int {
+				return is_north(North)
+			}`,
+		},
+		{
+			name: "non-exhaustive match on three-variant type",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Rect { width int, height int }
+				| Point
+
+			fn area(s Shape) int {
+				return match s {
+					case Circle{radius: r} { => r }
+					case Point { => 0 }
+				}
+			}
+
+			fn main() int {
+				return area(Point)
+			}`,
+			expectedErr: "non-exhaustive match on 'Shape': missing case 'Rect'",
+		},
+
+		// -----------------------------------------------------------------------
+		// Payload binding
+		// -----------------------------------------------------------------------
+		{
+			name: "single-field variant binding with parens",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn area(s Shape) int {
+				return match s {
+					case Circle(r) { => r }
+					case Point { => 0 }
+				}
+			}
+
+			fn main() int {
+				return area(Circle{radius: 7})
+			}`,
+		},
+		{
+			name: "multi-field variant field destructuring",
+			input: `
+			type Shape =
+				| Rect { width int, height int }
+				| Point
+
+			fn area(s Shape) int {
+				return match s {
+					case Rect{width: w, height: h} { => w * h }
+					case Point { => 0 }
+				}
+			}
+
+			fn main() int {
+				return area(Rect{width: 4, height: 5})
+			}`,
+		},
+		{
+			name: "unit variant arm has no bindings",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn val(t Toggle) int {
+				return match t {
+					case On { => 1 }
+					case Off { => 0 }
+				}
+			}
+
+			fn main() int {
+				return val(Off)
+			}`,
+		},
+		{
+			name: "binding is scoped to its arm",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn area(s Shape) int {
+				return match s {
+					case Circle(r) { => r }
+					case Point { => r }
+				}
+			}
+
+			fn main() int {
+				return area(Point)
+			}`,
+			expectedErr: "undefined name 'r'",
+		},
+
+		// -----------------------------------------------------------------------
+		// Yield type consistency
+		// -----------------------------------------------------------------------
+		{
+			name: "all arms yield same type",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn val(t Toggle) int {
+				return match t {
+					case On { => 1 }
+					case Off { => 0 }
+				}
+			}
+
+			fn main() int {
+				return val(On)
+			}`,
+		},
+		{
+			name: "arms yield different types is an error",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn val(t Toggle) int {
+				return match t {
+					case On { => 1 }
+					case Off { => true }
+				}
+			}
+
+			fn main() int {
+				return val(On)
+			}`,
+			expectedErr: "match arm yields type 'bool' but previous arms yield 'int'",
+		},
+
+		// -----------------------------------------------------------------------
+		// Match used as a statement (return-path analysis)
+		// -----------------------------------------------------------------------
+		{
+			name: "exhaustive match with all arms returning guarantees return",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn val(t Toggle) int {
+				match t {
+					case On { return 1 }
+					case Off { return 0 }
+				}
+			}
+
+			fn main() int {
+				return val(On)
+			}`,
+		},
+		{
+			name: "non-exhaustive match does not guarantee return",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn val(t Toggle) int {
+				match t {
+					case On { return 1 }
+				}
+			}
+
+			fn main() int {
+				return val(On)
+			}`,
+			expectedErr: "non-exhaustive match on 'Toggle': missing case 'Off'",
+		},
+
+		// -----------------------------------------------------------------------
+		// Sum type passed to and returned from functions
+		// -----------------------------------------------------------------------
+		{
+			name: "sum type as function parameter",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn describe(s Shape) int {
+				return match s {
+					case Circle(r) { => r }
+					case Point { => 0 }
+				}
+			}
+
+			fn main() int {
+				return describe(Point)
+			}`,
+		},
+		{
+			name: "sum type as function return type",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn make_circle(r int) Shape {
+				return Circle{radius: r}
+			}
+
+			fn main() int {
+				s := make_circle(3)
+				return match s {
+					case Circle(r) { => r }
+					case Point { => 0 }
+				}
+			}`,
+		},
+		{
+			name: "returning wrong type for sum type function",
+			input: `
+			type Shape =
+				| Circle { radius int }
+				| Point
+
+			fn make_circle(r int) Shape {
+				return 42
+			}
+
+			fn main() int {
+				return 0
+			}`,
+			expectedErr: "type mismatch: expected return type 'Shape', got 'int'",
+		},
+
+		// -----------------------------------------------------------------------
+		// Ownership interaction
+		// -----------------------------------------------------------------------
+		{
+			name: "sum type variable is immutable by default",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn main() int {
+				t := On
+				t = Off
+				return 0
+			}`,
+			expectedErr: "cannot mutate immutable variable 't'",
+		},
+		{
+			name: "mutable sum type variable can be reassigned",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn main() int {
+				mut t := On
+				t = Off
+				return 0
+			}`,
+		},
+		{
+			name: "sum type passed to own parameter invalidates source",
+			input: `
+			type Toggle =
+				| On
+				| Off
+
+			fn consume(own t Toggle) int {
+				return 0
+			}
+
+			fn main() int {
+				mut t := On
+				consume(own t)
+				return match t {
+					case On { => 1 }
+					case Off { => 0 }
+				}
+			}`,
+			expectedErr: "use of moved variable 't'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors, "expected no errors")
+			} else {
+				require.NotEmpty(t, errors, "expected an error containing: "+tt.expectedErr)
+				found := false
+				for _, e := range errors {
+					if strings.Contains(e.Msg, tt.expectedErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error %q, got: %v", tt.expectedErr, errors)
+			}
+		})
+	}
+}
+
+func TestMatchExprOnBuiltinTypes(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "match on int with wildcard",
+			input: `
+			fn describe(x int) int {
+				return match x {
+					case 0 { => 100 }
+					case 1 { => 200 }
+					case _ { => 0 }
+				}
+			}
+
+			fn main() int {
+				return describe(1)
+			}`,
+		},
+		{
+			name: "match on bool exhaustive via wildcard",
+			input: `
+			fn to_int(b bool) int {
+				return match b {
+					case true { => 1 }
+					case _ { => 0 }
+				}
+			}
+
+			fn main() int {
+				return to_int(true)
+			}`,
+		},
+		{
+			name: "match on int without wildcard is non-exhaustive",
+			input: `
+			fn describe(x int) int {
+				return match x {
+					case 0 { => 1 }
+					case 1 { => 2 }
+				}
+			}
+
+			fn main() int {
+				return describe(0)
+			}`,
+			expectedErr: "non-exhaustive match: add a wildcard '_' arm",
+		},
+		{
+			name: "match with no arms is an error",
+			input: `
+			fn describe(x int) int {
+				return match x {
+				}
+			}
+
+			fn main() int {
+				return describe(0)
+			}`,
+			expectedErr: "match expression has no arms",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errors, _ := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				found := false
+				for _, e := range errors {
+					if strings.Contains(e.Msg, tt.expectedErr) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected error %q, got: %v", tt.expectedErr, errors)
+			}
+		})
+	}
+}
+
+// analyzeInput is defined in sema_test.go and shared across test files.
+// It parses and runs semantic analysis, returning errors and the type map.
+func analyzeSumInput(t *testing.T, input string) ([]ast.CompileError, map[ast.Node]Type) {
+	t.Helper()
+	l := lexer.New(input)
+	p := parser.New(l)
+	program := p.ParseProgram()
+	if errs := p.Errors(); len(errs) > 0 {
+		t.Fatalf("parser errors:\n%s", strings.Join(errs, "\n"))
+	}
+	a := New()
+	return a.Analyze(program)
+}

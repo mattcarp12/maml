@@ -1,0 +1,183 @@
+package parser
+
+import (
+	"fmt"
+
+	"github.com/mattcarp12/maml/internal/ast"
+	"github.com/mattcarp12/maml/internal/token"
+)
+
+func (p *Parser) parseMatchExpression() ast.Expr {
+	pos := p.curPos() // on 'match'
+
+	p.nextToken()                      // step onto the subject expression
+	subject := p.parseExpression(CALL) // use CALL to prevent '{' being consumed as struct literal
+	if subject == nil {
+		return nil
+	}
+
+	// Skip any newlines between subject and opening '{'
+	for p.peekToken.Type == token.NEWLINE {
+		p.nextToken()
+	}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+
+	p.nextToken() // step inside '{'
+	p.skipNewlines()
+
+	var arms []ast.MatchArm
+	for p.curToken.Type != token.RBRACE && p.curToken.Type != token.EOF {
+		arm := p.parseMatchArm()
+		if arm == nil {
+			p.synchronize()
+			p.skipNewlines()
+			continue
+		}
+		arms = append(arms, *arm)
+		// Advance past the arm body's closing '}' to reach next 'case' or match '}'
+		p.nextToken()
+		p.skipNewlines()
+	}
+
+	end := p.curPos()
+	if p.curToken.Type != token.RBRACE {
+		p.AddError("expected '}' to close match expression")
+		return nil
+	}
+
+	return &ast.MatchExpr{
+		Subject: subject,
+		Arms:    arms,
+		Pos_:    pos,
+		End_:    end,
+	}
+}
+
+func (p *Parser) parseMatchArm() *ast.MatchArm {
+	if p.curToken.Type != token.CASE {
+		p.AddError(fmt.Sprintf("expected 'case' in match arm, got %s", p.curToken.Type))
+		return nil
+	}
+	pos := p.curPos()
+
+	p.nextToken() // step onto the pattern
+	pat := p.parsePattern()
+	if pat == nil {
+		return nil
+	}
+
+	// Skip any newlines between the pattern and the arm's '{'
+	for p.peekToken.Type == token.NEWLINE {
+		p.nextToken()
+	}
+
+	if !p.expectPeek(token.LBRACE) {
+		return nil
+	}
+	body := p.parseBlockStmt()
+
+	p.skipNewlines()
+
+	return &ast.MatchArm{
+		Pattern: pat,
+		Body:    body,
+		Pos_:    pos,
+	}
+}
+
+func (p *Parser) parsePattern() ast.Pattern {
+	pos := p.curPos()
+
+	switch p.curToken.Type {
+	case token.IDENT:
+		name := p.curToken.Literal
+
+		if name == "_" {
+			return &ast.WildcardPattern{Pos_: pos}
+		}
+
+		// case Circle(c) — single binding
+		if p.peekToken.Type == token.LPAREN {
+			p.nextToken() // onto '('
+			p.nextToken() // onto binding name
+			if p.curToken.Type != token.IDENT {
+				p.AddError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
+				return nil
+			}
+			binding := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+			if !p.expectPeek(token.RPAREN) {
+				return nil
+			}
+			return &ast.VariantPattern{Name: name, Binding: binding, Pos_: pos}
+		}
+
+		// case Circle{radius: r} — field destructuring.
+		// Distinguish from arm body '{...}' by checking that inside '{' there's
+		// 'IDENT COLON', which is the field-binding syntax.
+		if p.peekToken.Type == token.LBRACE && p.peek2Token.Type == token.IDENT {
+			// Step inside and verify it really is 'field: binding'
+			p.nextToken() // curToken = '{'
+			p.nextToken() // curToken = first token inside (the IDENT we peeked)
+
+			if p.peekToken.Type == token.COLON {
+				// Confirmed field destructuring — parse all field bindings
+				var fieldBindings []ast.FieldBinding
+				for {
+					if p.curToken.Type != token.IDENT {
+						p.AddError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
+						return nil
+					}
+					fieldName := p.curToken.Literal
+					if !p.expectPeek(token.COLON) {
+						return nil
+					}
+					if !p.expectPeek(token.IDENT) {
+						return nil
+					}
+					bindingName := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+					fieldBindings = append(fieldBindings, ast.FieldBinding{
+						Field:   fieldName,
+						Binding: bindingName,
+					})
+					if p.peekToken.Type == token.COMMA {
+						p.nextToken() // onto ','
+						p.nextToken() // onto next field name
+					} else {
+						break
+					}
+				}
+				if !p.expectPeek(token.RBRACE) {
+					return nil
+				}
+				return &ast.VariantPattern{Name: name, Fields: fieldBindings, Pos_: pos}
+			}
+		}
+
+		// Unit variant: case Point
+		return &ast.VariantPattern{Name: name, Binding: nil, Pos_: pos}
+	case token.INT:
+		lit := &ast.IntLiteral{Value: parseInt(p.curToken.Literal), Pos_: pos}
+		return &ast.LiteralPattern{Value: lit, Pos_: pos}
+
+	case token.BOOL:
+		val := p.curToken.Literal == "true"
+		lit := &ast.BoolLiteral{Value: val, Pos_: pos}
+		return &ast.LiteralPattern{Value: lit, Pos_: pos}
+
+	default:
+		p.AddError(fmt.Sprintf("unexpected token in pattern: %s", p.curToken.Type))
+		return nil
+	}
+}
+
+// parseInt is a small helper so parsePattern doesn't import strconv directly.
+func parseInt(s string) int64 {
+	var n int64
+	for _, ch := range s {
+		n = n*10 + int64(ch-'0')
+	}
+	return n
+}

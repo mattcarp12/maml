@@ -181,7 +181,17 @@ type OptionType struct {
 func (t OptionType) String() string { return "Option<" + t.Base.String() + ">" }
 func (t OptionType) Equals(other Type) bool {
 	o, ok := other.(OptionType)
-	return ok && t.Base.Equals(o.Base)
+	if !ok {
+		return false
+	}
+	// UnknownType base acts as a wildcard — allows None to match Option<T>.
+	if _, isUnknown := t.Base.(UnknownType); isUnknown {
+		return true
+	}
+	if _, isUnknown := o.Base.(UnknownType); isUnknown {
+		return true
+	}
+	return t.Base.Equals(o.Base)
 }
 func (t OptionType) IsReferenceType() bool { return t.Base.IsReferenceType() }
 func (t OptionType) SizeInBytes() int      { return t.Base.SizeInBytes() + 4 } // Data + discriminant tag
@@ -198,7 +208,14 @@ func (t ResultType) String() string {
 }
 func (t ResultType) Equals(other Type) bool {
 	o, ok := other.(ResultType)
-	return ok && t.Value.Equals(o.Value) && t.Error.Equals(o.Error)
+	if !ok {
+		return false
+	}
+	valMatch := t.Value.Equals(o.Value) ||
+		isUnknown(t.Value) || isUnknown(o.Value)
+	errMatch := t.Error.Equals(o.Error) ||
+		isUnknown(t.Error) || isUnknown(o.Error)
+	return valMatch && errMatch
 }
 func (t ResultType) IsReferenceType() bool { return true }
 func (t ResultType) SizeInBytes() int {
@@ -210,6 +227,67 @@ func (t ResultType) SizeInBytes() int {
 	return size + 4
 }
 func (t ResultType) Alignment() int { return 8 }
+
+// --- SUM TYPE ---
+
+// SumVariant is one variant of a user-defined sum type.
+type SumVariant struct {
+	Name         string
+	Fields       []StructField // empty for unit variants
+	Discriminant int           // position in the variant list (0-based)
+}
+
+func (v SumVariant) IsUnit() bool { return len(v.Fields) == 0 }
+
+// PayloadSize returns the byte size of this variant's payload struct.
+func (v SumVariant) PayloadSize() int {
+	size := 0
+	for _, f := range v.Fields {
+		align := f.Type.Alignment()
+		if size%align != 0 {
+			size += align - (size % align)
+		}
+		size += f.Type.SizeInBytes()
+	}
+	return size
+}
+
+type SumType struct {
+	Name     string
+	Variants []SumVariant
+}
+
+func (t *SumType) String() string { return t.Name }
+func (t *SumType) Equals(other Type) bool {
+	o, ok := other.(*SumType)
+	return ok && t.Name == o.Name
+}
+func (t *SumType) IsReferenceType() bool { return false }
+func (t *SumType) Alignment() int        { return 4 } // discriminant is i32
+
+func (t *SumType) MaxPayloadSize() int {
+	max := 0
+	for _, v := range t.Variants {
+		if s := v.PayloadSize(); s > max {
+			max = s
+		}
+	}
+	return max
+}
+
+func (t *SumType) SizeInBytes() int {
+	// { i32 discriminant, [MaxPayload x i8] payload }
+	return 4 + t.MaxPayloadSize()
+}
+
+func (t *SumType) GetVariant(name string) *SumVariant {
+	for i := range t.Variants {
+		if t.Variants[i].Name == name {
+			return &t.Variants[i]
+		}
+	}
+	return nil
+}
 
 // --- FUNCTION ---
 type FunctionType struct {
@@ -251,3 +329,7 @@ func (t UnknownType) Equals(other Type) bool { _, ok := other.(UnknownType); ret
 func (t UnknownType) IsReferenceType() bool  { return false }
 func (t UnknownType) SizeInBytes() int       { return 0 }
 func (t UnknownType) Alignment() int         { return 1 }
+func isUnknown(t Type) bool {
+	_, ok := t.(UnknownType)
+	return ok
+}

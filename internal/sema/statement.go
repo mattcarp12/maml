@@ -8,7 +8,7 @@ func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
 	defer a.popScope()
 
 	alwaysReturns := false
-	for i, stmt := range body.Statements {
+	for _, stmt := range body.Statements {
 		if alwaysReturns {
 			a.errorf(stmt.Pos(), "unreachable code after return statement")
 			a.analyzeStmt(stmt)
@@ -16,8 +16,6 @@ func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
 		}
 		if a.analyzeStmt(stmt) {
 			alwaysReturns = true
-			if i < len(body.Statements)-1 {
-			}
 		}
 	}
 	return alwaysReturns
@@ -35,9 +33,14 @@ func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
 		a.analyzeExpr(s.Value)
 		return false
 	case *ast.ExprStmt:
+		// If the expression is an if-expr used as a statement, we need its
+		// return-path guarantee. analyzeIfExprAsStmt handles both type-checking
+		// and return-path analysis in a single traversal.
 		if ifExpr, ok := s.Value.(*ast.IfExpr); ok {
-			a.analyzeExpr(s.Value)
-			return a.analyzeIfExprReturns(ifExpr)
+			return a.analyzeIfExprAsStmt(ifExpr)
+		}
+		if matchExpr, ok := s.Value.(*ast.MatchExpr); ok {
+			return a.analyzeMatchExprAsStmt(matchExpr)
 		}
 		a.analyzeExpr(s.Value)
 		return false
@@ -62,29 +65,31 @@ func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
 					a.errorf(s.Pos(), "use of moved variable '%s'", ident.Value)
 					return false
 				}
-				if !src.Mutable {
-					a.errorf(s.Pos(),
-						"cannot acquire mutable ownership of immutable variable '%s': use %s.clone()",
-						ident.Value, ident.Value)
-					return false
+				// Variant constructors are value literals and are always assignable
+				if src.Kind != VariantSymbol {
+					if !src.Mutable {
+						a.errorf(s.Pos(),
+							"cannot acquire mutable ownership of immutable variable '%s': use %s.clone()",
+							ident.Value, ident.Value)
+						return false
+					}
+					if a.hasActiveAliases(ident.Value) {
+						a.errorf(s.Pos(),
+							"cannot acquire mutable ownership of '%s': it has active immutable aliases",
+							ident.Value)
+						return false
+					}
+					src.Invalidated = true
+					a.removeAlias(ident.Value)
 				}
-				// Mutable acquisition is a move: source must have no active aliases.
-				if a.hasActiveAliases(ident.Value) {
-					a.errorf(s.Pos(),
-						"cannot acquire mutable ownership of '%s': it has active immutable aliases",
-						ident.Value)
-					return false
-				}
-				// Transfer ownership.
-				src.Invalidated = true
-				a.removeAlias(ident.Value)
 			}
 		}
 	} else {
-		// Immutable declaration: if the RHS is an identifier, record an alias.
 		if ident, ok := s.Value.(*ast.Identifier); ok {
 			src := a.resolve(ident.Value)
-			if src != nil && !src.Invalidated && !src.Mutable {
+			// Record alias regardless of source mutability — an immutable binding
+			// of a mutable value still counts as an alias for ownership transfer purposes.
+			if src != nil && !src.Invalidated {
 				a.recordAlias(s.Name, ident.Value)
 			}
 		}
@@ -147,7 +152,14 @@ func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) bool {
 	return true
 }
 
+// analyzeForStmt pushes a scope around the entire for construct so that
+// variables declared in Init (e.g. mut i := 0) are scoped to the loop
+// and not visible in the enclosing block.
 func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
+	// Push a scope for the entire for statement — Init lives here.
+	a.pushScope()
+	defer a.popScope()
+
 	if s.Init != nil {
 		a.analyzeStmt(s.Init)
 	}
@@ -191,14 +203,4 @@ func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
 	default:
 		return nil
 	}
-}
-
-func (a *Analyzer) analyzeIfExprReturns(e *ast.IfExpr) bool {
-	a.analyzeExpr(e.Condition)
-	consequenceReturns := a.analyzeBlockStmt(e.Consequence)
-	if e.Alternative == nil {
-		return false
-	}
-	alternativeReturns := a.analyzeBlockStmt(e.Alternative)
-	return consequenceReturns && alternativeReturns
 }

@@ -77,7 +77,8 @@ func (p *Parser) hadTooManyErrors() bool {
 
 func (p *Parser) nextToken() {
 	p.curToken = p.peekToken
-	p.peekToken = p.l.NextToken()
+	p.peekToken = p.peek2Token
+	p.peek2Token = p.l.NextToken()
 }
 
 // --- expectPeek / peekError --------------------------------------------------

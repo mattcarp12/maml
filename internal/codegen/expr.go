@@ -32,6 +32,8 @@ func (c *Codegen) evaluateExpression(expr ast.Expr) (CGValue, error) {
 		return c.visitPrefixExpr(e)
 	case *ast.IfExpr:
 		return c.visitIfExpr(e)
+	case *ast.MatchExpr:
+		return c.visitMatchExpr(e)
 	case *ast.CallExpr:
 		return c.visitCallExpr(e)
 	case *ast.StructLiteral:
@@ -73,11 +75,35 @@ func (c *Codegen) visitBoolLiteral(e *ast.BoolLiteral) (CGValue, error) {
 }
 
 func (c *Codegen) visitIdentifier(e *ast.Identifier) (CGValue, error) {
+	// Check bindingTypes first (pattern variable fast path).
+	if bt, ok := c.bindingTypes[e.Value]; ok {
+		info, exists := c.resolveVar(e.Value)
+		if exists {
+			return CGValue{V: info.V, Type: bt, IsAddress: true, IsHeap: info.IsHeap}, nil
+		}
+	}
+
 	info, exists := c.resolveVar(e.Value)
 	if !exists {
+		// Could be a unit variant constructor: Point, None, etc.
+		// These aren't in the var env; they're constructed on the fly.
+		semaType := c.typeMap[e]
+		if sumTy, ok := semaType.(*sema.SumType); ok {
+			variant := sumTy.GetVariant(e.Value)
+			if variant != nil && variant.IsUnit() {
+				return c.emitVariantConstruct(sumTy, variant, nil)
+			}
+		}
 		return CGValue{}, fmt.Errorf("undefined variable: %s", e.Value)
 	}
+
 	semaType := c.typeMap[e]
+	if semaType == nil {
+		if bt, ok := c.bindingTypes[e.Value]; ok {
+			semaType = bt
+		}
+	}
+
 	return CGValue{V: info.V, Type: semaType, IsAddress: true, IsHeap: info.IsHeap}, nil
 }
 
@@ -313,6 +339,14 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 		return CGValue{V: containerAlloc, Type: semaType, IsAddress: true, IsHeap: false}, nil
 	}
 
+	// Intercept variant constructors: Some(x), None, Ok(x), Err(e)
+	if ident, ok := e.Function.(*ast.Identifier); ok {
+		switch ident.Value {
+		case "Some", "None", "Ok", "Err":
+			return c.visitVariantConstructor(ident.Value, e)
+		}
+	}
+
 	// NEW: Intercept methods called on containers
 	if fieldAccess, ok := e.Function.(*ast.FieldAccess); ok {
 		objCG, _ := c.evaluateExpression(fieldAccess.Object)
@@ -404,28 +438,138 @@ func (c *Codegen) visitCallExpr(e *ast.CallExpr) (CGValue, error) {
 	return CGValue{V: res, Type: semaType, IsAddress: false, IsHeap: isHeap}, nil
 }
 
+func (c *Codegen) visitVariantConstructor(name string, e *ast.CallExpr) (CGValue, error) {
+	semaType := c.typeMap[e]
+	if semaType == nil {
+		return CGValue{}, fmt.Errorf("visitVariantConstructor: no type for %s call", name)
+	}
+
+	llvmType := c.llvmTypeFor(semaType)
+	alloc := c.currentBlock.NewAlloca(llvmType)
+	zero := constant.NewInt(types.I32, 0)
+
+	switch name {
+	case "Some":
+		// Option layout: { base_type value, i32 discriminant }
+		// Set payload (field 0).
+		payloadCG, err := c.evaluateExpression(e.Arguments[0].Argument)
+		if err != nil {
+			return CGValue{}, err
+		}
+		payloadVal := c.load(payloadCG)
+		payloadPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
+		c.currentBlock.NewStore(payloadVal, payloadPtr)
+		// Set discriminant (field 1) = 1.
+		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(constant.NewInt(types.I32, 1), discrimPtr)
+
+	case "None":
+		// Option layout: { base_type value, i32 discriminant }
+		// Zero the payload (field 0) — type is unknown but we still need to
+		// zero-initialize the memory so the struct is well-formed.
+		payloadPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
+		optTy := semaType.(sema.OptionType)
+		c.currentBlock.NewStore(c.zeroValue(optTy.Base), payloadPtr)
+		// Set discriminant (field 1) = 0.
+		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(constant.NewInt(types.I32, 0), discrimPtr)
+
+	case "Ok":
+		// Result layout: { val_type value, err_type error, i32 discriminant }
+		// Set value (field 0).
+		valCG, err := c.evaluateExpression(e.Arguments[0].Argument)
+		if err != nil {
+			return CGValue{}, err
+		}
+		valVal := c.load(valCG)
+		valPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
+		c.currentBlock.NewStore(valVal, valPtr)
+		// Zero the error field (field 1).
+		resTy := semaType.(sema.ResultType)
+		errPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(c.zeroValue(resTy.Error), errPtr)
+		// Set discriminant (field 2) = 1.
+		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 2))
+		c.currentBlock.NewStore(constant.NewInt(types.I32, 1), discrimPtr)
+
+	case "Err":
+		// Result layout: { val_type value, err_type error, i32 discriminant }
+		// Zero the value field (field 0).
+		resTy := semaType.(sema.ResultType)
+		valPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
+		c.currentBlock.NewStore(c.zeroValue(resTy.Value), valPtr)
+		// Set error (field 1).
+		errCG, err := c.evaluateExpression(e.Arguments[0].Argument)
+		if err != nil {
+			return CGValue{}, err
+		}
+		errVal := c.load(errCG)
+		errPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 1))
+		c.currentBlock.NewStore(errVal, errPtr)
+		// Set discriminant (field 2) = 0.
+		discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 2))
+		c.currentBlock.NewStore(constant.NewInt(types.I32, 0), discrimPtr)
+	}
+
+	return CGValue{V: alloc, Type: semaType, IsAddress: true, IsHeap: false}, nil
+}
+
+// zeroValue returns the LLVM zero constant for a given sema type.
+// Used to zero-initialize unused union fields.
+func (c *Codegen) zeroValue(t sema.Type) value.Value {
+	switch t.(type) {
+	case sema.IntType:
+		return constant.NewInt(types.I32, 0)
+	case sema.BoolType:
+		return constant.False
+	case sema.StringType:
+		// { i8* ptr, i32 len } — zero both fields via a zero struct constant.
+		return constant.NewZeroInitializer(c.llvmTypeFor(t))
+	case sema.UnknownType:
+		// Fallback for None/Err where inner type is not yet resolved.
+		return constant.NewInt(types.I32, 0)
+	default:
+		return constant.NewZeroInitializer(c.llvmTypeFor(t))
+	}
+}
+
 func (c *Codegen) visitStructLiteral(e *ast.StructLiteral) (CGValue, error) {
 	semaType := c.typeMap[e]
+
+	// If sema classified this as a SumType, it's a variant constructor.
+	if sumTy, ok := semaType.(*sema.SumType); ok {
+		return c.visitVariantLiteralFromStruct(e, sumTy)
+	}
+
+	// Original struct literal path (unchanged).
 	llvmType := c.llvmTypeFor(semaType)
-
-	// Structs are ALWAYS stack value types
 	structPtr := c.currentBlock.NewAlloca(llvmType)
-
 	for _, field := range e.Fields {
 		valCG, err := c.evaluateExpression(field.Value)
 		if err != nil {
 			return CGValue{}, err
 		}
 		val := c.load(valCG)
-
 		index := semaType.(*sema.StructType).GetFieldIndex(field.Name.Value)
 		fieldPtr := c.currentBlock.NewGetElementPtr(llvmType, structPtr,
 			constant.NewInt(types.I32, 0), constant.NewInt(types.I32, int64(index)))
-
 		c.currentBlock.NewStore(val, fieldPtr)
 	}
-
 	return CGValue{V: structPtr, Type: semaType, IsAddress: true, IsHeap: false}, nil
+}
+
+func (c *Codegen) visitVariantLiteralFromStruct(e *ast.StructLiteral, sumTy *sema.SumType) (CGValue, error) {
+	variant := sumTy.GetVariant(e.Type.Value)
+	if variant == nil {
+		return CGValue{}, fmt.Errorf("unknown variant '%s' on type '%s'", e.Type.Value, sumTy.Name)
+	}
+	return c.emitVariantConstruct(sumTy, variant, e.Fields)
 }
 
 func (c *Codegen) visitFieldAccess(e *ast.FieldAccess) (CGValue, error) {
@@ -804,4 +948,73 @@ func (c *Codegen) generateMapGet(mapCG CGValue, mapTy sema.MapType, keyExpr ast.
 	typedValPtr := c.currentBlock.NewBitCast(rawPtr, types.NewPointer(c.llvmTypeFor(mapTy.Value)))
 
 	return CGValue{V: typedValPtr, Type: mapTy.Value, IsAddress: true}, nil
+}
+
+// emitVariantConstruct allocates a sum type tagged union and fills in the
+// discriminant and payload fields for the given variant.
+// fields may be nil for unit variants.
+func (c *Codegen) emitVariantConstruct(
+	sumTy *sema.SumType,
+	variant *sema.SumVariant,
+	fields []ast.StructField,
+) (CGValue, error) {
+	llvmType := c.llvmTypeFor(sumTy)
+	alloc := c.currentBlock.NewAlloca(llvmType)
+	zero := constant.NewInt(types.I32, 0)
+
+	// Field 0: discriminant (i32)
+	discrimPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero, zero)
+	c.currentBlock.NewStore(
+		constant.NewInt(types.I32, int64(variant.Discriminant)),
+		discrimPtr,
+	)
+
+	// Field 1: payload ([MaxPayload x i8]) — only written if variant has fields.
+	if len(variant.Fields) > 0 && len(fields) > 0 {
+		payloadPtr := c.currentBlock.NewGetElementPtr(llvmType, alloc, zero,
+			constant.NewInt(types.I32, 1))
+
+		// Build a struct of the variant's fields and memcpy it into the payload.
+		// Construct a named struct type for the payload to get field offsets.
+		var payloadFieldTypes []types.Type
+		for _, vf := range variant.Fields {
+			payloadFieldTypes = append(payloadFieldTypes, c.llvmTypeFor(vf.Type))
+		}
+		payloadStructType := types.NewStruct(payloadFieldTypes...)
+
+		payloadAlloc := c.currentBlock.NewAlloca(payloadStructType)
+
+		for _, f := range fields {
+			valCG, err := c.evaluateExpression(f.Value)
+			if err != nil {
+				return CGValue{}, err
+			}
+			val := c.load(valCG)
+
+			// Find field index in variant definition.
+			fieldIndex := -1
+			for i, vf := range variant.Fields {
+				if vf.Name == f.Name.Value {
+					fieldIndex = i
+					break
+				}
+			}
+			if fieldIndex < 0 {
+				return CGValue{}, fmt.Errorf("unknown field '%s' in variant '%s'",
+					f.Name.Value, variant.Name)
+			}
+
+			fieldPtr := c.currentBlock.NewGetElementPtr(payloadStructType, payloadAlloc,
+				zero, constant.NewInt(types.I32, int64(fieldIndex)))
+			c.currentBlock.NewStore(val, fieldPtr)
+		}
+
+		// Bitcast payload struct pointer to i8* and memcpy into the union payload slot.
+		srcRaw := c.currentBlock.NewBitCast(payloadAlloc, types.I8Ptr)
+		dstRaw := c.currentBlock.NewBitCast(payloadPtr, types.I8Ptr)
+		payloadSize := constant.NewInt(types.I32, int64(variant.PayloadSize()))
+		c.emitMemcpy(dstRaw, srcRaw, payloadSize)
+	}
+
+	return CGValue{V: alloc, Type: sumTy, IsAddress: true, IsHeap: false}, nil
 }

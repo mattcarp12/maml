@@ -4,8 +4,9 @@ package sema
 type SymbolKind string
 
 const (
-	VarSymbol  SymbolKind = "var"
-	FuncSymbol SymbolKind = "func"
+	VarSymbol     SymbolKind = "var"
+	FuncSymbol    SymbolKind = "func"
+	VariantSymbol SymbolKind = "variant"
 )
 
 type Symbol struct {
@@ -15,6 +16,8 @@ type Symbol struct {
 	Type        Type
 	Invalidated bool
 	ParamMode   ParamMode
+	SumType     *SumType    // for variant symbols, the sum type they belong to
+	Variant     *SumVariant // for variant symbols, the variant they represent
 }
 
 type ParamMode int
