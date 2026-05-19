@@ -106,7 +106,6 @@ func (v *VariantPattern) End() Position { return v.Pos_ }
 //	Circle{radius: 5}    — variant with payload
 //	Point                — unit variant (Fields is empty)
 type VariantLiteral struct {
-	TypeName    string // name of the sum type (filled in by sema)
 	VariantName string // "Circle", "Point", etc.
 	Fields      []StructField
 	Pos_        Position

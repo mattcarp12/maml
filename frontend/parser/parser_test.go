@@ -1508,8 +1508,7 @@ func TestForLoopVariants(t *testing.T) {
 }
 
 func TestMatchExpression(t *testing.T) {
-	input := `
-match x {
+	input := `match x {
 	case 42 { => "forty two" }
 	case true { => "yes" }
 	case Point { => "point" }
@@ -1667,4 +1666,69 @@ func TestIndexExpressionEdgeCases(t *testing.T) {
 			assert.True(t, ok)
 		})
 	}
+}
+
+
+func TestAwaitPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "await binds looser than call",
+			input:    "await fetch()",
+			expected: "(await fetch())", // Previously buggy: (await fetch)()
+		},
+		{
+			name:     "await binds looser than field access",
+			input:    "await user.getProfile()",
+			expected: "(await (user.getProfile)())",
+		},
+		{
+			name:     "await binds tighter than math",
+			input:    "await fetch() + 1",
+			expected: "((await fetch()) + 1)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmts := parseFunctionBody(t, "return "+tt.input)
+			retStmt := stmts[0].(*ast.ReturnStmt)
+			assert.Equal(t, tt.expected, retStmt.Value.String())
+		})
+	}
+}
+
+func TestUnitTypeAndBareReturns(t *testing.T) {
+	t.Run("parse explicit unit return type", func(t *testing.T) {
+		input := "fn do_nothing() unit {}"
+		program := parseProgram(t, input)
+		fn := program.Decls[0].(*ast.FnDecl)
+		
+		assert.Equal(t, "unit", fn.ReturnType.(*ast.NamedType).Name)
+	})
+
+	t.Run("parse bare return", func(t *testing.T) {
+		input := "return"
+		stmts := parseFunctionBody(t, input)
+		require.Len(t, stmts, 1)
+
+		retStmt, ok := stmts[0].(*ast.ReturnStmt)
+		require.True(t, ok)
+		assert.Nil(t, retStmt.Value, "bare return should have a nil Value")
+	})
+
+	t.Run("parse bare return before brace", func(t *testing.T) {
+		// Tests the ASI/statement end check when return is right against the '}'
+		input := `
+		fn test() {
+			return
+		}`
+		program := parseProgram(t, input)
+		fn := program.Decls[0].(*ast.FnDecl)
+		retStmt := fn.Body.Statements[0].(*ast.ReturnStmt)
+		assert.Nil(t, retStmt.Value)
+	})
 }

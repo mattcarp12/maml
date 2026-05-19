@@ -2,3 +2,21 @@ SYNTAX
 - Make commas in struct definitions optional
 - Make field names in struct literals optional
 
+SEMA
+- Paralleize pass 4 - analyzeFunctionBodies - can be run independently
+- Type interning - every sema.Type needs only one instance - can be cached for memory efficiency; also type.Equals() just becomes pointer comparison
+- Control flow graph - extract `alwaysReturns` logic from the semantic analyzer into its own intermediate pass after type checking; check all paths lead to return; warn on dead code
+- Add sized integers and float types
+- Add support for type aliases
+
+INTERMEDIATE PASSES
+- Generics monomorphization
+- High-level lowering / Desugaring
+    1. Translate match expressions into flat sequence of if/else jumps, switch tables, and explicit variable bindings
+    2. Convert for loops into pure while(true) loops with break/goto jumps
+    * This makes it easier for escape and ownership analyzers - only need to understand ~5 core ast types (assignment, jumps, calls) instead of 30 complex AST node types
+- Constant folding - evaluate static math expressions; eliminate if(true) blocks
+- Dead code elimination
+- Inliner pass
+- New pipeline: Lexer -> Parser -> Sema -> CFG -> **convert AST to MIR** -> ownership -> escape -> optimizations ---> codegen
+    * MIR is flat linear list of instructions with basic blocks and goto statements

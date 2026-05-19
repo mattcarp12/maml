@@ -23,7 +23,7 @@ func analyzeOwnership(t *testing.T, input string) []ast.CompileError {
 
 	// Generate the prerequisite type tracking map cleanly first
 	semaAnalyzer := sema.New()
-	_, typeMap := semaAnalyzer.Analyze(program)
+	typeMap, _ := semaAnalyzer.Analyze(program)
 
 	ownershipAnalyzer := New(typeMap)
 	return ownershipAnalyzer.Analyze(program)

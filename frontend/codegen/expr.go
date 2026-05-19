@@ -529,7 +529,7 @@ func (c *Codegen) visitStructLiteral(e *ast.StructLiteral) (CGValue, error) {
 func (c *Codegen) visitVariantLiteralFromStruct(e *ast.StructLiteral, sumTy *sema.SumType) (CGValue, error) {
 	variant := sumTy.GetVariant(e.Type.Value)
 	if variant == nil {
-		return CGValue{}, fmt.Errorf("unknown variant '%s' on type '%s'", e.Type.Value, sumTy.Name)
+		return CGValue{}, fmt.Errorf("unknown variant '%s' on type '%s'", e.Type.Value, sumTy.BaseName)
 	}
 	return c.emitVariantConstruct(sumTy, variant, e.Fields)
 }

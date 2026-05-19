@@ -112,7 +112,7 @@ func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType Type) 
 			if !presentVariants[v.Name] {
 				a.errorf(e.Pos(),
 					"non-exhaustive match on '%s': missing case '%s'",
-					st.Name, v.Name)
+					st.BaseName, v.Name)
 			}
 		}
 	case IntType, BoolType:

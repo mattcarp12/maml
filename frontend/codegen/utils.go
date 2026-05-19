@@ -263,74 +263,7 @@ func (c *Codegen) isCompositeType(t sema.Type) bool {
 	}
 }
 
-// untrackDeepFromRelease recursively inspects a value being returned or moved.
-// It removes any internal heap pointers from the ARC tracker so they survive the frame boundary.
-func (c *Codegen) untrackDeepFromRelease(valCG CGValue) {
-	// Base Case: It's a direct reference type
-	if valCG.Type.IsReferenceType() {
-		if valCG.IsHeap {
-			rawPtr := c.getRawHeapPointer(valCG)
-			c.untrackFromRelease(rawPtr)
-		}
-		return
-	}
 
-	// Composite Case: Structs
-	if structType, ok := valCG.Type.(*sema.StructType); ok {
-		structLLVMType := c.llvmTypeFor(structType)
-		var basePtr value.Value
-		if valCG.IsAddress {
-			basePtr = valCG.V
-		} else {
-			alloc := c.currentBlock.NewAlloca(structLLVMType)
-			c.currentBlock.NewStore(valCG.V, alloc)
-			basePtr = alloc
-		}
-
-		zero := constant.NewInt(types.I32, 0)
-		for i, field := range structType.Fields {
-			if field.Type.IsReferenceType() || c.isCompositeType(field.Type) {
-				idx := constant.NewInt(types.I32, int64(i))
-				fieldPtr := c.currentBlock.NewGetElementPtr(structLLVMType, basePtr, zero, idx)
-
-				fieldCG := CGValue{
-					V:         fieldPtr,
-					Type:      field.Type,
-					IsAddress: true,
-					IsHeap:    valCG.IsHeap,
-				}
-				c.untrackDeepFromRelease(fieldCG)
-			}
-		}
-	}
-
-	// Composite Case: Arrays
-	if arrType, ok := valCG.Type.(sema.ArrayType); ok {
-		if arrType.Base.IsReferenceType() || c.isCompositeType(arrType.Base) {
-			arrLLVMType := c.llvmTypeFor(arrType)
-			var basePtr value.Value
-			if valCG.IsAddress {
-				basePtr = valCG.V
-			} else {
-				alloc := c.currentBlock.NewAlloca(arrLLVMType)
-				c.currentBlock.NewStore(valCG.V, alloc)
-				basePtr = alloc
-			}
-
-			for i := 0; i < arrType.Size; i++ {
-				idx := constant.NewInt(types.I32, int64(i))
-				elemPtr := c.currentBlock.NewGetElementPtr(arrLLVMType, basePtr, constant.NewInt(types.I32, 0), idx)
-				elemCG := CGValue{
-					V:         elemPtr,
-					Type:      arrType.Base,
-					IsAddress: true,
-					IsHeap:    valCG.IsHeap,
-				}
-				c.untrackDeepFromRelease(elemCG)
-			}
-		}
-	}
-}
 
 func (c *Codegen) emitMemcpy(dst, src value.Value, size value.Value) {
 	if c.memcpyFunc == nil {

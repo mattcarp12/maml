@@ -2,7 +2,6 @@
 package sema
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
@@ -399,14 +398,14 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 			return &FunctionType{
 				Params:     []Type{vecTy.Base},
 				ParamModes: []ParamMode{ParamBorrow},
-				Return:     UnknownType{},
+				Return:     UnitType{},
 			}
 		case "push_own":
 			// push_own takes ownership of the element.
 			return &FunctionType{
 				Params:     []Type{vecTy.Base},
 				ParamModes: []ParamMode{ParamOwned},
-				Return:     UnknownType{},
+				Return:     UnitType{},
 			}
 		case "len":
 			return &FunctionType{
@@ -428,7 +427,7 @@ func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
 			return &FunctionType{
 				Params:     []Type{mapTy.Key, mapTy.Value},
 				ParamModes: []ParamMode{ParamBorrow, ParamBorrow},
-				Return:     UnknownType{},
+				Return:     UnitType{},
 			}
 		case "get":
 			// get takes the key by immutable borrow, returns the value type.
@@ -603,59 +602,38 @@ func mergeTypes(a, b Type) Type {
 		return a
 	}
 
-	// 2. Generic SumType Unification (Handles user SumTypes + our Option/Result factories)
+	// 2. Generic SumType Unification
 	stA, okA := a.(*SumType)
 	stB, okB := b.(*SumType)
 	if okA && okB {
-		// Extract the base names (e.g., "Option" from "Option<unknown>")
-		baseNameA := strings.Split(stA.Name, "<")[0]
-		baseNameB := strings.Split(stB.Name, "<")[0]
+		// Structurally verify they are the same base type with the same number of arguments
+		if stA.BaseName == stB.BaseName && len(stA.TypeArgs) == len(stB.TypeArgs) {
 
-		if baseNameA == baseNameB && len(stA.Variants) == len(stB.Variants) {
-			merged := &SumType{}
-
-			// Unify the inner fields of every variant
-			for i, va := range stA.Variants {
-				vb := stB.Variants[i]
-
-				// Structural safety check
-				if va.Name != vb.Name || len(va.Fields) != len(vb.Fields) {
-					return nil
+			// Unify the generic type arguments
+			mergedArgs := make([]Type, len(stA.TypeArgs))
+			for i := range stA.TypeArgs {
+				mergedArg := mergeTypes(stA.TypeArgs[i], stB.TypeArgs[i])
+				if mergedArg == nil {
+					return nil // Type arguments are incompatible
 				}
-
-				mergedVariant := SumVariant{Name: va.Name, Discriminant: va.Discriminant}
-				for j, fa := range va.Fields {
-					fb := vb.Fields[j]
-
-					mergedField := mergeTypes(fa.Type, fb.Type)
-					if mergedField == nil {
-						return nil // Incompatible inner fields
-					}
-
-					mergedVariant.Fields = append(mergedVariant.Fields, StructField{
-						Name: fa.Name,
-						Type: mergedField,
-					})
-				}
-				merged.Variants = append(merged.Variants, mergedVariant)
+				mergedArgs[i] = mergedArg
 			}
 
-			// Dynamically reconstruct the name to accurately reflect the newly unified inner types.
-			if baseNameA == "Option" {
-				innerType := merged.GetVariant("Some").Fields[0].Type
-				merged.Name = fmt.Sprintf("Option<%s>", innerType.String())
-			} else if baseNameA == "Result" {
-				okType := merged.GetVariant("Ok").Fields[0].Type
-				errType := merged.GetVariant("Err").Fields[0].Type
-				merged.Name = fmt.Sprintf("Result<%s, %s>", okType.String(), errType.String())
-			} else {
-				// Fallback for user-defined Sum Types
-				if strings.Contains(stA.Name, "unknown") && !strings.Contains(stB.Name, "unknown") {
-					merged.Name = stB.Name
-				} else {
-					merged.Name = stA.Name
-				}
+			// If it's a built-in generic, use the unified arguments to regenerate the type
+			switch stA.BaseName {
+			case "Option":
+				return NewOptionType(mergedArgs[0])
+			case "Result":
+				return NewResultType(mergedArgs[0], mergedArgs[1])
 			}
+
+			// For user-defined SumTypes, return a merged copy
+			merged := &SumType{
+				BaseName: stA.BaseName,
+				TypeArgs: mergedArgs,
+			}
+
+			// ... (keep your existing loop that unifies stA.Variants and stB.Variants here) ...
 
 			return merged
 		}

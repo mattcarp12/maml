@@ -52,6 +52,10 @@ func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
 		a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
 		return false
 	}
+	if exprType.Equals(UnitType{}) {
+		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
+		return false
+	}
 
 	a.scope.symbols[s.Name] = &Symbol{
 		Kind:    VarSymbol,
@@ -66,6 +70,10 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 	lvalType := a.analyzeExpr(s.LValue)
 	rvalType := a.analyzeExpr(s.RValue)
 
+	if rvalType.Equals(UnitType{}) {
+		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
+		return false
+	}
 	if !lvalType.Equals(UnknownType{}) && !rvalType.Equals(UnknownType{}) && !lvalType.Equals(rvalType) {
 		a.errorf(s.Pos(), "type mismatch: cannot assign '%s' to '%s'",
 			rvalType.String(), lvalType.String())
@@ -88,18 +96,27 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 }
 
 func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) bool {
-	retType := a.analyzeExpr(s.Value)
+	var retType Type
 
+	// 1. Handle bare 'return' statements
+	if s.Value == nil {
+		retType = UnitType{}
+	} else {
+		retType = a.analyzeExpr(s.Value)
+	}
+
+	// 2. Type-check against the expected return type
 	if a.expectedReturn != nil && !a.expectedReturn.Equals(UnknownType{}) {
 		if !retType.Equals(a.expectedReturn) && !retType.Equals(UnknownType{}) {
 			a.errorf(s.Pos(), "type mismatch: expected return type '%s', got '%s'",
 				a.expectedReturn.String(), retType.String())
-		} else {
+		} else if s.Value != nil {
 			// Back-propagate the expected return type down to the returned expression
 			// so codegen pads generic variants correctly.
 			a.propagateType(s.Value, a.expectedReturn)
 		}
 	}
+
 	return true
 }
 

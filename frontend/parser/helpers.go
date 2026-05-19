@@ -195,3 +195,25 @@ func isNilDecl(d ast.Decl) bool {
 		return false
 	}
 }
+
+// parseCommaSeparatedList handles the boilerplate of parsing a comma-separated
+// list of items until it hits the `end` token. The `parseElem` callback
+// contains the logic to parse a single element and append it to the caller's list.
+func (p *Parser) parseCommaSeparatedList(end token.TokenType, parseElem func()) bool {
+	if p.peekToken.Type == end {
+		p.nextToken()
+		return true
+	}
+
+	p.nextToken()
+	parseElem()
+
+	for p.peekToken.Type == token.COMMA {
+		p.nextToken()
+		p.nextToken()
+		parseElem()
+	}
+
+	// Returns true if it found the end token, false otherwise
+	return p.expectPeek(end) 
+}

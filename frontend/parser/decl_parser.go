@@ -113,26 +113,12 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 func (p *Parser) parseFnParams() []ast.Param {
 	var params []ast.Param
 
-	// Case 1: Empty parameters `()`
-	// curToken is '('. If the NEXT token is ')', we are empty.
-	if p.peekToken.Type == token.RPAREN {
-		p.nextToken() // step onto ')'
-		return params
-	}
-
-	// Case 2: At least one parameter
-	p.nextToken() // step onto the first parameter's name
-	params = append(params, p.parseParam())
-
-	// While the NEXT token is a comma...
-	for p.peekToken.Type == token.COMMA {
-		p.nextToken() // step onto ','
-		p.nextToken() // step onto the next parameter's name
+	success := p.parseCommaSeparatedList(token.RPAREN, func() {
 		params = append(params, p.parseParam())
-	}
+	})
 
-	// Ensure we close with ')'
-	if !p.expectPeek(token.RPAREN) {
+	// If we didn't find the closing ')', bail out so error recovery can take over!
+	if !success {
 		return nil
 	}
 

@@ -31,7 +31,7 @@ func (t BoolType) IsReferenceType() bool  { return false }
 func (t BoolType) SizeInBytes() int       { return 1 } // 1 byte is enough for a bool
 func (t BoolType) Alignment() int         { return 1 }
 
-// --- STRING ///
+// --- STRING ---
 type StringType struct{}
 
 func (t StringType) String() string         { return "string" }
@@ -39,6 +39,15 @@ func (t StringType) Equals(other Type) bool { _, ok := other.(StringType); retur
 func (t StringType) IsReferenceType() bool  { return true }
 func (t StringType) SizeInBytes() int       { return 16 } // e.g., 8 bytes for pointer, 8 for length
 func (t StringType) Alignment() int         { return 8 }  // Largest field is a pointer (8)
+
+// --- UNIT ---
+type UnitType struct{}
+
+func (t UnitType) String() string         { return "unit" }
+func (t UnitType) Equals(other Type) bool { _, ok := other.(UnitType); return ok }
+func (t UnitType) IsReferenceType() bool  { return false }
+func (t UnitType) SizeInBytes() int       { return 0 } // Takes up 0 memory!
+func (t UnitType) Alignment() int         { return 1 }
 
 // --- STRUCT ---
 // Structs are generally value types (allocated on the stack/inline) unless explicitly boxed.
@@ -176,18 +185,11 @@ func (t MapType) Alignment() int        { return 8 }
 // --- OPTION ---
 func NewOptionType(base Type) *SumType {
 	return &SumType{
-		Name: fmt.Sprintf("Option<%s>", base.String()),
+		BaseName: "Option",
+		TypeArgs: []Type{base},
 		Variants: []SumVariant{
-			{
-				Name:         "Some",
-				Discriminant: 0,
-				Fields:       []StructField{{Name: "value", Type: base}},
-			},
-			{
-				Name:         "None",
-				Discriminant: 1,
-				Fields:       []StructField{}, // Empty for unit variant
-			},
+			{Name: "Some", Discriminant: 0, Fields: []StructField{{Name: "value", Type: base}}},
+			{Name: "None", Discriminant: 1, Fields: []StructField{}},
 		},
 	}
 }
@@ -195,18 +197,11 @@ func NewOptionType(base Type) *SumType {
 // --- RESULT ---
 func NewResultType(value Type, err Type) *SumType {
 	return &SumType{
-		Name: fmt.Sprintf("Result<%s, %s>", value.String(), err.String()),
+		BaseName: "Result",
+		TypeArgs: []Type{value, err},
 		Variants: []SumVariant{
-			{
-				Name:         "Ok",
-				Discriminant: 0,
-				Fields:       []StructField{{Name: "value", Type: value}},
-			},
-			{
-				Name:         "Err",
-				Discriminant: 1,
-				Fields:       []StructField{{Name: "error", Type: err}},
-			},
+			{Name: "Ok", Discriminant: 0, Fields: []StructField{{Name: "value", Type: value}}},
+			{Name: "Err", Discriminant: 1, Fields: []StructField{{Name: "error", Type: err}}},
 		},
 	}
 }
@@ -235,15 +230,36 @@ func (v SumVariant) PayloadSize() int {
 	return size
 }
 
+// --- SumType ---
 type SumType struct {
-	Name     string
+	BaseName string // e.g., "Option", "Result", or user-defined "MyEnum"
+	TypeArgs []Type // e.g., [IntType{}], or empty for non-generics
 	Variants []SumVariant
 }
 
-func (t *SumType) String() string { return t.Name }
+func (t *SumType) String() string {
+	if len(t.TypeArgs) == 0 {
+		return t.BaseName
+	}
+	var args []string
+	for _, arg := range t.TypeArgs {
+		args = append(args, arg.String())
+	}
+	return fmt.Sprintf("%s<%s>", t.BaseName, strings.Join(args, ", "))
+}
+
 func (t *SumType) Equals(other Type) bool {
 	o, ok := other.(*SumType)
-	return ok && t.Name == o.Name
+	if !ok || t.BaseName != o.BaseName || len(t.TypeArgs) != len(o.TypeArgs) {
+		return false
+	}
+	// Structurally compare the generic type arguments
+	for i := range t.TypeArgs {
+		if !t.TypeArgs[i].Equals(o.TypeArgs[i]) {
+			return false
+		}
+	}
+	return true
 }
 func (t *SumType) IsReferenceType() bool { return false }
 func (t *SumType) Alignment() int        { return 4 } // discriminant is i32

@@ -23,7 +23,7 @@ func analyzeEscape(t *testing.T, input string) (*ast.Program, map[ast.Node]Escap
 	}
 
 	semaAnalyzer := sema.New()
-	errors, typeMap := semaAnalyzer.Analyze(program)
+	typeMap, errors := semaAnalyzer.Analyze(program)
 	if len(errors) > 0 {
 		var errMsgs []string
 		for _, e := range errors {
@@ -410,7 +410,7 @@ func TestEscapeEdgeCases(t *testing.T) {
 		{"empty function", `fn main() int {return 0}`},
 		{"return primitive", `fn main() int { return 42 }`},
 		{"call with owned non-reference", `
-			fn consume(own x int) {return 0}
+			fn consume(own x int) {return}
 			fn main() int { mut x := 10; consume(own x); return 0 }`},
 		{"struct with only primitives", `
 			type Point = { x int }

@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/codegen"
 	"github.com/mattcarp12/maml/frontend/escape"
 	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/ownership"
@@ -69,7 +68,7 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 
 	semaAnalyzer := sema.New()
 
-	semaErrors, typeMap := semaAnalyzer.Analyze(program)
+	typeMap, semaErrors := semaAnalyzer.Analyze(program)
 	if len(semaErrors) > 0 {
 		return nil, semaErrors[0]
 	}
@@ -107,34 +106,6 @@ func (c *Compiler) CompileFile(path string) (*FrontendResult, error) {
 	}
 
 	return c.Frontend(string(content))
-}
-
-// -----------------------------------------------------------------------------
-// TEMPORARY LEGACY GO LLVM BACKEND
-// -----------------------------------------------------------------------------
-//
-// This entire section disappears after the C++ backend is complete.
-//
-// Keeping it isolated makes removal easy later.
-// -----------------------------------------------------------------------------
-
-func (c *Compiler) GenerateLLVMIR(src string) (string, error) {
-	frontendResult, err := c.Frontend(src)
-	if err != nil {
-		return "", err
-	}
-
-	cg := codegen.New()
-
-	if err := cg.Generate(
-		frontendResult.Program,
-		frontendResult.TypeMap,
-		frontendResult.EscapeMap,
-	); err != nil {
-		return "", fmt.Errorf("codegen generation failed: %w", err)
-	}
-
-	return cg.String(), nil
 }
 
 // EmitHIR serializes the typed frontend representation into JSON.

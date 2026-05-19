@@ -225,29 +225,27 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 	return callExpr
 }
 
-// Add this function to handle CallArgs specifically
+// parseExpressionList reads a comma-separated list of generic expressions.
+func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
+	var list []ast.Expr
+
+	p.parseCommaSeparatedList(end, func() {
+		if elem := p.parseExpression(LOWEST); elem != nil {
+			list = append(list, elem)
+		}
+	})
+
+	return list
+}
+
+// parseCallArguments reads a comma-separated list of function arguments,
+// preserving 'mut' and 'own' modifiers.
 func (p *Parser) parseCallArguments(end token.TokenType) []ast.CallArg {
 	var args []ast.CallArg
 
-	// Empty list, e.g. `add()`
-	if p.peekToken.Type == end {
-		p.nextToken()
-		return args
-	}
-
-	// At least one element
-	p.nextToken()
-	args = append(args, p.parseCallArg())
-
-	for p.peekToken.Type == token.COMMA {
-		p.nextToken() // onto ','
-		p.nextToken() // onto start of next arg
+	p.parseCommaSeparatedList(end, func() {
 		args = append(args, p.parseCallArg())
-	}
-
-	if !p.expectPeek(end) {
-		return args
-	}
+	})
 
 	return args
 }
@@ -272,43 +270,6 @@ func (p *Parser) parseCallArg() ast.CallArg {
 	return arg
 }
 
-// parseExpressionList reads a comma-separated list of expressions until it
-// hits `end`. On a missing-close-token error it returns whatever elements
-// were successfully parsed (instead of nil) so that callers can still
-// inspect the partial result — useful for error recovery and for reporting
-// the right number of arguments in a type-checker error message.
-func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
-	var list []ast.Expr
-
-	// Empty list, e.g. `add()`
-	if p.peekToken.Type == end {
-		p.nextToken()
-		return list
-	}
-
-	// At least one element
-	p.nextToken()
-	if elem := p.parseExpression(LOWEST); elem != nil {
-		list = append(list, elem)
-	}
-
-	for p.peekToken.Type == token.COMMA {
-		p.nextToken() // onto ','
-		p.nextToken() // onto next element
-		if elem := p.parseExpression(LOWEST); elem != nil {
-			list = append(list, elem)
-		}
-	}
-
-	// Require the closing token. On failure we still return the partial
-	// list rather than nil so callers have useful partial information.
-	if !p.expectPeek(end) {
-		return list
-	}
-
-	return list
-}
-
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 	leftIdent, ok := left.(*ast.Identifier)
 	if !ok {
@@ -324,37 +285,16 @@ func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 		Pos_: leftIdent.Pos(),
 	}
 
-	// Empty struct: Point{}
-	if p.peekToken.Type == token.RBRACE {
-		p.nextToken()
-		sl.End_ = p.curPos()
-		return sl
-	}
+	success := p.parseCommaSeparatedList(token.RBRACE, func() {
+		if field := p.parseStructField(); field != nil {
+			sl.Fields = append(sl.Fields, *field)
+		}
+	})
 
-	p.nextToken() // step onto first field name
-
-	field := p.parseStructField()
-	if field == nil {
+	if !success {
 		return nil
 	}
-	sl.Fields = append(sl.Fields, *field)
 
-	for p.peekToken.Type == token.COMMA {
-		p.nextToken() // onto ','
-		p.nextToken() // onto next field name
-		field = p.parseStructField()
-		if field == nil {
-			return nil
-		}
-		sl.Fields = append(sl.Fields, *field)
-	}
-
-	if !p.expectPeek(token.RBRACE) {
-		if p.curToken.Type == token.EOF || p.peekToken.Type == token.EOF {
-			p.addError("expected '}' to close struct literal, got EOF")
-		}
-		return nil
-	}
 	sl.End_ = p.curPos()
 	return sl
 }

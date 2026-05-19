@@ -370,7 +370,7 @@ func TestAnalyzer_Analyze(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			analyzer := New()
-			errors, _ := analyzer.Analyze(tt.program)
+			_, errors := analyzer.Analyze(tt.program)
 
 			if tt.wantErrors == nil {
 				require.Empty(t, errors, "expected no errors")
@@ -419,7 +419,7 @@ func TestAnalyzer_ResolveAstType(t *testing.T) {
 
 // analyzeInput parses the input and runs semantic analysis.
 // It now returns both the errors and the resolved TypeMap.
-func analyzeInput(t *testing.T, input string) ([]ast.CompileError, map[ast.Node]Type) {
+func analyzeInput(t *testing.T, input string) (map[ast.Node]Type, []ast.CompileError) {
 	l := lexer.New(input)
 	p := parser.New(l)
 	program := p.ParseProgram()
@@ -486,7 +486,7 @@ func TestValidPrograms(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, typeMap := analyzeInput(t, tt.input)
+			typeMap, errors := analyzeInput(t, tt.input)
 			assert.Empty(t, errors, "expected no semantic errors")
 			assert.NotEmpty(t, typeMap, "TypeMap should be populated for valid programs")
 		})
@@ -530,7 +530,7 @@ func TestReturnPathEnforcement(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -579,7 +579,7 @@ func TestStructAndFieldValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
 			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
@@ -606,7 +606,7 @@ func TestVariableShadowing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
 			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
@@ -636,7 +636,7 @@ func TestUndefinedVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
 			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
@@ -681,7 +681,7 @@ func TestTypeMismatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			require.NotEmpty(t, errors)
 			assert.Contains(t, errors[0].Msg, tt.expectedErr)
 		})
@@ -763,7 +763,7 @@ func TestArrayLiteralSemanticAnalysis(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, typeMap := analyzeInput(t, tt.input)
+			typeMap, errors := analyzeInput(t, tt.input)
 
 			if tt.expectedErr != "" {
 				require.NotEmpty(t, errors)
@@ -882,7 +882,7 @@ func TestIndexExpressionSemanticAnalysis(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, typeMap := analyzeInput(t, tt.input)
+			typeMap, errors := analyzeInput(t, tt.input)
 
 			if tt.expectedErr != "" {
 				require.NotEmpty(t, errors)
@@ -962,7 +962,7 @@ func TestArrayAndIndexIntegration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, typeMap := analyzeInput(t, tt.input)
+			typeMap, errors := analyzeInput(t, tt.input)
 
 			assert.Empty(t, errors)
 			assert.NotEmpty(t, typeMap)
@@ -1035,7 +1035,7 @@ func TestForStatements(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1113,7 +1113,7 @@ func TestSliceExpressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1188,7 +1188,7 @@ func TestReturnPathAnalysis(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1296,7 +1296,7 @@ func TestAssignment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors, "expected no errors for valid case")
@@ -1380,7 +1380,7 @@ func TestSumTypeDeclaration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1533,7 +1533,7 @@ func TestVariantConstruction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1868,7 +1868,7 @@ func TestMatchExprOnSumType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors, "expected no errors")
 			} else {
@@ -1953,7 +1953,7 @@ func TestMatchExprOnBuiltinTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -1976,19 +1976,19 @@ func TestGenericTypes(t *testing.T) {
 		input       string
 		expectedErr string
 	}{
-		{`fn main() { x := Vec<int>(); return 0 }`, ""},
-		{`fn main() { x := Map<string, int>(); return 0 }`, ""},
-		{`fn main() { x := Option<int>(); return 0 }`, ""},
-		{`fn main() { x := Result<int, string>(); return 0 }`, ""},
-		{`fn main() { x := Vec<Vec<int>>(); return 0 }`, ""},
-		{`fn main() { x := Map<int, bool>(); return 0 }`, ""},
+		{`fn main() int { x := Vec<int>(); return 0 }`, ""},
+		{`fn main() int { x := Map<string, int>(); return 0 }`, ""},
+		{`fn main() int { x := Option<int>(); return 0 }`, ""},
+		{`fn main() int { x := Result<int, string>(); return 0 }`, ""},
+		{`fn main() int { x := Vec<Vec<int>>(); return 0 }`, ""},
+		{`fn main() int { x := Map<int, bool>(); return 0 }`, ""},
 		// Error cases
-		{`fn main() { x := Map<int>() }`, "expects exactly 2 type arguments"},
+		{`fn main() int { x := Map<int>(); return 0 }`, "expects exactly 2 type arguments"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -2007,30 +2007,30 @@ func TestSumTypeAndVariantConstructors(t *testing.T) {
 		{
 			input: `
 			type Result = | Ok { value int } | Err { msg string }
-			fn main() { return Ok{value: 42} }`,
+			fn main() Result { return Ok{value: 42} }`,
 		},
 		{
 			input: `
 			type Result = | Ok { value int } | Err { msg string }
-			fn main() { return Err{msg: "fail"} }`,
+			fn main() Result { return Err{msg: "fail"} }`,
 		},
 		{
 			input: `
 			type Result = | Ok { value int } | Err { msg string }
-			fn main() { return Ok{value: "bad"} }`,
+			fn main() Result { return Ok{value: "bad"} }`,
 			expectedErr: "type mismatch for field 'value'",
 		},
 		{
 			input: `
 			type Result = | Ok { value int } | Err { msg string }
-			fn main() { return Ok{} }`,
+			fn main() Result { return Ok{} }`,
 			expectedErr: "missing field 'value'",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -2099,7 +2099,7 @@ func TestMatchExpressionComprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errors, _ := analyzeInput(t, tt.input)
+			_, errors := analyzeInput(t, tt.input)
 			if tt.expectedErr == "" {
 				assert.Empty(t, errors)
 			} else {
@@ -2128,6 +2128,148 @@ func TestSemaErrorPaths(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			errors, _ := analyzeInput(t, input)
 			require.NotEmpty(t, errors)
+		})
+	}
+}
+
+func TestUnitTypeSemantics(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "implicit unit return with bare return is valid",
+			input: `
+			fn do_nothing() {
+				return
+			}
+			fn main() int { return 0 }`,
+			expectedErr: "",
+		},
+		{
+			name: "explicit unit return with bare return is valid",
+			input: `
+			fn do_nothing() unit {
+				return
+			}
+			fn main() int { return 0 }`,
+			expectedErr: "",
+		},
+		{
+			name: "missing return in implicit unit function is valid",
+			input: `
+			fn do_nothing() {
+				x := 5
+			}
+			fn main() int { return 0 }`,
+			expectedErr: "",
+		},
+		{
+			name: "error: returning value from unit function",
+			input: `
+			fn do_nothing() unit {
+				return 5
+			}`,
+			expectedErr: "type mismatch: expected return type 'unit', got 'int'",
+		},
+		{
+			name: "error: returning bare return from int function",
+			input: `
+			fn get_int() int {
+				return
+			}`,
+			expectedErr: "type mismatch: expected return type 'int', got 'unit'",
+		},
+		{
+			name: "error: assigning unit to variable (declare)",
+			input: `
+			fn do_nothing() {}
+			fn main() int {
+				x := do_nothing()
+				return 0
+			}`,
+			expectedErr: "cannot assign the result of a function that returns 'unit'",
+		},
+		{
+			name: "error: assigning unit to variable (assign)",
+			input: `
+			fn do_nothing() {}
+			fn main() int {
+				mut x := 10
+				x = do_nothing()
+				return x
+			}`,
+			expectedErr: "cannot assign the result of a function that returns 'unit'",
+		},
+		{
+			name: "built-in vec.push returns unit (cannot assign)",
+			input: `
+			fn main() int {
+				v := Vec<int>()
+				x := v.push(5)
+				return 0
+			}`,
+			expectedErr: "cannot assign the result of a function that returns 'unit'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errors := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
+		})
+	}
+}
+
+func TestTaskTypeAndStructuralGenerics(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		expectedErr string
+	}{
+		{
+			name: "explicit Task parameter parses and typechecks",
+			input: `
+			fn await_all(t1 Task<int>, t2 Task<int>) {}
+			fn main() int { return 0 }`,
+			expectedErr: "",
+		},
+		{
+			name: "Task requires exactly 1 type argument",
+			input: `
+			fn broken(t Task<int, string>) {}
+			fn main() int { return 0 }`,
+			expectedErr: "Task expects exactly 1 type argument",
+		},
+		{
+			name: "Task type mismatch",
+			input: `
+			fn process(t Task<int>) {}
+			async fn get_string() string { return "hello" }
+			
+			fn main() int {
+				process(get_string())
+				return 0
+			}`,
+			expectedErr: "argument 0 type mismatch: expected 'Task<int>', got 'Task<string>'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errors := analyzeInput(t, tt.input)
+			if tt.expectedErr == "" {
+				assert.Empty(t, errors)
+			} else {
+				require.NotEmpty(t, errors)
+				assert.Contains(t, errors[0].Msg, tt.expectedErr)
+			}
 		})
 	}
 }

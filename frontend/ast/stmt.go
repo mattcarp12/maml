@@ -22,7 +22,9 @@ func (b *BlockStmt) String() string {
 	var out bytes.Buffer
 	out.WriteString("{\n")
 	for _, s := range b.Statements {
-		out.WriteString("\t" + s.String() + "\n")
+		out.WriteString("\t")
+		out.WriteString(s.String())
+		out.WriteString("\n")
 	}
 	out.WriteString("}")
 	return out.String()

@@ -28,7 +28,13 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 			paramModes[i] = ParamBorrow
 		}
 	}
-	retType := a.resolveAstType(v.ReturnType)
+
+	var retType Type
+	if v.ReturnType != nil {
+		retType = a.resolveAstType(v.ReturnType)
+	} else {
+		retType = UnitType{}
+	}
 
 	// NEW: If the function is async, it returns a Task<T>, not T.
 	if v.IsAsync {
@@ -52,7 +58,7 @@ func (a *Analyzer) analyzeFunctionBodies(program *ast.Program) {
 }
 
 func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
-	// NEW: Set the current function context
+	// Set the current function context
 	a.currentFn = v
 	defer func() { a.currentFn = nil }()
 
@@ -63,8 +69,6 @@ func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
 		switch {
 		case param.Own:
 			mode = ParamOwned
-			// Inside the function, an owned parameter is mutable —
-			// the callee has full ownership and may do anything with it.
 			mutable = true
 		case param.Mut:
 			mode = ParamMutBorrow
@@ -82,11 +86,18 @@ func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
 		}
 	}
 
-	a.expectedReturn = a.resolveAstType(v.ReturnType)
+	// FIX 1: Apply UnitType{} fallback here just like in registerFunction
+	if v.ReturnType != nil {
+		a.expectedReturn = a.resolveAstType(v.ReturnType)
+	} else {
+		a.expectedReturn = UnitType{}
+	}
 	defer func() { a.expectedReturn = nil }()
 
 	alwaysReturns := a.analyzeBlockStmt(v.Body)
-	if !alwaysReturns {
+
+	// FIX 2: Functions returning unit do NOT require a return statement
+	if !alwaysReturns && !a.expectedReturn.Equals(UnitType{}) && !a.expectedReturn.Equals(UnknownType{}) {
 		a.errorf(v.Pos(), "function '%s' is missing a return statement", v.Name)
 	}
 }

@@ -11,9 +11,9 @@ const (
 	LESSGREATER // > or < or >= or <=
 	SUM         // + or -
 	PRODUCT     // * or / or %
-	INDEX       // array[index]
+	PREFIX      // -X, !X, or await X  <-- Move this down!
 	CALL        // fn() or struct literal or field access
-	PREFIX      // -X or !X
+	INDEX       // array[index]
 )
 
 var precedences = map[token.TokenType]int{

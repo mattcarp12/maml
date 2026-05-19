@@ -14,7 +14,7 @@ func (a *Analyzer) discoverTypes(program *ast.Program) {
 			case *ast.ProductType:
 				a.scope.types[td.Name.Name] = &StructType{Name: td.Name.Name}
 			case *ast.SumType:
-				a.scope.types[td.Name.Name] = &SumType{Name: td.Name.Name}
+				a.scope.types[td.Name.Name] = &SumType{BaseName: td.Name.Name}
 			}
 		}
 	}
@@ -87,6 +87,8 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 			resolvedType = BoolType{}
 		case "string":
 			resolvedType = StringType{}
+		case "unit":
+			resolvedType = UnitType{}
 		default:
 			if found := a.lookupCustomType(t.Name); found != nil {
 				resolvedType = found
@@ -150,6 +152,14 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 			val := a.resolveAstType(t.Params[0])
 			err := a.resolveAstType(t.Params[1])
 			resolvedType = NewResultType(val, err)
+
+		case "Task":
+			if len(t.Params) != 1 {
+				a.errorf(t.Pos(), "Task expects exactly 1 type argument, got %d", len(t.Params))
+				return UnknownType{}
+			}
+			base := a.resolveAstType(t.Params[0])
+			resolvedType = TaskType{Base: base}
 
 		default:
 			if found := a.lookupCustomType(t.Name); found != nil {

@@ -25,12 +25,12 @@ func New() *Analyzer {
 	}
 }
 
-func (a *Analyzer) Analyze(program *ast.Program) ([]ast.CompileError, map[ast.Node]Type) {
+func (a *Analyzer) Analyze(program *ast.Program) (map[ast.Node]Type, []ast.CompileError) {
 	a.discoverTypes(program)
 	a.resolveTypeBodies(program)
 	a.registerFunctions(program)
 	a.analyzeFunctionBodies(program)
-	return a.errors, a.TypeMap
+	return a.TypeMap, a.errors
 }
 
 func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {

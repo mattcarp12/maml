@@ -116,6 +116,16 @@ func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 	pos := p.curPos()
 
+	// Check if the NEXT token is a terminator BEFORE stepping off 'return'.
+	// This correctly handles bare returns while leaving the token stream perfectly aligned.
+	if p.peekToken.Type == token.NEWLINE || p.peekToken.Type == token.SEMICOLON || p.peekToken.Type == token.RBRACE || p.peekToken.Type == token.EOF {
+		p.expectStatementEnd() // Consumes NEWLINE/SEMICOLON, or does nothing for RBRACE
+		return &ast.ReturnStmt{
+			Value: nil,
+			Pos_:  pos,
+		}
+	}
+
 	p.nextToken() // skip 'return'
 
 	value := p.parseExpression(LOWEST)
@@ -123,7 +133,6 @@ func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 		return nil
 	}
 
-	// Consume the newline terminating this statement
 	p.expectStatementEnd()
 
 	return &ast.ReturnStmt{
