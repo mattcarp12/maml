@@ -32,8 +32,6 @@ func (p *Parser) ParseProgram() *ast.Program {
 			continue
 		}
 
-		// p.nextToken()
-
 		// Only advance if we're not already positioned at a decl keyword.
 		// parseSumType (and similar) may leave curToken on 'fn'/'type'.
 		if p.curToken.Type != token.FN && p.curToken.Type != token.TYPE && p.curToken.Type != token.ASYNC {
@@ -59,7 +57,7 @@ func (p *Parser) parseDecl() ast.Decl {
 			"found %+v. only function and type declarations are supported at the top level",
 			p.curToken,
 		)
-		p.AddError(err)
+		p.addError(err)
 		return nil
 	}
 }
@@ -157,7 +155,7 @@ func (p *Parser) parseParam() ast.Param {
 
 	// We expect the token to now sit on the parameter Name (e.g., 'x')
 	if p.curToken.Type != token.IDENT {
-		p.AddError(fmt.Sprintf("expected parameter name, got %s", p.curToken.Type))
+		p.addError(fmt.Sprintf("expected parameter name, got %s", p.curToken.Type))
 		return param
 	}
 	param.Name = p.curToken.Literal
@@ -189,7 +187,7 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	case token.SEPARATOR: // '|'
 		td.Rhs = p.parseSumType()
 	default:
-		p.AddError(fmt.Sprintf("expected '{' or '|' in type declaration, got %s", p.curToken.Type))
+		p.addError(fmt.Sprintf("expected '{' or '|' in type declaration, got %s", p.curToken.Type))
 		return nil
 	}
 
@@ -269,9 +267,9 @@ func (p *Parser) parseProductType() *ast.ProductType {
 	// Ensure we close with '}'
 	if p.curToken.Type != token.RBRACE {
 		if p.curToken.Type == token.EOF {
-			p.AddError("expected '}' to close type definition, got EOF")
+			p.addError("expected '}' to close type definition, got EOF")
 		} else {
-			p.AddError(fmt.Sprintf(
+			p.addError(fmt.Sprintf(
 				"expected '}' to close type definition, got %s at line %d",
 				p.curToken.Type, p.curToken.Line,
 			))
@@ -349,6 +347,6 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		}
 	}
 
-	p.AddError(fmt.Sprintf("expected a type, got %s", p.peekToken.Type))
+	p.addError(fmt.Sprintf("expected a type, got %s", p.peekToken.Type))
 	return nil
 }

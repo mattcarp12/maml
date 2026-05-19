@@ -1,0 +1,4 @@
+SYNTAX
+- Make commas in struct definitions optional
+- Make field names in struct literals optional
+

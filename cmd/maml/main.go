@@ -1,17 +1,13 @@
-// cmd/maml/main.go
 package main
 
 import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
-	"github.com/mattcarp12/maml/frontend"
+	"github.com/mattcarp12/maml/toolchain"
 )
-
-const runtimeLibPath = "./runtime/zig-out/lib/libmamlrt.a"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -19,17 +15,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	subcommand := os.Args[1]
+	d := toolchain.New()
 
-	switch subcommand {
+	switch os.Args[1] {
 	case "build":
-		buildCmd(os.Args[2:])
+		buildCmd(d, os.Args[2:])
+
 	case "run":
-		runCmd(os.Args[2:])
+		runCmd(d, os.Args[2:])
+
 	case "check":
-		checkCmd(os.Args[2:])
+		checkCmd(d, os.Args[2:])
+
 	default:
-		fmt.Printf("Unknown command: %s\n", subcommand)
+		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
 		os.Exit(1)
 	}
@@ -38,100 +37,74 @@ func main() {
 func printUsage() {
 	fmt.Println("MAML Compiler")
 	fmt.Println("Usage: maml <command> [options] <file>")
-	fmt.Println("\nCommands:")
+	fmt.Println()
+	fmt.Println("Commands:")
 	fmt.Println("  build   Compile a .maml file into a native executable")
 	fmt.Println("  run     Compile and immediately run a .maml file")
-	fmt.Println("  check   Run syntax and semantic checks without compiling")
+	fmt.Println("  check   Run syntax and semantic checks")
 }
 
-func buildCmd(args []string) {
+func buildCmd(d *toolchain.Driver, args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
+
 	out := fs.String("out", "maml_app", "Output executable name")
 	printIR := fs.Bool("printir", false, "Print LLVM IR")
+
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Println("Usage: maml build [options] <file.maml>")
 		os.Exit(1)
 	}
+
 	file := fs.Arg(0)
 
-	llvmIR := runCompilerCore(file, *printIR)
-	if err := frontend.InvokeClang(llvmIR, *out, runtimeLibPath); err != nil {
+	if err := d.Build(file, *out, *printIR); err != nil {
 		fmt.Printf("❌ %v\n", err)
 		os.Exit(1)
 	}
 
 	absPath, _ := filepath.Abs(*out)
+
 	fmt.Printf("✅ Build successful: %s\n", absPath)
 }
 
-func runCmd(args []string) {
+func runCmd(d *toolchain.Driver, args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
+
 	printIR := fs.Bool("printir", false, "Print LLVM IR")
+
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Println("Usage: maml run [options] <file.maml>")
 		os.Exit(1)
 	}
+
 	file := fs.Arg(0)
 
-	llvmIR := runCompilerCore(file, *printIR)
-
-	outName := filepath.Join(os.TempDir(), "maml_run_tmp")
-	if err := frontend.InvokeClang(llvmIR, outName, runtimeLibPath); err != nil {
+	if err := d.Run(file, *printIR); err != nil {
 		fmt.Printf("❌ %v\n", err)
 		os.Exit(1)
 	}
-	defer os.Remove(outName)
-
-	executeBinary(outName)
 }
 
-func checkCmd(args []string) {
+func checkCmd(d *toolchain.Driver, args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
+
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
 		fmt.Println("Usage: maml check <file.maml>")
 		os.Exit(1)
 	}
+
 	file := fs.Arg(0)
 
-	c := frontend.New()
-	_, err := c.CompileFile(file)
-	if err != nil {
+	if err := d.Check(file); err != nil {
 		fmt.Printf("❌ Check failed:\n%s\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✅ Check passed: No syntax, semantic, or ownership errors.")
-}
 
-func runCompilerCore(file string, printIR bool) string {
-	c := frontend.New()
-	llvmIR, err := c.CompileFile(file)
-	if err != nil {
-		fmt.Printf("❌ Compilation failed:\n%s\n", err)
-		os.Exit(1)
-	}
-
-	if printIR {
-		fmt.Println("=== Generated LLVM IR ===")
-		fmt.Println(llvmIR)
-	}
-	return llvmIR
-}
-
-func executeBinary(exeName string) {
-	cmd := exec.Command(exeName)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		fmt.Printf("\n[Process exited with status %d]\n", exitErr.ExitCode())
-	} else if err != nil {
-		fmt.Printf("\n[Execution error: %v]\n", err)
-	}
+	fmt.Println("✅ Check passed")
 }

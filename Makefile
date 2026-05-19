@@ -71,3 +71,6 @@ run: all
 	@echo "==> [Step 4] Executing Final Compiled Native Concurrent Binary:"
 	@echo "------------------------------------------------------------"
 	@$(BIN_DIR)/maml_app
+
+tree:
+	tree -I '.zig-cache|zig-*|test|build|bin'

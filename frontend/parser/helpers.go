@@ -16,7 +16,7 @@ type ParseError struct {
 	Col  int
 }
 
-func (e ParseError) String() string {
+func (e ParseError) string() string {
 	return fmt.Sprintf("[line %d, col %d] %s", e.Line, e.Col, e.Msg)
 }
 
@@ -34,7 +34,7 @@ func (p *Parser) curPos() ast.Position {
 func (p *Parser) Errors() []string {
 	out := make([]string, len(p.parseErrors))
 	for i, e := range p.parseErrors {
-		out[i] = e.String()
+		out[i] = e.string()
 	}
 	return out
 }
@@ -45,10 +45,10 @@ func (p *Parser) ParseErrors() []ParseError {
 	return p.parseErrors
 }
 
-// AddError records a new error at the current token's position.
+// addError records a new error at the current token's position.
 // Once maxErrors is reached no further errors are appended; a single
 // sentinel message is added so the caller knows the cap was hit.
-func (p *Parser) AddError(msg string) {
+func (p *Parser) addError(msg string) {
 	if len(p.parseErrors) >= p.maxErrors {
 		// Only add the sentinel once (exactly when we hit the cap).
 		if len(p.parseErrors) == p.maxErrors {
@@ -86,7 +86,7 @@ func (p *Parser) nextToken() {
 func (p *Parser) peekError(t token.TokenType) {
 	msg := fmt.Sprintf("expected next token to be %s, got %s instead at line %d, col %d",
 		t, p.peekToken.Type, p.peekToken.Line, p.peekToken.Col)
-	p.AddError(msg)
+	p.addError(msg)
 }
 
 func (p *Parser) expectPeek(t token.TokenType) bool {
@@ -172,7 +172,7 @@ func (p *Parser) expectStatementEnd() {
 		// construct — leave them in place for the caller to handle.
 		return
 	default:
-		p.AddError(fmt.Sprintf(
+		p.addError(fmt.Sprintf(
 			"expected end of statement, got %s at line %d, col %d",
 			p.peekToken.Type, p.peekToken.Line, p.peekToken.Col,
 		))

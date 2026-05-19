@@ -9,66 +9,94 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/frontend"
+	"github.com/mattcarp12/maml/toolchain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const testRuntimeLibPath = "../../runtime/zig-out/lib/libmamlrt.a"
-
 func TestEndToEnd(t *testing.T) {
 	matches, err := filepath.Glob("../programs/*/*.maml")
+
 	require.NoError(t, err)
-	require.NotEmpty(t, matches, "No .maml test files found!")
+	require.NotEmpty(t, matches)
+
+	d := toolchain.New()
 
 	for _, srcPath := range matches {
-		testName := strings.TrimSuffix(filepath.Base(srcPath), ".maml")
+		testName := strings.TrimSuffix(
+			filepath.Base(srcPath),
+			".maml",
+		)
+
 		dir := filepath.Dir(srcPath)
 
 		t.Run(testName, func(t *testing.T) {
-			expectedExit := readIntFile(filepath.Join(dir, testName+".exitcode.txt"), 0)
-			expectedOut := readFile(filepath.Join(dir, testName+".expected.txt"))
-			expectedErr := readFile(filepath.Join(dir, testName+".expected_err.txt"))
+			expectedExit := readIntFile(
+				filepath.Join(dir, testName+".exitcode.txt"),
+				0,
+			)
 
-			c := frontend.New()
-			// FIXED: Compiles directly via file tracking pipeline, running type and borrow checking safely
-			llvmIR, compileErr := c.CompileFile(srcPath)
+			expectedOut := readFile(
+				filepath.Join(dir, testName+".expected.txt"),
+			)
+
+			expectedErr := readFile(
+				filepath.Join(dir, testName+".expected_err.txt"),
+			)
+
+			// -----------------------------------------------------------------
+			// Build executable through the driver pipeline
+			// -----------------------------------------------------------------
+
+			binPath, compileErr := d.BuildTemporary(srcPath)
 
 			if expectedErr != "" {
-				require.Error(t, compileErr, "Expected a compilation error but got none")
-				assert.Contains(t, compileErr.Error(), strings.TrimSpace(expectedErr), "Compilation error did not match expected")
+				require.Error(t, compileErr)
+
+				assert.Contains(
+					t,
+					compileErr.Error(),
+					strings.TrimSpace(expectedErr),
+				)
+
 				return
 			}
 
-			require.NoError(t, compileErr, "Compilation failed unexpectedly")
+			require.NoError(t, compileErr)
 
-			actualExit, actualOut := buildAndRun(t, llvmIR, testName)
+			defer os.Remove(binPath)
 
-			assert.Equal(t, expectedExit, actualExit, "Exit code mismatch")
+			// -----------------------------------------------------------------
+			// Execute binary
+			// -----------------------------------------------------------------
+
+			actualExit, actualOut := runBinary(t, binPath)
+
+			assert.Equal(t, expectedExit, actualExit)
 
 			if expectedOut != "" {
-				assert.Equal(t, strings.TrimSpace(expectedOut), strings.TrimSpace(actualOut), "Stdout mismatch")
+				assert.Equal(
+					t,
+					strings.TrimSpace(expectedOut),
+					strings.TrimSpace(actualOut),
+				)
 			}
 		})
 	}
 }
 
-func buildAndRun(t *testing.T, llvmIR string, testName string) (int, string) {
-	binPath := filepath.Join(os.TempDir(), testName+".exe")
-
-	// Utilizes the shared compilation utility to prevent duplicate shell logic orchestration
-	err := frontend.InvokeClang(llvmIR, binPath, testRuntimeLibPath)
-	require.NoError(t, err, "Clang assembly step failed")
-	defer os.Remove(binPath)
-
+func runBinary(t *testing.T, binPath string) (int, string) {
 	var stdout bytes.Buffer
+
 	cmd := exec.Command(binPath)
+
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 
-	err = cmd.Run()
+	err := cmd.Run()
 
 	exitCode := 0
+
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	} else if err != nil {
@@ -83,17 +111,21 @@ func readFile(path string) string {
 	if err != nil {
 		return ""
 	}
+
 	return string(b)
 }
 
 func readIntFile(path string, defaultVal int) int {
 	str := readFile(path)
+
 	if str == "" {
 		return defaultVal
 	}
+
 	val, err := strconv.Atoi(strings.TrimSpace(str))
 	if err != nil {
 		return defaultVal
 	}
+
 	return val
 }

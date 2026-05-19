@@ -11,7 +11,7 @@ import (
 func (p *Parser) parseExpression(precedence int) ast.Expr {
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
-		p.AddError(fmt.Sprintf("no prefix parse function for %s found at line %d, col %d",
+		p.addError(fmt.Sprintf("no prefix parse function for %s found at line %d, col %d",
 			p.curToken.Type, p.curToken.Line, p.curToken.Col))
 		return nil
 	}
@@ -92,7 +92,7 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	lit := p.curToken.Literal
 	value, err := strconv.ParseInt(lit, 0, 64)
 	if err != nil {
-		p.AddError(fmt.Sprintf("could not parse %q as integer at line %d, col %d",
+		p.addError(fmt.Sprintf("could not parse %q as integer at line %d, col %d",
 			lit, pos.Line, pos.Col))
 		return nil
 	}
@@ -312,7 +312,7 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 	leftIdent, ok := left.(*ast.Identifier)
 	if !ok {
-		p.AddError(fmt.Sprintf(
+		p.addError(fmt.Sprintf(
 			"expected identifier before '{' in struct literal, got %T at line %d",
 			left, p.curToken.Line,
 		))
@@ -351,7 +351,7 @@ func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 
 	if !p.expectPeek(token.RBRACE) {
 		if p.curToken.Type == token.EOF || p.peekToken.Type == token.EOF {
-			p.AddError("expected '}' to close struct literal, got EOF")
+			p.addError("expected '}' to close struct literal, got EOF")
 		}
 		return nil
 	}

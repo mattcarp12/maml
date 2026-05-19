@@ -48,7 +48,7 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 	case token.RBRACE:
 		block.End_ = p.curPos()
 	default:
-		p.AddError(fmt.Sprintf("expected '}' to close block, got %s", p.curToken.Type))
+		p.addError(fmt.Sprintf("expected '}' to close block, got %s", p.curToken.Type))
 	}
 
 	return block
@@ -239,7 +239,7 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 		// --- WHILE LOOP ---
 		exprStmt, ok := first.(*ast.ExprStmt)
 		if !ok {
-			p.AddError("while-style for loop condition must be an expression")
+			p.addError("while-style for loop condition must be an expression")
 			return nil
 		}
 		condition = exprStmt.Value

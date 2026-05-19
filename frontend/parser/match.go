@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/token"
@@ -49,7 +50,7 @@ func (p *Parser) parseMatchExpression() ast.Expr {
 
 	end := p.curPos()
 	if p.curToken.Type != token.RBRACE {
-		p.AddError("expected '}' to close match expression")
+		p.addError("expected '}' to close match expression")
 		return nil
 	}
 
@@ -63,7 +64,7 @@ func (p *Parser) parseMatchExpression() ast.Expr {
 
 func (p *Parser) parseMatchArm() *ast.MatchArm {
 	if p.curToken.Type != token.CASE {
-		p.AddError(fmt.Sprintf("expected 'case' in match arm, got %s", p.curToken.Type))
+		p.addError(fmt.Sprintf("expected 'case' in match arm, got %s", p.curToken.Type))
 		return nil
 	}
 	pos := p.curPos()
@@ -109,7 +110,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 			p.nextToken() // onto '('
 			p.nextToken() // onto binding name
 			if p.curToken.Type != token.IDENT {
-				p.AddError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
+				p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
 				return nil
 			}
 			binding := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
@@ -132,7 +133,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 				var fieldBindings []ast.FieldBinding
 				for {
 					if p.curToken.Type != token.IDENT {
-						p.AddError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
+						p.addError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
 						return nil
 					}
 					fieldName := p.curToken.Literal
@@ -164,7 +165,8 @@ func (p *Parser) parsePattern() ast.Pattern {
 		// Unit variant: case Point
 		return &ast.VariantPattern{Name: name, Binding: nil, Pos_: pos}
 	case token.INT:
-		lit := &ast.IntLiteral{Value: parseInt(p.curToken.Literal), Pos_: pos}
+		intVal, _ := strconv.ParseInt(p.curToken.Literal, 10, 64)
+		lit := &ast.IntLiteral{Value: intVal, Pos_: pos}
 		return &ast.LiteralPattern{Value: lit, Pos_: pos}
 
 	case token.BOOL:
@@ -173,16 +175,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 		return &ast.LiteralPattern{Value: lit, Pos_: pos}
 
 	default:
-		p.AddError(fmt.Sprintf("unexpected token in pattern: %s", p.curToken.Type))
+		p.addError(fmt.Sprintf("unexpected token in pattern: %s", p.curToken.Type))
 		return nil
 	}
-}
-
-// parseInt is a small helper so parsePattern doesn't import strconv directly.
-func parseInt(s string) int64 {
-	var n int64
-	for _, ch := range s {
-		n = n*10 + int64(ch-'0')
-	}
-	return n
 }
