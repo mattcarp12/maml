@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/internal/compiler"
+	"github.com/mattcarp12/maml/frontend"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +30,7 @@ func TestEndToEnd(t *testing.T) {
 			expectedOut := readFile(filepath.Join(dir, testName+".expected.txt"))
 			expectedErr := readFile(filepath.Join(dir, testName+".expected_err.txt"))
 
-			c := compiler.New()
+			c := frontend.New()
 			// FIXED: Compiles directly via file tracking pipeline, running type and borrow checking safely
 			llvmIR, compileErr := c.CompileFile(srcPath)
 
@@ -57,7 +57,7 @@ func buildAndRun(t *testing.T, llvmIR string, testName string) (int, string) {
 	binPath := filepath.Join(os.TempDir(), testName+".exe")
 
 	// Utilizes the shared compilation utility to prevent duplicate shell logic orchestration
-	err := compiler.InvokeClang(llvmIR, binPath, testRuntimeLibPath)
+	err := frontend.InvokeClang(llvmIR, binPath, testRuntimeLibPath)
 	require.NoError(t, err, "Clang assembly step failed")
 	defer os.Remove(binPath)
 

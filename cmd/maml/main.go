@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/mattcarp12/maml/internal/compiler"
+	"github.com/mattcarp12/maml/frontend"
 )
 
 const runtimeLibPath = "./runtime/zig-out/lib/libmamlrt.a"
@@ -57,7 +57,7 @@ func buildCmd(args []string) {
 	file := fs.Arg(0)
 
 	llvmIR := runCompilerCore(file, *printIR)
-	if err := compiler.InvokeClang(llvmIR, *out, runtimeLibPath); err != nil {
+	if err := frontend.InvokeClang(llvmIR, *out, runtimeLibPath); err != nil {
 		fmt.Printf("❌ %v\n", err)
 		os.Exit(1)
 	}
@@ -80,7 +80,7 @@ func runCmd(args []string) {
 	llvmIR := runCompilerCore(file, *printIR)
 
 	outName := filepath.Join(os.TempDir(), "maml_run_tmp")
-	if err := compiler.InvokeClang(llvmIR, outName, runtimeLibPath); err != nil {
+	if err := frontend.InvokeClang(llvmIR, outName, runtimeLibPath); err != nil {
 		fmt.Printf("❌ %v\n", err)
 		os.Exit(1)
 	}
@@ -99,7 +99,7 @@ func checkCmd(args []string) {
 	}
 	file := fs.Arg(0)
 
-	c := compiler.New()
+	c := frontend.New()
 	_, err := c.CompileFile(file)
 	if err != nil {
 		fmt.Printf("❌ Check failed:\n%s\n", err)
@@ -109,7 +109,7 @@ func checkCmd(args []string) {
 }
 
 func runCompilerCore(file string, printIR bool) string {
-	c := compiler.New()
+	c := frontend.New()
 	llvmIR, err := c.CompileFile(file)
 	if err != nil {
 		fmt.Printf("❌ Compilation failed:\n%s\n", err)

@@ -1,4 +1,6 @@
-maml.txt
 runtime/.zig-cache
 runtime/zig-out
-runtime/mimalloc
+runtime/zig-pkg
+build
+bin
+.cache
