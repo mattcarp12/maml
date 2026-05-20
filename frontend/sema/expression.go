@@ -140,45 +140,6 @@ func (a *Analyzer) analyzeIfExpr(e *ast.IfExpr) Type {
 	return finalYield
 }
 
-func (a *Analyzer) analyzeIfExprAsStmt(e *ast.IfExpr) bool {
-	cond := a.analyzeExpr(e.Condition)
-	if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
-		a.errorf(e.Pos(), "IF condition must be a boolean")
-	}
-
-	consequenceReturns := a.analyzeBlockStmt(e.Consequence)
-	thenYield := a.extractYieldType(e.Consequence)
-
-	if e.Alternative == nil {
-		a.TypeMap[e] = thenYield
-		a.updateBlockYield(e.Consequence, thenYield)
-		return false
-	}
-
-	alternativeReturns := a.analyzeBlockStmt(e.Alternative)
-	elseYield := a.extractYieldType(e.Alternative)
-
-	finalYield := thenYield
-	if !thenYield.Equals(UnknownType{}) && !elseYield.Equals(UnknownType{}) {
-		if !thenYield.Equals(elseYield) {
-			if merged := mergeTypes(thenYield, elseYield); merged != nil {
-				finalYield = merged
-			} else {
-				a.errorf(e.Pos(), "type mismatch: if branches yield different types ('%s' vs '%s')",
-					thenYield.String(), elseYield.String())
-				finalYield = UnknownType{}
-			}
-		}
-	} else if thenYield.Equals(UnknownType{}) {
-		finalYield = elseYield
-	}
-
-	a.TypeMap[e] = finalYield
-	a.updateBlockYield(e.Consequence, finalYield)
-	a.updateBlockYield(e.Alternative, finalYield)
-
-	return consequenceReturns && alternativeReturns
-}
 
 func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
 	if len(block.Statements) == 0 {

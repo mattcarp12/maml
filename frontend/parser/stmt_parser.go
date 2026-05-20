@@ -70,6 +70,11 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseYieldStmt()
 	case token.FOR:
 		return p.parseForStmt()
+	case token.BREAK:
+		return p.parseBreakStmt()
+
+	case token.CONTINUE:
+		return p.parseContinueStmt()
 	default:
 		// Any other token (e.g., '1 + 2', 'if true') can be evaluated as an expression statement
 		return p.parseExpressionStmt()
@@ -272,5 +277,21 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 		Post:      post,
 		Body:      body,
 		Pos_:      pos,
+	}
+}
+
+func (p *Parser) parseBreakStmt() ast.Stmt {
+	p.expectStatementEnd()
+
+	return &ast.BreakStmt{
+		Token: p.curToken,
+	}
+}
+
+func (p *Parser) parseContinueStmt() ast.Stmt {
+	p.expectStatementEnd()
+
+	return &ast.ContinueStmt{
+		Token: p.curToken,
 	}
 }

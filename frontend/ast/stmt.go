@@ -3,7 +3,8 @@ package ast
 import (
 	"bytes"
 	"fmt"
-	"go/token"
+
+	"github.com/mattcarp12/maml/frontend/token"
 )
 
 // -----------------------------------------------------------------------------
@@ -45,7 +46,7 @@ type DeclareStmt struct {
 func (d *DeclareStmt) Pos() Position { return d.Pos_ }
 func (d *DeclareStmt) End() Position { return d.Value.End() }
 func (d *DeclareStmt) String() string {
-	op := token.DEFINE.String()
+	op := token.DECLARE.String()
 	format := "%s %s %s"
 	if d.Mutable {
 		format = "mut " + format
@@ -130,3 +131,30 @@ func (f *ForStmt) String() string {
 	return fmt.Sprintf("for (%s; %s; %s) %s", f.Init.String(), f.Condition.String(), f.Post.String(), f.Body.String())
 }
 func (f *ForStmt) stmtNode() {}
+
+type BreakStmt struct {
+	Token token.Token
+}
+
+func (s *BreakStmt) Pos() Position {
+	return Position{Line: s.Token.Line, Col: s.Token.Col}
+}
+func (s *BreakStmt) End() Position {
+	return Position{Line: s.Token.Line, Col: s.Token.Col + len(s.Token.Literal)}
+}
+func (s *BreakStmt) String() string { return s.Token.Literal }
+func (s *BreakStmt) stmtNode()      {}
+
+type ContinueStmt struct {
+	Token token.Token
+}
+
+func (s *ContinueStmt) stmtNode() {}
+
+func (s *ContinueStmt) Pos() Position {
+	return Position{Line: s.Token.Line, Col: s.Token.Col}
+}
+func (s *ContinueStmt) End() Position {
+	return Position{Line: s.Token.Line, Col: s.Token.Col + len(s.Token.Literal)}
+}
+func (s *ContinueStmt) String() string { return s.Token.Literal }

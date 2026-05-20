@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/toolchain"
+	"github.com/mattcarp12/maml/driver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +20,7 @@ func TestEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
 
-	d := toolchain.New()
+	d := driver.New(driver.Config{})
 
 	for _, srcPath := range matches {
 		testName := strings.TrimSuffix(

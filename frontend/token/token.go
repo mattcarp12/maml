@@ -49,37 +49,41 @@ const (
 	SEMICOLON // ;
 
 	// Keywords
-	FN     // fn
-	MATCH  // match
-	CASE   // case
-	TYPE   // type
-	STRUCT // struct
-	ASYNC  // async
-	AWAIT  // await
-	IF     // if
-	ELSE   // else
-	MUT    // mut
-	RETURN // return
-	FOR    // for
-	OWN    // own
+	FN       // fn
+	MATCH    // match
+	CASE     // case
+	TYPE     // type
+	STRUCT   // struct
+	ASYNC    // async
+	AWAIT    // await
+	IF       // if
+	ELSE     // else
+	MUT      // mut
+	RETURN   // return
+	FOR      // for
+	OWN      // own
+	BREAK    // break
+	CONTINUE // continue
 )
 
 var keywords = map[string]TokenType{
-	"fn":     FN,
-	"match":  MATCH,
-	"case":   CASE,
-	"type":   TYPE,
-	"struct": STRUCT,
-	"async":  ASYNC,
-	"await":  AWAIT,
-	"if":     IF,
-	"else":   ELSE,
-	"true":   BOOL,
-	"false":  BOOL,
-	"mut":    MUT,
-	"return": RETURN,
-	"for":    FOR,
-	"own":    OWN,
+	"fn":       FN,
+	"match":    MATCH,
+	"case":     CASE,
+	"type":     TYPE,
+	"struct":   STRUCT,
+	"async":    ASYNC,
+	"await":    AWAIT,
+	"if":       IF,
+	"else":     ELSE,
+	"true":     BOOL,
+	"false":    BOOL,
+	"mut":      MUT,
+	"return":   RETURN,
+	"for":      FOR,
+	"own":      OWN,
+	"contunue": CONTINUE,
+	"break":    BREAK,
 }
 
 func LookupIdent(ident string) TokenType {

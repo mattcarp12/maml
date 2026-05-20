@@ -47,8 +47,8 @@ fmt:
 vet:
 	@go vet ./...
 
-test:
-	@go test ./... -v -cover
+test: all
+	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./... -v -cover
 
 # =============================================================================
 # The End-to-End Execution Pipeline (The Verification Loop)

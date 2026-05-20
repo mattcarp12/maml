@@ -2,59 +2,48 @@ package sema
 
 import "github.com/mattcarp12/maml/frontend/ast"
 
-func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) bool {
+func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) {
 	a.pushScope()
 	defer a.popScope()
 
-	alwaysReturns := false
 	for _, stmt := range body.Statements {
-		if alwaysReturns {
-			a.errorf(stmt.Pos(), "unreachable code after return statement")
-			a.analyzeStmt(stmt)
-			continue
-		}
-		if a.analyzeStmt(stmt) {
-			alwaysReturns = true
-		}
+		a.analyzeStmt(stmt)
 	}
-	return alwaysReturns
 }
 
-func (a *Analyzer) analyzeStmt(stmt ast.Stmt) bool {
+func (a *Analyzer) analyzeStmt(stmt ast.Stmt) {
 	switch s := stmt.(type) {
 	case *ast.DeclareStmt:
-		return a.analyzeDeclareStmt(s)
+		a.analyzeDeclareStmt(s)
+
 	case *ast.AssignStmt:
-		return a.analyzeAssignStmt(s)
+		a.analyzeAssignStmt(s)
+
 	case *ast.ReturnStmt:
-		return a.analyzeReturnStmt(s)
+		a.analyzeReturnStmt(s)
+
 	case *ast.YieldStmt:
 		a.analyzeExpr(s.Value)
-		return false
+
 	case *ast.ExprStmt:
-		if ifExpr, ok := s.Value.(*ast.IfExpr); ok {
-			return a.analyzeIfExprAsStmt(ifExpr)
-		}
-		if matchExpr, ok := s.Value.(*ast.MatchExpr); ok {
-			return a.analyzeMatchExprAsStmt(matchExpr)
-		}
 		a.analyzeExpr(s.Value)
-		return false
+
 	case *ast.ForStmt:
-		return a.analyzeForStmt(s)
+		a.analyzeForStmt(s)
 	}
-	return false
 }
 
-func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
+func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) {
 	exprType := a.analyzeExpr(s.Value)
+
 	if _, exists := a.scope.symbols[s.Name]; exists {
 		a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
-		return false
+		return
 	}
+
 	if exprType.Equals(UnitType{}) {
 		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
-		return false
+		return
 	}
 
 	a.scope.symbols[s.Name] = &Symbol{
@@ -63,27 +52,38 @@ func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) bool {
 		Mutable: s.Mutable,
 		Type:    exprType,
 	}
-	return false
 }
 
-func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
+func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) {
 	lvalType := a.analyzeExpr(s.LValue)
 	rvalType := a.analyzeExpr(s.RValue)
 
 	if rvalType.Equals(UnitType{}) {
 		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
-		return false
+		return
 	}
-	if !lvalType.Equals(UnknownType{}) && !rvalType.Equals(UnknownType{}) && !lvalType.Equals(rvalType) {
-		a.errorf(s.Pos(), "type mismatch: cannot assign '%s' to '%s'",
-			rvalType.String(), lvalType.String())
+
+	if !lvalType.Equals(UnknownType{}) &&
+		!rvalType.Equals(UnknownType{}) &&
+		!lvalType.Equals(rvalType) {
+
+		a.errorf(
+			s.Pos(),
+			"type mismatch: cannot assign '%s' to '%s'",
+			rvalType.String(),
+			lvalType.String(),
+		)
 	}
 
 	if indexExpr, ok := s.LValue.(*ast.IndexExpr); ok {
 		leftObjType := a.analyzeExpr(indexExpr.Left)
+
 		if leftObjType.Equals(StringType{}) {
-			a.errorf(s.Pos(), "strings are immutable and cannot be modified by index")
-			return false
+			a.errorf(
+				s.Pos(),
+				"strings are immutable and cannot be modified by index",
+			)
+			return
 		}
 	}
 
@@ -91,36 +91,37 @@ func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) bool {
 	if rootIdent == nil {
 		a.errorf(s.Pos(), "cannot assign to non-variable expression")
 	}
-
-	return false
 }
 
-func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) bool {
+func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) {
 	var retType Type
 
-	// 1. Handle bare 'return' statements
 	if s.Value == nil {
 		retType = UnitType{}
 	} else {
 		retType = a.analyzeExpr(s.Value)
 	}
 
-	// 2. Type-check against the expected return type
-	if a.expectedReturn != nil && !a.expectedReturn.Equals(UnknownType{}) {
-		if !retType.Equals(a.expectedReturn) && !retType.Equals(UnknownType{}) {
-			a.errorf(s.Pos(), "type mismatch: expected return type '%s', got '%s'",
-				a.expectedReturn.String(), retType.String())
+	if a.expectedReturn != nil &&
+		!a.expectedReturn.Equals(UnknownType{}) {
+
+		if !retType.Equals(a.expectedReturn) &&
+			!retType.Equals(UnknownType{}) {
+
+			a.errorf(
+				s.Pos(),
+				"type mismatch: expected return type '%s', got '%s'",
+				a.expectedReturn.String(),
+				retType.String(),
+			)
+
 		} else if s.Value != nil {
-			// Back-propagate the expected return type down to the returned expression
-			// so codegen pads generic variants correctly.
 			a.propagateType(s.Value, a.expectedReturn)
 		}
 	}
-
-	return true
 }
 
-func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
+func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) {
 	a.pushScope()
 	defer a.popScope()
 
@@ -128,42 +129,41 @@ func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) bool {
 		a.analyzeStmt(s.Init)
 	}
 
-	isInfiniteLoop := false
 	if s.Condition != nil {
 		condType := a.analyzeExpr(s.Condition)
-		if !condType.Equals(BoolType{}) && !condType.Equals(UnknownType{}) {
-			a.errorf(s.Condition.Pos(), "condition must be of type 'bool', got '%s'", condType.String())
+
+		if !condType.Equals(BoolType{}) &&
+			!condType.Equals(UnknownType{}) {
+
+			a.errorf(
+				s.Condition.Pos(),
+				"condition must be of type 'bool', got '%s'",
+				condType.String(),
+			)
 		}
-		if lit, ok := s.Condition.(*ast.BoolLiteral); ok && lit.Value {
-			isInfiniteLoop = true
-		}
-	} else {
-		isInfiniteLoop = true
 	}
 
 	if s.Post != nil {
 		a.analyzeStmt(s.Post)
 	}
 
-	bodyReturns := a.analyzeBlockStmt(s.Body)
-
-	if isInfiniteLoop && bodyReturns {
-		return true
-	}
-
-	return false
+	a.analyzeBlockStmt(s.Body)
 }
 
 func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
 	switch e := expr.(type) {
 	case *ast.Identifier:
 		return e
+
 	case *ast.IndexExpr:
 		return a.getRootIdentifier(e.Left)
+
 	case *ast.SliceExpr:
 		return a.getRootIdentifier(e.Left)
+
 	case *ast.FieldAccess:
 		return a.getRootIdentifier(e.Object)
+
 	default:
 		return nil
 	}

@@ -44,22 +44,6 @@ func TestAnalyzer_Analyze(t *testing.T) {
 			wantErrors: nil,
 		},
 		{
-			name: "function missing return",
-			program: &ast.Program{
-				Decls: []ast.Decl{
-					&ast.FnDecl{
-						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
-						Body: &ast.BlockStmt{
-							Statements: []ast.Stmt{},
-						},
-					},
-				},
-			},
-			wantErrors: []string{"function 'main' is missing a return statement"},
-		},
-		{
 			name: "type mismatch in return",
 			program: &ast.Program{
 				Decls: []ast.Decl{
@@ -489,54 +473,6 @@ func TestValidPrograms(t *testing.T) {
 			typeMap, errors := analyzeInput(t, tt.input)
 			assert.Empty(t, errors, "expected no semantic errors")
 			assert.NotEmpty(t, typeMap, "TypeMap should be populated for valid programs")
-		})
-	}
-}
-
-func TestReturnPathEnforcement(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		expectedErr string
-	}{
-		{
-			name: "missing return statement",
-			input: `
-			fn main() int {
-				x := 5
-			}`,
-			expectedErr: "missing a return statement",
-		},
-		{
-			name: "wrong return type",
-			input: `
-			fn main() int {
-				return "hello"
-			}`,
-			expectedErr: "expected return type 'int', got 'string'",
-		},
-		{
-			name: "function returning a struct",
-			input: `
-			type Point = { x int, y int }
-			fn makePoint() Point {
-				return Point{x: 1, y: 2}
-			}
-			fn main() int { return 0 }
-			`,
-			expectedErr: "", // Should be valid
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, errors := analyzeInput(t, tt.input)
-			if tt.expectedErr == "" {
-				assert.Empty(t, errors)
-			} else {
-				require.NotEmpty(t, errors)
-				assert.Contains(t, errors[0].Msg, tt.expectedErr)
-			}
 		})
 	}
 }
@@ -1019,18 +955,6 @@ func TestForStatements(t *testing.T) {
 			}`,
 			expectedErr: "condition must be of type 'bool'",
 		},
-		{
-			name: "unreachable code after return in for",
-			input: `
-			fn main() int {
-				for (true) {
-					return 1
-					x := 2  // unreachable
-				}
-				return 0
-			}`,
-			expectedErr: "unreachable code after return statement",
-		},
 	}
 
 	for _, tt := range tests {
@@ -1108,81 +1032,6 @@ func TestSliceExpressions(t *testing.T) {
 				return 0
 			}`,
 			expectedErr: "slice low index must be an integer",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, errors := analyzeInput(t, tt.input)
-			if tt.expectedErr == "" {
-				assert.Empty(t, errors)
-			} else {
-				require.NotEmpty(t, errors)
-				assert.Contains(t, errors[0].Msg, tt.expectedErr)
-			}
-		})
-	}
-}
-
-func TestReturnPathAnalysis(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		expectedErr string
-	}{
-		{
-			name: "return in if consequence only",
-			input: `
-			fn main() int {
-				if (true) { return 1 }
-				return 0
-			}`,
-		},
-		{
-			name: "return in else only",
-			input: `
-			fn main() int {
-				if (false) { 
-					return 1 
-				} else { 
-					return 0 
-				}
-			}`,
-		},
-		{
-			name: "missing return when only one branch returns",
-			input: `
-			fn main() int {
-				if (true) {
-					return 1
-				}
-				// no return here
-			}`,
-			expectedErr: "function 'main' is missing a return statement",
-		},
-		{
-			name: "nested if with guaranteed return",
-			input: `
-			fn main() int {
-				if (true) {
-					if (true) {
-						return 1
-					} else {
-						return 2
-					}
-				} else {
-					return 3
-				}
-			}`,
-		},
-		{
-			name: "if without else does not guarantee return",
-			input: `
-			fn main() int {
-				if (true) { return 42 }
-				// falls through → error
-			}`,
-			expectedErr: "function 'main' is missing a return statement",
 		},
 	}
 

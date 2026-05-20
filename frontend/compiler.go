@@ -2,21 +2,16 @@ package frontend
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/cfg"
 	"github.com/mattcarp12/maml/frontend/escape"
 	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/ownership"
 	"github.com/mattcarp12/maml/frontend/parser"
 	"github.com/mattcarp12/maml/frontend/sema"
 )
-
-// Temporary until the C++ backend fully replaces the Go LLVM backend.
-// After migration this can disappear entirely.
-//
-// KEEP THIS IMPORT FOR NOW.
 
 type Compiler struct{}
 
@@ -26,16 +21,11 @@ func New() *Compiler {
 
 // FrontendResult contains all semantic information produced by the frontend.
 type FrontendResult struct {
-	Program   *ast.Program
-	TypeMap   map[ast.Node]sema.Type
-	EscapeMap map[ast.Node]escape.EscapeState
-}
-
-// AsyncLowerer is currently a placeholder lowering pass.
-type AsyncLowerer struct{}
-
-func (a *AsyncLowerer) Mutate(node ast.Node) ast.Node {
-	return node
+	Program     *ast.Program
+	TypeMap     map[ast.Node]sema.Type
+	EscapeMap   map[ast.Node]escape.EscapeState
+	CFG         map[*ast.FnDecl]*cfg.CFG
+	CFGAnalysis map[*ast.FnDecl]*cfg.Result
 }
 
 // Frontend executes the canonical frontend pipeline.
@@ -59,9 +49,6 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	// 2. Lowering Passes
 	// ---------------------------------------------------------------------
 
-	lowerer := &AsyncLowerer{}
-	program = ast.Rewrite(lowerer, program).(*ast.Program)
-
 	// ---------------------------------------------------------------------
 	// 3. Semantic Analysis
 	// ---------------------------------------------------------------------
@@ -71,6 +58,49 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	typeMap, semaErrors := semaAnalyzer.Analyze(program)
 	if len(semaErrors) > 0 {
 		return nil, semaErrors[0]
+	}
+
+	// ---------------------------------------------------------------------
+	// 4. CFG Analysis
+	// ---------------------------------------------------------------------
+
+	cfgGraphs := make(map[*ast.FnDecl]*cfg.CFG)
+	cfgResults := make(map[*ast.FnDecl]*cfg.Result)
+
+	for _, decl := range program.Decls {
+		fn, ok := decl.(*ast.FnDecl)
+		if !ok {
+			continue
+		}
+
+		graph := cfg.Build(fn)
+		result := cfg.Analyze(graph)
+
+		cfgGraphs[fn] = graph
+		cfgResults[fn] = result
+
+		fnType := typeMap[fn.ReturnType]
+
+		if fnType != nil {
+			if ft, ok := fnType.(*sema.FunctionType); ok {
+
+				if !ft.Return.Equals(sema.UnitType{}) &&
+					!result.AlwaysReturns {
+
+					return nil, fmt.Errorf(
+						"function '%s' is missing a return statement",
+						fn.Name,
+					)
+				}
+			}
+		}
+
+		for _, node := range result.DeadStatements {
+			return nil, fmt.Errorf(
+				"%s: unreachable code",
+				node.Pos(),
+			)
+		}
 	}
 
 	// ---------------------------------------------------------------------
@@ -106,19 +136,4 @@ func (c *Compiler) CompileFile(path string) (*FrontendResult, error) {
 	}
 
 	return c.Frontend(string(content))
-}
-
-// EmitHIR serializes the typed frontend representation into JSON.
-func (c *Compiler) EmitHIR(src string, out io.Writer) error {
-	frontendResult, err := c.Frontend(src)
-	if err != nil {
-		return err
-	}
-
-	emitter := NewEmitter(
-		frontendResult.TypeMap,
-		frontendResult.EscapeMap,
-	)
-
-	return emitter.Emit(frontendResult.Program, out)
 }

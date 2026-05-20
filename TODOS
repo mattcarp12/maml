@@ -5,7 +5,6 @@ SYNTAX
 SEMA
 - Paralleize pass 4 - analyzeFunctionBodies - can be run independently
 - Type interning - every sema.Type needs only one instance - can be cached for memory efficiency; also type.Equals() just becomes pointer comparison
-- Control flow graph - extract `alwaysReturns` logic from the semantic analyzer into its own intermediate pass after type checking; check all paths lead to return; warn on dead code
 - Add sized integers and float types
 - Add support for type aliases
 

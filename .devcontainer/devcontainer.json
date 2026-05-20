@@ -4,7 +4,9 @@
 	"features": {
 		"ghcr.io/devcontainers/features/go": {},
 		"ghcr.io/postfinance/devcontainer-features/zig": {},
-		"ghcr.io/devcontainers-community/features/llvm": {},
+		"ghcr.io/devcontainers-community/features/llvm": {
+			"version": "18",
+		},
 		"ghcr.io/devcontainers/features/common-utils": {},
 		"ghcr.io/alexdenisov/features/feature-cmake": {}
 	},
@@ -21,5 +23,5 @@
 	"containerEnv": {
 		"CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
 	},
-	"postCreateCommand": "bash setup.sh"
+	"postCreateCommand": "bash .devcontainer/setup.sh"
 }

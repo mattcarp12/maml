@@ -131,10 +131,11 @@ func (p *Parser) parseParam() ast.Param {
 	}
 
 	// Check for mut or own modifiers
-	if p.curToken.Type == token.MUT {
+	switch p.curToken.Type {
+	case token.MUT:
 		param.Mut = true
 		p.nextToken() // step off 'mut'
-	} else if p.curToken.Type == token.OWN {
+	case token.OWN:
 		param.Own = true
 		p.nextToken() // step off 'own'
 	}

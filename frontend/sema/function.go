@@ -1,7 +1,9 @@
 // sema/function.go
 package sema
 
-import "github.com/mattcarp12/maml/frontend/ast"
+import (
+	"github.com/mattcarp12/maml/frontend/ast"
+)
 
 func (a *Analyzer) registerFunctions(program *ast.Program) {
 	for _, decl := range program.Decls {
@@ -58,25 +60,29 @@ func (a *Analyzer) analyzeFunctionBodies(program *ast.Program) {
 }
 
 func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
-	// Set the current function context
 	a.currentFn = v
 	defer func() { a.currentFn = nil }()
 
 	for _, param := range v.Params {
 		pType := a.resolveAstType(param.Type)
+
 		var mode ParamMode
 		var mutable bool
+
 		switch {
 		case param.Own:
 			mode = ParamOwned
 			mutable = true
+
 		case param.Mut:
 			mode = ParamMutBorrow
 			mutable = true
+
 		default:
 			mode = ParamBorrow
 			mutable = false
 		}
+
 		a.scope.symbols[param.Name] = &Symbol{
 			Kind:      VarSymbol,
 			Name:      param.Name,
@@ -86,18 +92,13 @@ func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
 		}
 	}
 
-	// FIX 1: Apply UnitType{} fallback here just like in registerFunction
 	if v.ReturnType != nil {
 		a.expectedReturn = a.resolveAstType(v.ReturnType)
 	} else {
 		a.expectedReturn = UnitType{}
 	}
+
 	defer func() { a.expectedReturn = nil }()
 
-	alwaysReturns := a.analyzeBlockStmt(v.Body)
-
-	// FIX 2: Functions returning unit do NOT require a return statement
-	if !alwaysReturns && !a.expectedReturn.Equals(UnitType{}) && !a.expectedReturn.Equals(UnknownType{}) {
-		a.errorf(v.Pos(), "function '%s' is missing a return statement", v.Name)
-	}
+	a.analyzeBlockStmt(v.Body)
 }

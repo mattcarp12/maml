@@ -44,51 +44,11 @@ func (a *Analyzer) analyzeMatchArm(arm ast.MatchArm, subjectType Type) Type {
 	a.pushScope()
 	defer a.popScope()
 
-	// Inject pattern bindings into the arm's scope.
 	a.injectPatternBindings(arm.Pattern, subjectType)
 
-	// Analyze arm body — re-use analyzeBlockStmt but without pushing another scope
-	// since we already pushed one above for the bindings.
-	alwaysReturns := false
-	for _, stmt := range arm.Body.Statements {
-		if a.analyzeStmt(stmt) {
-			alwaysReturns = true
-		}
-	}
-	_ = alwaysReturns
+	a.analyzeBlockStmt(arm.Body)
 
 	return a.extractYieldType(arm.Body)
-}
-
-func (a *Analyzer) analyzeMatchExprAsStmt(e *ast.MatchExpr) bool {
-	subjectType := a.analyzeExpr(e.Subject)
-
-	if len(e.Arms) == 0 {
-		a.errorf(e.Pos(), "match expression has no arms")
-		return false
-	}
-
-	a.checkMatchExhaustiveness(e, subjectType)
-
-	allReturn := true
-	for _, arm := range e.Arms {
-		a.pushScope()
-		a.injectPatternBindings(arm.Pattern, subjectType)
-		armReturns := false
-		for _, stmt := range arm.Body.Statements {
-			if a.analyzeStmt(stmt) {
-				armReturns = true
-			}
-		}
-		a.popScope()
-		if !armReturns {
-			allReturn = false
-		}
-	}
-
-	// A match guarantees a return only if ALL arms guarantee a return
-	// AND the match is exhaustive (no missing cases means no error was emitted above).
-	return allReturn && a.isExhaustive(e, subjectType)
 }
 
 func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType Type) {
@@ -119,30 +79,6 @@ func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType Type) 
 		a.errorf(e.Pos(),
 			"non-exhaustive match: add a wildcard '_' arm to cover remaining cases")
 	}
-}
-
-func (a *Analyzer) isExhaustive(e *ast.MatchExpr, subjectType Type) bool {
-	for _, arm := range e.Arms {
-		if _, isWild := arm.Pattern.(*ast.WildcardPattern); isWild {
-			return true
-		}
-	}
-	presentVariants := make(map[string]bool)
-	for _, arm := range e.Arms {
-		if vp, ok := arm.Pattern.(*ast.VariantPattern); ok {
-			presentVariants[vp.Name] = true
-		}
-	}
-	switch st := subjectType.(type) {
-	case *SumType:
-		for _, v := range st.Variants {
-			if !presentVariants[v.Name] {
-				return false
-			}
-		}
-		return true
-	}
-	return false
 }
 
 func (a *Analyzer) injectPatternBindings(pat ast.Pattern, subjectType Type) {
