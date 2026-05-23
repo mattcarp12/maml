@@ -1,9 +1,10 @@
 #include "StmtGenerator.h"
+
+#include <iostream>
+
 #include "ExprGenerator.h"
-#include "MemoryManager.h"
 #include "RuntimeConstants.h"
 #include "TypeLowering.h"
-#include <iostream>
 
 namespace maml {
 
@@ -11,52 +12,21 @@ static void compileBlockStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   ctx.pushScope();
   for (const auto &s : stmt["statements"]) {
     compileStatement(ctx, s);
-    if (ctx.Builder->GetInsertBlock()->getTerminator())
-      break;
+    if (ctx.Builder->GetInsertBlock()->getTerminator()) break;
   }
-  llvm::FunctionCallee releaseFn = ctx.Module->getOrInsertFunction(
-      "maml_release", llvm::FunctionType::get(
-                          llvm::Type::getVoidTy(ctx.Context),
-                          {llvm::PointerType::getUnqual(ctx.Context)}, false));
-  if (!ctx.ScopeStack.empty())
-    ctx.popScope(releaseFn);
+  ctx.popScope();
 }
 
-static void compileDeclareStmt(CodegenContext &ctx,
-                               const nlohmann::json &stmt) {
+static void compileDeclareStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   auto &Builder = ctx.Builder;
   std::string_view varName = stmt["name"].get<std::string_view>();
   llvm::Value *initVal = evaluateExpression(ctx, stmt["value"]);
   nlohmann::json typeJson = stmt["value"]["maml_type"];
   llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
 
-  bool isHeap = stmt["value"].value("is_heap", false);
-  if (isHeap && (valTy->isArrayTy() || valTy->isStructTy())) {
-    llvm::AllocaInst *ptrAlloca = Builder->CreateAlloca(
-        initVal->getType(), nullptr, std::string(varName));
-    Builder->CreateStore(initVal, ptrAlloca);
-    ctx.SymbolEnv.back()[std::string(varName)] = ptrAlloca;
-    return;
-  }
+  llvm::AllocaInst *alloca = Builder->CreateAlloca(valTy, nullptr, std::string(varName));
 
-  llvm::AllocaInst *alloca =
-      Builder->CreateAlloca(valTy, nullptr, std::string(varName));
-
-  // Zero-initialize any alloca whose type participates in ARC. This ensures
-  // that compileAssignStmt's emitRelease-before-write always sees a null
-  // heap pointer on the first assignment, rather than stack garbage.
-  // maml_release is required to be a no-op on null (standard ARC contract).
-  if (MemoryManager::needsARC(typeJson)) {
-    llvm::DataLayout DL(ctx.Module.get());
-    uint64_t byteSize = DL.getTypeAllocSize(valTy);
-    Builder->CreateMemSet(
-        alloca, llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), 0),
-        llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), byteSize),
-        alloca->getAlign());
-  }
-
-  if (initVal->getType()->isPointerTy() &&
-      (valTy->isStructTy() || valTy->isArrayTy())) {
+  if (initVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
     llvm::Value *loadedData = Builder->CreateLoad(valTy, initVal, "array_load");
     Builder->CreateStore(loadedData, alloca);
   } else {
@@ -64,12 +34,9 @@ static void compileDeclareStmt(CodegenContext &ctx,
   }
 
   ctx.SymbolEnv.back()[std::string(varName)] = alloca;
-  MemoryManager::trackDeepForRelease(ctx, alloca, typeJson);
 }
 
-static llvm::Value *computeLValue(CodegenContext &ctx,
-                                  const nlohmann::json &lvalueNode,
-                                  bool &isPointerReassignment) {
+static llvm::Value *computeLValue(CodegenContext &ctx, const nlohmann::json &lvalueNode, bool &isPointerReassignment) {
   auto &Builder = ctx.Builder;
   std::string_view lnodeType = "unknown";
   if (lvalueNode.contains("node_type")) {
@@ -100,24 +67,18 @@ static llvm::Value *computeLValue(CodegenContext &ctx,
 
     llvm::Value *leftPtr = leftVal;
     if (!leftVal->getType()->isPointerTy()) {
-      llvm::AllocaInst *spill =
-          Builder->CreateAlloca(leftTy, nullptr, "lvalue_spill");
+      llvm::AllocaInst *spill = Builder->CreateAlloca(leftTy, nullptr, "lvalue_spill");
       Builder->CreateStore(leftVal, spill);
       leftPtr = spill;
     }
 
     if (leftTy->isArrayTy()) {
-      return Builder->CreateGEP(leftTy, leftPtr,
-                                {Builder->getInt32(0), indexVal},
-                                "array_idx_assign");
+      return Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), indexVal}, "array_idx_assign");
     } else {
-      llvm::Value *dataPtr = Builder->CreateGEP(
-          leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(1)},
-          "data_ptr_assign");
-      llvm::Value *data = Builder->CreateLoad(
-          llvm::PointerType::getUnqual(ctx.Context), dataPtr);
-      return Builder->CreateGEP(llvmTypeFor(ctx, lvalueNode["maml_type"]), data,
-                                indexVal, "slice_idx_assign");
+      llvm::Value *dataPtr =
+          Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(1)}, "data_ptr_assign");
+      llvm::Value *data = Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtr);
+      return Builder->CreateGEP(llvmTypeFor(ctx, lvalueNode["maml_type"]), data, indexVal, "slice_idx_assign");
     }
   }
 
@@ -127,34 +88,25 @@ static llvm::Value *computeLValue(CodegenContext &ctx,
 
 static void compileAssignStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   auto &Builder = ctx.Builder;
-  const nlohmann::json &lvalueNode =
-      stmt.contains("lvalue") ? stmt["lvalue"] : stmt["target"];
+  const nlohmann::json &lvalueNode = stmt.contains("lvalue") ? stmt["lvalue"] : stmt["target"];
 
   bool isPointerReassignment = false;
-  llvm::Value *targetPtr =
-      computeLValue(ctx, lvalueNode, isPointerReassignment);
-  if (!targetPtr)
-    return;
+  llvm::Value *targetPtr = computeLValue(ctx, lvalueNode, isPointerReassignment);
+  if (!targetPtr) return;
 
-  const nlohmann::json &rhsNode =
-      stmt.contains("rvalue") ? stmt["rvalue"] : stmt["value"];
+  const nlohmann::json &rhsNode = stmt.contains("rvalue") ? stmt["rvalue"] : stmt["value"];
   llvm::Value *rhsVal = evaluateExpression(ctx, rhsNode);
   nlohmann::json typeJson = rhsNode["maml_type"];
-
-  MemoryManager::emitRelease(ctx, targetPtr, typeJson);
 
   llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
   if (isPointerReassignment) {
     Builder->CreateStore(rhsVal, targetPtr);
-  } else if (rhsVal->getType()->isPointerTy() &&
-             (valTy->isStructTy() || valTy->isArrayTy())) {
+  } else if (rhsVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
     llvm::Value *loadedData = Builder->CreateLoad(valTy, rhsVal, "array_load");
     Builder->CreateStore(loadedData, targetPtr);
   } else {
     Builder->CreateStore(rhsVal, targetPtr);
   }
-
-  MemoryManager::emitRetain(ctx, targetPtr, typeJson);
 }
 
 static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
@@ -165,7 +117,6 @@ static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   // doesn't double-free on the (already-terminated) exit block.
   if (llvm::Value *coroHdl = ctx.resolveSymbol(rt::CORO_HDL)) {
     Builder->CreateRet(coroHdl);
-    ctx.ScopeStack.clear();
     ctx.SymbolEnv.clear();
     return;
   }
@@ -180,41 +131,68 @@ static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
     }
   }
 
-  // Emit ARC releases for every live scope frame, inner-to-outer.
-  // This mirrors what popScope does per frame, but across all frames at once
-  // since a return unwinds the entire function stack.
-  llvm::FunctionCallee releaseFn = ctx.Module->getOrInsertFunction(
-      rt::RELEASE, llvm::FunctionType::get(
-                       llvm::Type::getVoidTy(ctx.Context),
-                       {llvm::PointerType::getUnqual(ctx.Context)}, false));
-
-  for (auto it = ctx.ScopeStack.rbegin(); it != ctx.ScopeStack.rend(); ++it) {
-    for (auto itemIt = it->rbegin(); itemIt != it->rend(); ++itemIt) {
-      if (itemIt->isRaw) {
-        // No cast needed on opaque-pointer LLVM — pass the pointer directly.
-        Builder->CreateCall(releaseFn, {itemIt->ptr});
-      } else {
-        MemoryManager::emitRelease(ctx, itemIt->ptr, itemIt->typeJson);
-      }
-    }
-  }
-
   if (retVal) {
     Builder->CreateRet(retVal);
   } else {
     Builder->CreateRetVoid();
   }
 
-  // Drain the scope metadata. The block is now terminated, so compileFunction's
-  // trailing popScope will skip IR emission (terminator guard), then pop these
-  // now-empty frames. We clear them here so the stack sizes are balanced.
-  ctx.ScopeStack.clear();
   ctx.SymbolEnv.clear();
 }
 
+static void compileLoopStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
+  auto &Builder = ctx.Builder;
+  llvm::Function *F = Builder->GetInsertBlock()->getParent();
+  llvm::BasicBlock *loopBB = llvm::BasicBlock::Create(ctx.Context, "loop.body", F);
+  llvm::BasicBlock *exitBB = llvm::BasicBlock::Create(ctx.Context, "loop.exit", F);
+
+  Builder->CreateBr(loopBB);
+  Builder->SetInsertPoint(loopBB);
+
+  ctx.LoopExitStack.push_back(exitBB);
+  compileBlockStmt(ctx, stmt["body"]);
+  ctx.LoopExitStack.pop_back();
+
+  if (!Builder->GetInsertBlock()->getTerminator()) {
+    Builder->CreateBr(loopBB);
+  }
+  Builder->SetInsertPoint(exitBB);
+}
+
+static void compileBreakStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
+  if (!ctx.LoopExitStack.empty()) {
+    ctx.Builder->CreateBr(ctx.LoopExitStack.back());
+  } else {
+    ctx.Error.fatal("Break statement encountered outside of a loop", stmt);
+  }
+}
+
+static void compileRetainStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
+  auto &Builder = ctx.Builder;
+  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
+  llvm::FunctionCallee retainFn = ctx.Module->getOrInsertFunction(
+      "maml_retain",
+      llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)}, false));
+
+  if (val && val->getType()->isPointerTy()) {
+    Builder->CreateCall(retainFn, {val});
+  }
+}
+
+static void compileReleaseStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
+  auto &Builder = ctx.Builder;
+  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
+  llvm::FunctionCallee releaseFn = ctx.Module->getOrInsertFunction(
+      "maml_release",
+      llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)}, false));
+
+  if (val && val->getType()->isPointerTy()) {
+    Builder->CreateCall(releaseFn, {val});
+  }
+}
+
 void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
-  if (stmt.is_null())
-    return;
+  if (stmt.is_null()) return;
 
   std::string_view nodeType = "unknown";
   if (stmt.contains("node_type")) {
@@ -237,59 +215,26 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     compileReturnStmt(ctx, stmt);
     return;
   }
+  if (nodeType == "LoopStmt") {
+    compileLoopStmt(ctx, stmt);
+    return;
+  }
+  if (nodeType == "BreakStmt") {
+    compileBreakStmt(ctx, stmt);
+    return;
+  }
+  if (nodeType == "RetainStmt") {
+    compileRetainStmt(ctx, stmt);
+    return;
+  }
+  if (nodeType == "ReleaseStmt") {
+    compileReleaseStmt(ctx, stmt);
+    return;
+  }
   if (nodeType == "YieldStmt" || nodeType == "ExprStmt") {
     evaluateExpression(ctx, stmt["value"]);
     return;
   }
-  if (nodeType == "ForStmt") {
-    compileForLoop(ctx, stmt);
-    return;
-  }
 }
 
-void compileForLoop(CodegenContext &ctx, const nlohmann::json &s) {
-  auto &Builder = ctx.Builder;
-  llvm::Function *parentFn = Builder->GetInsertBlock()->getParent();
-
-  llvm::BasicBlock *condBB =
-      llvm::BasicBlock::Create(ctx.Context, "for.cond", parentFn);
-  llvm::BasicBlock *bodyBB =
-      llvm::BasicBlock::Create(ctx.Context, "for.body", parentFn);
-  llvm::BasicBlock *loopExitBB =
-      llvm::BasicBlock::Create(ctx.Context, "for.exit", parentFn);
-
-  if (s.contains("init") && !s["init"].is_null()) {
-    compileStatement(ctx, s["init"]);
-  }
-  Builder->CreateBr(condBB);
-
-  Builder->SetInsertPoint(condBB);
-  if (s.contains("condition") && !s["condition"].is_null()) {
-    llvm::Value *condVal = evaluateExpression(ctx, s["condition"]);
-    Builder->CreateCondBr(condVal, bodyBB, loopExitBB);
-  } else {
-    Builder->CreateBr(bodyBB);
-  }
-
-  Builder->SetInsertPoint(bodyBB);
-  if (s.contains("body") && !s["body"].is_null()) {
-    compileStatement(ctx, s["body"]);
-  }
-
-  // The body may have emitted a ReturnStmt or other terminator.
-  // Only compile the post-statement and back-edge if the block is still open.
-  if (!Builder->GetInsertBlock()->getTerminator()) {
-    if (s.contains("post") && !s["post"].is_null()) {
-      compileStatement(ctx, s["post"]);
-    }
-    // Guard again: the post-statement itself could also terminate (e.g. return
-    // inside a for-init expression, though unusual — be safe).
-    if (!Builder->GetInsertBlock()->getTerminator()) {
-      Builder->CreateBr(condBB);
-    }
-  }
-
-  Builder->SetInsertPoint(loopExitBB);
-}
-
-} // namespace maml
+}  // namespace maml

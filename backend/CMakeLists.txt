@@ -43,7 +43,6 @@ FetchContent_MakeAvailable(json)
 set(BACKEND_SOURCES
     src/CodegenContext.cpp
     src/TypeLowering.cpp
-    src/MemoryManager.cpp
     src/ExprCore.cpp
     src/ExprOperators.cpp
     src/ExprControlFlow.cpp
