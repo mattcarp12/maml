@@ -64,19 +64,21 @@ export fn maml_vec_grow(
     cap_ptr: *u32,
     item_size: u32,
 ) ?*anyopaque {
-    _ = len;
-
     const old_cap = cap_ptr.*;
     const new_cap: u32 = if (old_cap == 0) 8 else old_cap * 2;
     const new_size = @as(usize, new_cap) * @as(usize, item_size);
 
-    const new_raw = if (raw_ptr == null)
-        mi_malloc(new_size)
-    else
-        mi_realloc(raw_ptr, new_size);
+    // FIX: Allocate the new buffer with an ARC header
+    const new_raw = maml_alloc(new_size) orelse @panic("maml_vec_grow: out of memory");
 
-    if (new_raw == null) {
-        @panic("maml_vec_grow: out of memory");
+    // FIX: Safely copy old data and release the old ARC pointer
+    if (raw_ptr) |old_ptr| {
+        const old_size = @as(usize, len) * @as(usize, item_size);
+        const src = @as([*]const u8, @ptrCast(old_ptr));
+        const dst = @as([*]u8, @ptrCast(new_raw));
+        @memcpy(dst[0..old_size], src[0..old_size]);
+
+        maml_release(old_ptr);
     }
 
     cap_ptr.* = new_cap;
@@ -355,7 +357,7 @@ export fn maml_run_executor() void {
             // 2. If it's not done, resume it!
             if (!maml_coro_done_helper(handle)) {
                 maml_coro_resume_helper(handle);
-                
+
                 // 3. After yielding, check if it finished
                 if (!maml_coro_done_helper(handle)) {
                     // Still pending (hit another await). Put it back in the queue.

@@ -23,7 +23,7 @@ backend:
 	@echo "==> Building C++ LLVM Backend..."
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(BIN_DIR)
-	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Release .. && make
+	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Release ../backend && make
 	@cp $(BUILD_DIR)/maml-backend $(BIN_DIR)/maml-backend
 
 # 3. Build the Freestanding Zig Async Runtime

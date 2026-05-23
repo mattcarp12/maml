@@ -168,7 +168,7 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 	case *ast.StructLiteral:
 		res["node_type"] = "StructLiteral"
 		res["struct_type"] = e.marshalNode(n.Type)
-		var fields []interface{}
+		fields := make([]interface{}, 0)
 		for _, f := range n.Fields {
 			fields = append(fields, map[string]interface{}{
 				"name":  f.Name.Value,
@@ -180,7 +180,7 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 	case *ast.VariantLiteral:
 		res["node_type"] = "VariantLiteral"
 		res["variant_name"] = n.VariantName
-		var fields []interface{}
+		fields := make([]interface{}, 0)
 		for _, f := range n.Fields {
 			fields = append(fields, map[string]interface{}{
 				"name":  f.Name.Value,
@@ -243,7 +243,7 @@ func (e *Emitter) marshalPattern(pat ast.Pattern) map[string]interface{} {
 		if p.Binding != nil {
 			res["binding"] = p.Binding.Value
 		}
-		var fields []interface{}
+		fields := make([]interface{}, 0)
 		for _, f := range p.Fields {
 			fields = append(fields, map[string]interface{}{
 				"field":   f.Field,
@@ -290,7 +290,7 @@ func (e *Emitter) marshalType(t sema.Type) map[string]interface{} {
 	case *sema.StructType:
 		res["kind"] = "Struct"
 		res["name"] = v.Name
-		var fields []interface{}
+		fields := make([]interface{}, 0)
 		for _, f := range v.Fields {
 			fields = append(fields, map[string]interface{}{
 				"name": f.Name,
@@ -309,7 +309,7 @@ func (e *Emitter) marshalType(t sema.Type) map[string]interface{} {
 
 		var variants []interface{}
 		for _, variant := range v.Variants {
-			var fields []interface{}
+			fields := make([]interface{}, 0)
 			for _, f := range variant.Fields {
 				fields = append(fields, map[string]interface{}{
 					"name": f.Name,
