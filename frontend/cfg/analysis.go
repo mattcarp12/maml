@@ -4,24 +4,40 @@ import "github.com/mattcarp12/maml/frontend/ast"
 
 func Reachable(g *CFG) map[BlockID]bool {
 	reachable := make(map[BlockID]bool)
+	var queue []BlockID
 
-	var visit func(BlockID)
+	queue = append(queue, g.Entry)
 
-	visit = func(id BlockID) {
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+
 		if reachable[id] {
-			return
+			continue
 		}
-
 		reachable[id] = true
 
 		block := g.Blocks[id]
 
-		for _, succ := range block.Succs {
-			visit(succ)
-		}
-	}
+		// Check if this block ends in a conditional branch
+		if branch, ok := block.Terminator.(BranchTerminator); ok {
+			cb := EvalBool(branch.Condition)
 
-	visit(g.Entry)
+			// If we know the boolean evaluates to a constant at compile-time:
+			if cb.Known {
+				if cb.Value {
+					queue = append(queue, branch.TrueTarget)
+				} else {
+					queue = append(queue, branch.FalseTarget)
+				}
+				// Skip adding all successors blindly!
+				continue
+			}
+		}
+
+		// Default fallback: add all successors to the queue
+		queue = append(queue, block.Succs...)
+	}
 
 	return reachable
 }
@@ -59,18 +75,12 @@ func UnreachableBlocks(g *CFG) []*Block {
 
 func UnreachableStatements(g *CFG) []ast.Node {
 	reachable := Reachable(g)
-
 	var nodes []ast.Node
-
 	for id, block := range g.Blocks {
 		if reachable[id] {
 			continue
 		}
-
-		for _, stmt := range block.Statements {
-			nodes = append(nodes, stmt)
-		}
+		nodes = append(nodes, block.Statements...)
 	}
-
 	return nodes
 }

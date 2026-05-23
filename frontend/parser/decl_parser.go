@@ -110,8 +110,8 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 	}
 }
 
-func (p *Parser) parseFnParams() []ast.Param {
-	var params []ast.Param
+func (p *Parser) parseFnParams() []*ast.Param {
+	var params []*ast.Param
 
 	success := p.parseCommaSeparatedList(token.RPAREN, func() {
 		params = append(params, p.parseParam())
@@ -125,8 +125,8 @@ func (p *Parser) parseFnParams() []ast.Param {
 	return params
 }
 
-func (p *Parser) parseParam() ast.Param {
-	param := ast.Param{
+func (p *Parser) parseParam() *ast.Param {
+	param := &ast.Param{
 		Pos_: p.curPos(),
 	}
 
@@ -159,7 +159,7 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
-	td.Name = &ast.NamedType{Name: p.curToken.Literal, Pos_: p.curPos()}
+	td.Name = &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
 
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
@@ -182,8 +182,8 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	return td
 }
 
-func (p *Parser) parseSumType() *ast.SumType {
-	st := &ast.SumType{Pos_: p.curPos()}
+func (p *Parser) parseSumType() *ast.SumTypeExpr {
+	st := &ast.SumTypeExpr{Pos_: p.curPos()}
 
 	for p.curToken.Type == token.SEPARATOR {
 		variant := p.parseSumVariant()
@@ -198,16 +198,15 @@ func (p *Parser) parseSumType() *ast.SumType {
 	return st
 }
 
-func (p *Parser) parseSumVariant() *ast.SumVariant {
+func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
 	// curToken is '|'
-	pos := p.curPos()
 
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
 	name := p.curToken.Literal
 
-	variant := &ast.SumVariant{Name: name, Pos_: pos}
+	variant := &ast.VariantTypeExpr{Name: name}
 
 	// Optional payload block: { field type, ... }
 	if p.peekToken.Type == token.LBRACE {
@@ -225,8 +224,8 @@ func (p *Parser) parseSumVariant() *ast.SumVariant {
 
 	return variant
 }
-func (p *Parser) parseProductType() *ast.ProductType {
-	pt := &ast.ProductType{
+func (p *Parser) parseProductType() *ast.StructTypeExpr {
+	pt := &ast.StructTypeExpr{
 		Pos_: p.curPos(),
 	}
 
@@ -238,15 +237,21 @@ func (p *Parser) parseProductType() *ast.ProductType {
 		return pt
 	}
 
+	// parseField converts a Param (name + type) into a StructTypeField.
+	parseField := func() ast.StructTypeField {
+		param := p.parseParam()
+		return ast.StructTypeField{Name: param.Name, Type: param.Type}
+	}
+
 	// Case 2: At least one field
 	p.nextToken() // step onto the first field's name
-	pt.Fields = append(pt.Fields, p.parseParam())
+	pt.Fields = append(pt.Fields, parseField())
 
 	// While the NEXT token is a comma...
 	for p.peekToken.Type == token.COMMA {
 		p.nextToken() // step onto ','
 		p.nextToken() // step onto the next field's name
-		pt.Fields = append(pt.Fields, p.parseParam())
+		pt.Fields = append(pt.Fields, parseField())
 	}
 	p.nextToken()
 	p.skipNewlines()
@@ -279,7 +284,7 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		if p.peekToken.Type == token.RBRACKET {
 			p.nextToken()                 // Step onto ']'
 			baseType := p.parseTypeExpr() // Recursively parse the base type
-			return &ast.SliceType{Base: baseType, Pos_: startPos}
+			return &ast.SliceTypeExpr{Base: baseType, Pos_: startPos}
 		}
 
 		// Or is it a fixed-size array? `[5]T`
@@ -294,7 +299,7 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		}
 
 		baseType := p.parseTypeExpr() // Recursively parse the base type
-		return &ast.ArrayType{Size: size, Base: baseType, Pos_: startPos}
+		return &ast.ArrayTypeExpr{Size: int(size), Base: baseType, Pos_: startPos}
 	}
 
 	// Case 2: Standard Named Types like 'int', 'string', 'User'
@@ -328,8 +333,8 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		}
 
 		// Standard named type (int, string, etc.)
-		return &ast.NamedType{
-			Name: name,
+		return &ast.NamedTypeExpr{
+			Name: &ast.Identifier{Value: name},
 			Pos_: startPos,
 		}
 	}

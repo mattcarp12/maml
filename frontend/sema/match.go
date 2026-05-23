@@ -34,7 +34,7 @@ func (a *Analyzer) analyzeMatchExpr(e *ast.MatchExpr) Type {
 	// NEW: Back-propagate the fully resolved yield type to all arms
 	a.TypeMap[e] = yieldType
 	for _, arm := range e.Arms {
-		a.updateBlockYield(arm.Body, yieldType)
+		a.updateBlockYield(arm.Body.(*ast.BlockStmt), yieldType)
 	}
 
 	return yieldType
@@ -46,9 +46,9 @@ func (a *Analyzer) analyzeMatchArm(arm ast.MatchArm, subjectType Type) Type {
 
 	a.injectPatternBindings(arm.Pattern, subjectType)
 
-	a.analyzeBlockStmt(arm.Body)
+	a.analyzeBlockStmt(arm.Body.(*ast.BlockStmt))
 
-	return a.extractYieldType(arm.Body)
+	return a.extractYieldType(arm.Body.(*ast.BlockStmt))
 }
 
 func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType Type) {

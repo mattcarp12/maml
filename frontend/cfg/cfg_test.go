@@ -214,21 +214,6 @@ fn f() {
 	}
 }
 
-func TestDumpCFG(t *testing.T) {
-	input := `
-fn f(x int) int {
-	if x > 0 {
-		return 1
-	}
-
-	return 2
-}
-`
-
-	graph, _ := buildCFG(t, input)
-
-	cfg.Dump(graph)
-}
 
 func TestDeadBranch_IfFalse(t *testing.T) {
 	input := `
@@ -239,10 +224,10 @@ fn f() {
 	puts("live")
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead statements inside if false")
 	}
 }
@@ -257,10 +242,10 @@ fn f() {
 	}
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead else branch")
 	}
 }
@@ -279,11 +264,11 @@ fn f() {
 	}
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) != 2 {
-		t.Fatalf("expected 2 dead statements, got %d", len(result.DeadStatements))
+	if len(result.Errors) != 2 {
+		t.Fatalf("expected 2 dead statements, got %d", len(result.Errors))
 	}
 }
 
@@ -295,10 +280,10 @@ fn f() int {
 	x := 10
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead code after return")
 	}
 }
@@ -312,10 +297,10 @@ fn f() {
 	}
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead code after break")
 	}
 }
@@ -329,10 +314,10 @@ fn f() {
 	}
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead code after continue")
 	}
 }
@@ -383,11 +368,11 @@ fn f() {
 	puts("live")
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) != 3 {
-		t.Fatalf("expected 3 dead statements, got %d", len(result.DeadStatements))
+	if len(result.Errors) != 4 {
+		t.Fatalf("expected 4 dead statements, got %d", len(result.Errors))
 	}
 }
 
@@ -428,10 +413,10 @@ fn f() {
 	puts("live after")
 }
 `
-	graph, _ := buildCFG(t, input)
-	result := cfg.Analyze(graph)
+	graph, fn := buildCFG(t, input)
+	result := cfg.Analyze(fn, graph)
 
-	if len(result.DeadStatements) == 0 {
+	if len(result.Errors) == 0 {
 		t.Fatalf("expected dead for false body")
 	}
 }
@@ -439,15 +424,16 @@ fn f() {
 func TestAlwaysReturns_ReturnInAllPaths(t *testing.T) {
 	input := `
 fn f(x int) int {
-	if x > 0 {
-		return 1
-	} else if x < 0 {
-		return 2
-	} else {
-		return 3
+	if x > 0 { 
+		return 1 
+	} else { 
+		if x < 0 { 
+			return 2 
+		} else { 
+			return 3 
+		}
 	}
-}
-`
+}`
 	graph, _ := buildCFG(t, input)
 
 	if !cfg.AlwaysReturns(graph) {

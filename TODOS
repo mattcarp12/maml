@@ -10,12 +10,5 @@ SEMA
 
 INTERMEDIATE PASSES
 - Generics monomorphization
-- High-level lowering / Desugaring
-    1. Translate match expressions into flat sequence of if/else jumps, switch tables, and explicit variable bindings
-    2. Convert for loops into pure while(true) loops with break/goto jumps
-    * This makes it easier for escape and ownership analyzers - only need to understand ~5 core ast types (assignment, jumps, calls) instead of 30 complex AST node types
 - Constant folding - evaluate static math expressions; eliminate if(true) blocks
 - Dead code elimination
-- Inliner pass
-- New pipeline: Lexer -> Parser -> Sema -> CFG -> **convert AST to MIR** -> ownership -> escape -> optimizations ---> codegen
-    * MIR is flat linear list of instructions with basic blocks and goto statements

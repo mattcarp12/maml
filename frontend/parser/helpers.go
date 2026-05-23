@@ -215,5 +215,5 @@ func (p *Parser) parseCommaSeparatedList(end token.TokenType, parseElem func()) 
 	}
 
 	// Returns true if it found the end token, false otherwise
-	return p.expectPeek(end) 
+	return p.expectPeek(end)
 }

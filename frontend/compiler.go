@@ -3,11 +3,13 @@ package frontend
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/cfg"
 	"github.com/mattcarp12/maml/frontend/escape"
 	"github.com/mattcarp12/maml/frontend/lexer"
+	"github.com/mattcarp12/maml/frontend/lower"
 	"github.com/mattcarp12/maml/frontend/ownership"
 	"github.com/mattcarp12/maml/frontend/parser"
 	"github.com/mattcarp12/maml/frontend/sema"
@@ -42,12 +44,15 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	program := p.ParseProgram()
 
 	if len(p.Errors()) > 0 {
-		return nil, fmt.Errorf("parser syntax error: %s", p.Errors()[0])
+		return nil, fmt.Errorf("parser syntax errors:\n%s", strings.Join(p.Errors(), "\n"))
 	}
 
 	// ---------------------------------------------------------------------
-	// 2. Lowering Passes
+	// 2. Pre-Sema Lowering (Inliner Pass)
 	// ---------------------------------------------------------------------
+
+	inlinePass := lower.NewInlinePass(program)
+	program = ast.Rewrite(inlinePass, program).(*ast.Program)
 
 	// ---------------------------------------------------------------------
 	// 3. Semantic Analysis
@@ -57,74 +62,70 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 
 	typeMap, semaErrors := semaAnalyzer.Analyze(program)
 	if len(semaErrors) > 0 {
-		return nil, semaErrors[0]
+		return nil, formatErrors("Semantic", semaErrors)
 	}
 
 	// ---------------------------------------------------------------------
 	// 4. CFG Analysis
 	// ---------------------------------------------------------------------
 
-	cfgGraphs := make(map[*ast.FnDecl]*cfg.CFG)
-	cfgResults := make(map[*ast.FnDecl]*cfg.Result)
-
-	for _, decl := range program.Decls {
-		fn, ok := decl.(*ast.FnDecl)
-		if !ok {
-			continue
-		}
-
-		graph := cfg.Build(fn)
-		result := cfg.Analyze(graph)
-
-		cfgGraphs[fn] = graph
-		cfgResults[fn] = result
-
-		fnType := typeMap[fn.ReturnType]
-
-		if fnType != nil {
-			if ft, ok := fnType.(*sema.FunctionType); ok {
-
-				if !ft.Return.Equals(sema.UnitType{}) &&
-					!result.AlwaysReturns {
-
-					return nil, fmt.Errorf(
-						"function '%s' is missing a return statement",
-						fn.Name,
-					)
-				}
-			}
-		}
-
-		for _, node := range result.DeadStatements {
-			return nil, fmt.Errorf(
-				"%s: unreachable code",
-				node.Pos(),
-			)
-		}
+	cfgAnalyzer := cfg.NewAnalyzer(typeMap)
+	cfgGraphs, cfgResults, cfgErrors := cfgAnalyzer.Analyze(program)
+	if len(cfgErrors) > 0 {
+		return nil, formatErrors("Control Flow", cfgErrors)
 	}
 
 	// ---------------------------------------------------------------------
-	// 4. Ownership Analysis
+	// 5. Post-Sema Lowering Passes (Control Flow, Aggregates, Async)
+	// ---------------------------------------------------------------------
+
+	loweringPass := lower.NewPass(typeMap)
+	program = ast.Rewrite(loweringPass, program).(*ast.Program)
+
+	aggPass := lower.NewAggregatePass(typeMap)
+	program = ast.Rewrite(aggPass, program).(*ast.Program)
+
+	asyncPass := lower.NewAsyncPass(typeMap)
+	program = ast.Rewrite(asyncPass, program).(*ast.Program)
+
+	// ---------------------------------------------------------------------
+	// 6. Escape Analysis
+	// ---------------------------------------------------------------------
+
+	escapeAnalyzer := escape.New(typeMap)
+	escapeMap := escapeAnalyzer.Analyze(program)
+
+	// ---------------------------------------------------------------------
+	// 7. Allocation Lowering Pass
+	// ---------------------------------------------------------------------
+
+	allocPass := lower.NewAllocPass(escapeMap)
+	program = ast.Rewrite(allocPass, program).(*ast.Program)
+
+	// ---------------------------------------------------------------------
+	// 8. Ownership Analysis
 	// ---------------------------------------------------------------------
 
 	ownershipAnalyzer := ownership.New(typeMap)
 
 	ownershipErrors := ownershipAnalyzer.Analyze(program)
 	if len(ownershipErrors) > 0 {
-		return nil, ownershipErrors[0]
+		return nil, formatErrors("Ownership", ownershipErrors)
 	}
 
 	// ---------------------------------------------------------------------
-	// 5. Escape Analysis
+	// 9. ARC Lowering Pass
 	// ---------------------------------------------------------------------
 
-	escapeAnalyzer := escape.New(typeMap)
-	escapeMap := escapeAnalyzer.Analyze(program)
+	arcPass := lower.NewARCPass(typeMap)
+	program = ast.Rewrite(arcPass, program).(*ast.Program)
 
 	return &FrontendResult{
-		Program:   program,
-		TypeMap:   typeMap,
-		EscapeMap: escapeMap,
+		Program:     program,
+		TypeMap:     typeMap,
+		EscapeMap:   escapeMap,
+		CFG:         cfgGraphs,
+		CFGAnalysis: cfgResults,
 	}, nil
 }
 
@@ -136,4 +137,13 @@ func (c *Compiler) CompileFile(path string) (*FrontendResult, error) {
 	}
 
 	return c.Frontend(string(content))
+}
+
+// formatErrors is a helper to aggregate a slice of ast.CompileError into a single formatted error.
+func formatErrors(stage string, errs []ast.CompileError) error {
+	var msgs []string
+	for _, e := range errs {
+		msgs = append(msgs, e.Error())
+	}
+	return fmt.Errorf("%s errors:\n%s", stage, strings.Join(msgs, "\n"))
 }

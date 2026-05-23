@@ -47,6 +47,8 @@ func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
 		t = a.analyzeIndexExpr(e)
 	case *ast.SliceExpr:
 		t = a.analyzeSliceExpr(e)
+	case *ast.BlockStmt:
+		t = a.analyzeBlockExpr(e)
 	default:
 		a.errorf(expr.Pos(), "expression type not recognized: %T", expr)
 		t = UnknownType{}
@@ -139,7 +141,6 @@ func (a *Analyzer) analyzeIfExpr(e *ast.IfExpr) Type {
 
 	return finalYield
 }
-
 
 func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
 	if len(block.Statements) == 0 {
@@ -550,6 +551,43 @@ func (a *Analyzer) analyzeVariantLiteral(e *ast.StructLiteral, sym *Symbol) Type
 	return sumType
 }
 
+func (a *Analyzer) analyzeBlockExpr(block *ast.BlockStmt) Type {
+	// 1. Push a new variable scope so declarations inside the match arm
+	// (or block) don't leak into the outer scope.
+	a.pushScope()
+	defer a.popScope()
+
+	// 2. Default to UnitType for statement-level blocks.
+	// (Adjust this to &sema.UnitType{} or sema.UnitType{} based on your implementation)
+	var blockType Type = UnitType{}
+
+	// 3. Type-check each statement in the block sequentially
+	for i, stmt := range block.Statements {
+		// Evaluate the statement's side effects and inner expressions
+		a.analyzeStmt(stmt)
+
+		// 4. If we encounter a YieldStmt, its value dictates the block's return type
+		if yieldStmt, ok := stmt.(*ast.YieldStmt); ok {
+			// Extract the type of the yielded expression
+			yieldType := a.analyzeExpr(yieldStmt.Value)
+
+			// Store it so we can type the block itself
+			blockType = yieldType
+
+			// 5. Enforce that YieldStmt acts as a terminator (Dead Code check)
+			if i < len(block.Statements)-1 {
+				a.errorf(yieldStmt.Pos(), "statements after a yield ('=>') are unreachable")
+			}
+		}
+	}
+
+	// 6. Store the resolved type in the type map so later compiler passes
+	// know the type of this block.
+	a.TypeMap[block] = blockType
+
+	return blockType
+}
+
 func mergeTypes(a, b Type) Type {
 	if a == nil || b == nil {
 		return nil
@@ -625,7 +663,7 @@ func (a *Analyzer) propagateType(expr ast.Expr, t Type) {
 		}
 	case *ast.MatchExpr:
 		for _, arm := range e.Arms {
-			a.updateBlockYield(arm.Body, t)
+			a.updateBlockYield(arm.Body.(*ast.BlockStmt), t)
 		}
 	}
 }

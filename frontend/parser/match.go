@@ -130,7 +130,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 
 			if p.peekToken.Type == token.COLON {
 				// Confirmed field destructuring — parse all field bindings
-				var fieldBindings []ast.FieldBinding
+				var fieldBindings []ast.VariantPatternField
 				for {
 					if p.curToken.Type != token.IDENT {
 						p.addError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
@@ -144,7 +144,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 						return nil
 					}
 					bindingName := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
-					fieldBindings = append(fieldBindings, ast.FieldBinding{
+					fieldBindings = append(fieldBindings, ast.VariantPatternField{
 						Field:   fieldName,
 						Binding: bindingName,
 					})

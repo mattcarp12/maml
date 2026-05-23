@@ -53,6 +53,7 @@ llvm::Value *compileHeapAllocExpr(CodegenContext &ctx, const nlohmann::json &exp
       mamlAlloc, {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), allocSize)}, "heap_alloc");
 
   llvm::Value *innerVal = evaluateExpression(ctx, expr["value"]);
+  if (!innerVal) return nullptr;
 
   // If evaluating the inner value returned a stack pointer (like ArrayLiteral), copy the data.
   if (innerVal->getType()->isPointerTy()) {
@@ -97,6 +98,9 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
   if (nodeType == "IndexExpr") return compileIndexExpr(ctx, expr);
   if (nodeType == "HeapAllocExpr") return compileHeapAllocExpr(ctx, expr);
   if (nodeType == "StackAllocExpr") return compileStackAllocExpr(ctx, expr);
+  if (nodeType == "AsyncPrologueExpr") return compileAsyncPrologueExpr(ctx, expr);
+  if (nodeType == "ArrayLiteral") return compileArrayLiteral(ctx, expr);
+  if (nodeType == "StructLiteral") return compileStructLiteral(ctx, expr);
 
   ctx.Error.fatal("Unsupported expression node type encountered: " + std::string(nodeType), expr);
   return nullptr;

@@ -215,7 +215,7 @@ llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr) {
 llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
   auto &Builder = ctx.Builder;
   llvm::Value *objVal = evaluateExpression(ctx, e["object"]);
-  std::string_view fieldName = e["field"]["value"].get<std::string_view>();
+  std::string_view fieldName = e["field"].get<std::string_view>();
   nlohmann::json structType = e["object"]["maml_type"];
 
   if (structType["kind"].get<std::string_view>() == "SumType") {
@@ -246,6 +246,11 @@ llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
     }
   }
 
+  if (index < 0) {
+    ctx.Error.fatal("Field '" + std::string(fieldName) + "' not found in struct type", e);
+    return nullptr;
+  }
+
   llvm::Type *baseTy = llvmTypeFor(ctx, structType);
   llvm::Value *objPtr = objVal;
   if (!objVal->getType()->isPointerTy()) {
@@ -260,6 +265,16 @@ llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
 
   if (fieldTy->isArrayTy()) return fieldPtr;
   return Builder->CreateLoad(fieldTy, fieldPtr, "field_load");
+}
+
+llvm::Value *compileArrayLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+  llvm::Type *arrayTy = llvmTypeFor(ctx, expr["maml_type"]);
+  return ctx.Builder->CreateAlloca(arrayTy, nullptr, "array_lit");
+}
+
+llvm::Value *compileStructLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+  llvm::Type *structTy = llvmTypeFor(ctx, expr["maml_type"]);
+  return ctx.Builder->CreateAlloca(structTy, nullptr, "struct_lit");
 }
 
 }  // namespace maml

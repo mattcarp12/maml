@@ -69,7 +69,7 @@ func (a *Analyzer) analyzeFunction(fn *ast.FnDecl) {
 	a.env = newScope(nil)
 
 	for _, param := range fn.Params {
-		a.env.vars[param.Name] = []ast.Node{&param}
+		a.env.vars[param.Name] = []ast.Node{param}
 	}
 
 	a.buildEnvironment(fn.Body)

@@ -74,7 +74,7 @@ func (a *Analyzer) Visit(node ast.Node) ast.Visitor {
 		for _, arm := range n.Arms {
 			a.pushScope()
 			a.injectPatternBindings(arm.Pattern)
-			for _, stmt := range arm.Body.Statements {
+			for _, stmt := range arm.Body.(*ast.BlockStmt).Statements {
 				ast.Walk(a, stmt)
 			}
 			a.popScope()

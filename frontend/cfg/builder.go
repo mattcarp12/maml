@@ -100,34 +100,22 @@ func (b *Builder) buildStmt(
 		return b.newBlock()
 
 	case *ast.BreakStmt:
-		loop := b.currentLoop()
-
-		if loop != nil {
-			current.Terminator = JumpTerminator{
-				Target: loop.Exit,
-			}
-
+		current.Statements = append(current.Statements, s)
+		if loop := b.currentLoop(); loop != nil {
+			current.Terminator = JumpTerminator{Target: loop.Exit}
 			b.addEdge(current.ID, loop.Exit)
-
-			return b.newBlock()
 		}
-
-		return current
+		// Return a fresh, unattached block for any subsequent dead statements
+		return b.newBlock()
 
 	case *ast.ContinueStmt:
-		loop := b.currentLoop()
-
-		if loop != nil {
-			current.Terminator = JumpTerminator{
-				Target: loop.Header,
-			}
-
+		current.Statements = append(current.Statements, s)
+		if loop := b.currentLoop(); loop != nil {
+			current.Terminator = JumpTerminator{Target: loop.Header}
 			b.addEdge(current.ID, loop.Header)
-
-			return b.newBlock()
 		}
-
-		return current
+		// Return a fresh, unattached block for any subsequent dead statements
+		return b.newBlock()
 
 	case *ast.ExprStmt:
 		return b.buildExprStmt(s, current)
@@ -158,99 +146,52 @@ func (b *Builder) buildExprStmt(
 	}
 }
 
-func (b *Builder) buildIfExpr(
-	expr *ast.IfExpr,
-	current *Block,
-) *Block {
+func (b *Builder) buildIfExpr(expr *ast.IfExpr, current *Block) *Block {
+	// 1. Create the fundamental blocks we know we'll need
+	trueBlock := b.newBlock()
+	mergeBlock := b.newBlock()
 
-	constCond := EvalBool(expr.Condition)
+	var falseBlock *Block
+	var falseTarget BlockID
 
-	merge := b.newBlock()
-
-	// ------------------------------------------------------------
-	// condition known TRUE
-	// ------------------------------------------------------------
-
-	if constCond.Known && constCond.Value {
-		thenBlock := b.newBlock()
-
-		b.addEdge(current.ID, thenBlock.ID)
-
-		thenExit := b.buildBlockStmt(
-			expr.Consequence,
-			thenBlock.ID,
-		)
-
-		if thenExit != nil && thenExit.Terminator == nil {
-			b.addEdge(thenExit.ID, merge.ID)
-		}
-
-		return merge
-	}
-
-	// ------------------------------------------------------------
-	// condition known FALSE
-	// ------------------------------------------------------------
-
-	if constCond.Known && !constCond.Value {
-
-		if expr.Alternative == nil {
-			b.addEdge(current.ID, merge.ID)
-			return merge
-		}
-
-		elseBlock := b.newBlock()
-
-		b.addEdge(current.ID, elseBlock.ID)
-
-		elseExit := b.buildBlockStmt(
-			expr.Alternative,
-			elseBlock.ID,
-		)
-
-		if elseExit != nil && elseExit.Terminator == nil {
-			b.addEdge(elseExit.ID, merge.ID)
-		}
-
-		return merge
-	}
-
-	// ------------------------------------------------------------
-	// dynamic condition
-	// ------------------------------------------------------------
-
-	thenBlock := b.newBlock()
-
-	b.addEdge(current.ID, thenBlock.ID)
-
-	thenExit := b.buildBlockStmt(
-		expr.Consequence,
-		thenBlock.ID,
-	)
-
-	if thenExit != nil && thenExit.Terminator == nil {
-		b.addEdge(thenExit.ID, merge.ID)
-	}
-
+	// 2. Determine the false target (either an else block or the merge block)
 	if expr.Alternative != nil {
-		elseBlock := b.newBlock()
-
-		b.addEdge(current.ID, elseBlock.ID)
-
-		elseExit := b.buildBlockStmt(
-			expr.Alternative,
-			elseBlock.ID,
-		)
-
-		if elseExit != nil && elseExit.Terminator == nil {
-			b.addEdge(elseExit.ID, merge.ID)
-		}
-
+		falseBlock = b.newBlock()
+		falseTarget = falseBlock.ID
 	} else {
-		b.addEdge(current.ID, merge.ID)
+		falseTarget = mergeBlock.ID
 	}
 
-	return merge
+	// 3. Attach the terminator to the block evaluating the condition
+	current.Terminator = BranchTerminator{
+		Condition:   expr.Condition,
+		TrueTarget:  trueBlock.ID,
+		FalseTarget: falseTarget,
+	}
+
+	// 4. Wire up the edges from the current conditional block
+	b.addEdge(current.ID, trueBlock.ID)
+	b.addEdge(current.ID, falseTarget)
+
+	// 5. Build the true branch
+	// Note: We pass trueBlock.ID here based on your buildBlockStmt signature
+	trueEnd := b.buildBlockStmt(expr.Consequence, trueBlock.ID)
+
+	// If the branch doesn't end in a terminal (like `return` or `break`), it falls through to the merge block
+	if trueEnd.Terminator == nil {
+		b.addEdge(trueEnd.ID, mergeBlock.ID)
+	}
+
+	// 6. Build the false/else branch (if it exists)
+	if expr.Alternative != nil {
+		falseEnd := b.buildBlockStmt(expr.Alternative, falseBlock.ID)
+		if falseEnd.Terminator == nil {
+			b.addEdge(falseEnd.ID, mergeBlock.ID)
+		}
+	}
+
+	// 7. Return the merge block so subsequent statements continue from there
+	return mergeBlock
 }
 
 func (b *Builder) buildMatchExpr(
@@ -266,7 +207,7 @@ func (b *Builder) buildMatchExpr(
 		b.addEdge(current.ID, armBlock.ID)
 
 		armExit := b.buildBlockStmt(
-			arm.Body,
+			arm.Body.(*ast.BlockStmt),
 			armBlock.ID,
 		)
 
@@ -283,58 +224,60 @@ func (b *Builder) buildMatchExpr(
 	return merge
 }
 
-func (b *Builder) buildForStmt(
-	stmt *ast.ForStmt,
-	current *Block,
-) *Block {
-
-	header := b.newBlock()
-	body := b.newBlock()
-	after := b.newBlock()
-
-	b.addEdge(current.ID, header.ID)
-
-	infinite := false
-
-	if stmt.Condition == nil {
-		infinite = true
-	} else {
-		cond := EvalBool(stmt.Condition)
-
-		if cond.Known && cond.Value {
-			infinite = true
-		}
-
-		if cond.Known && !cond.Value {
-			b.addEdge(header.ID, after.ID)
-			return after
-		}
+func (b *Builder) buildForStmt(stmt *ast.ForStmt, current *Block) *Block {
+	// 1. Build Init if present
+	if stmt.Init != nil {
+		current = b.buildStmt(stmt.Init, current)
 	}
 
-	b.addEdge(header.ID, body.ID)
+	headerBlock := b.newBlock()
+	bodyBlock := b.newBlock()
+	postBlock := b.newBlock()
+	exitBlock := b.newBlock()
 
-	b.pushLoop(header.ID, after.ID)
+	// Connect current flow into the loop header
+	if current.Terminator == nil {
+		b.addEdge(current.ID, headerBlock.ID)
+	}
 
-	bodyExit := b.buildBlockStmt(stmt.Body, body.ID)
+	// 2. Setup Loop Header (Condition)
+	if stmt.Condition != nil {
+		headerBlock.Terminator = BranchTerminator{
+			Condition:   stmt.Condition,
+			TrueTarget:  bodyBlock.ID,
+			FalseTarget: exitBlock.ID,
+		}
+		b.addEdge(headerBlock.ID, bodyBlock.ID)
+		b.addEdge(headerBlock.ID, exitBlock.ID)
+	} else {
+		b.addEdge(headerBlock.ID, bodyBlock.ID)
+	}
 
+	// 3. Build Body with Loop Context
+	// Note: 'continue' should jump to the postBlock so the post-statement executes
+	b.pushLoop(postBlock.ID, exitBlock.ID)
+	bodyEnd := b.buildBlockStmt(stmt.Body, bodyBlock.ID)
 	b.popLoop()
 
-	if bodyExit != nil &&
-		bodyExit.Terminator == nil {
-
-		b.addEdge(bodyExit.ID, header.ID)
-
-		bodyExit.Terminator = JumpTerminator{
-			Target: header.ID,
-		}
+	// Connect the end of the body to the post block
+	if bodyEnd.Terminator == nil {
+		b.addEdge(bodyEnd.ID, postBlock.ID)
 	}
 
-	if !infinite {
-		b.addEdge(header.ID, after.ID)
+	// 4. Build Post statement
+	postEnd := postBlock
+	if stmt.Post != nil {
+		postEnd = b.buildStmt(stmt.Post, postBlock)
 	}
 
-	return after
+	// Connect the end of the post block back to the condition header
+	if postEnd.Terminator == nil {
+		b.addEdge(postEnd.ID, headerBlock.ID)
+	}
+
+	return exitBlock
 }
+
 func (b *Builder) pushLoop(header, exit BlockID) {
 	b.loops = append(b.loops, LoopContext{
 		Header: header,

@@ -8,32 +8,6 @@
 
 namespace maml {
 
-void compileCoroutinePrologue(CodegenContext &ctx, llvm::Function *F) {
-  auto &Builder = ctx.Builder;
-  auto &Context = ctx.Context;
-  auto &Module = ctx.Module;
-
-  llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 0);
-  llvm::Value *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context));
-
-  llvm::Function *coroIdFn = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_id);
-  llvm::Value *coroId = Builder->CreateCall(coroIdFn, {align, nullPtr, nullPtr, nullPtr}, "coro.id");
-  ctx.SymbolTable[rt::CORO_ID] = coroId;
-
-  llvm::Function *coroSizeFn =
-      llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_size, {llvm::Type::getInt64Ty(Context)});
-  llvm::Value *coroSize = Builder->CreateCall(coroSizeFn, {}, "coro.size");
-
-  llvm::FunctionCallee mamlAlloc = Module->getOrInsertFunction(
-      rt::ALLOC,
-      llvm::FunctionType::get(llvm::PointerType::getUnqual(Context), {llvm::Type::getInt64Ty(Context)}, false));
-  llvm::Value *allocMem = Builder->CreateCall(mamlAlloc, {coroSize}, "coro.alloc.mem");
-
-  llvm::Function *coroBeginFn = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_begin);
-  llvm::Value *coroHdl = Builder->CreateCall(coroBeginFn, {coroId, allocMem}, "coro.hdl");
-  ctx.SymbolTable[rt::CORO_HDL] = coroHdl;
-}
-
 void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
   auto &Builder = ctx.Builder;
   auto &Context = ctx.Context;
@@ -72,10 +46,6 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
 
   ctx.SymbolTable.clear();
   ctx.pushScope();
-
-  if (fn.contains("is_async") && fn["is_async"] == true) {
-    compileCoroutinePrologue(ctx, F);
-  }
 
   unsigned Idx = 0;
   for (auto &Arg : F->args()) {

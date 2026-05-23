@@ -1,5 +1,7 @@
 package cfg
 
+import "github.com/mattcarp12/maml/frontend/ast"
+
 type Terminator interface {
 	isTerminator()
 }
@@ -15,6 +17,7 @@ type JumpTerminator struct {
 func (JumpTerminator) isTerminator() {}
 
 type BranchTerminator struct {
+	Condition   ast.Expr
 	TrueTarget  BlockID
 	FalseTarget BlockID
 }

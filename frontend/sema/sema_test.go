@@ -29,8 +29,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ReturnStmt{
@@ -49,8 +49,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ReturnStmt{
@@ -69,8 +69,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.DeclareStmt{
@@ -94,8 +94,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ReturnStmt{
@@ -114,8 +114,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.DeclareStmt{
@@ -142,8 +142,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ReturnStmt{
@@ -166,8 +166,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ReturnStmt{
@@ -189,8 +189,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ExprStmt{
@@ -215,8 +215,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.ExprStmt{
@@ -238,18 +238,18 @@ func TestAnalyzer_Analyze(t *testing.T) {
 			program: &ast.Program{
 				Decls: []ast.Decl{
 					&ast.TypeDecl{
-						Name: &ast.NamedType{Name: "Point"},
-						Rhs: &ast.ProductType{
-							Fields: []ast.Param{
-								{Name: "x", Type: &ast.NamedType{Name: "int"}},
-								{Name: "y", Type: &ast.NamedType{Name: "int"}},
+						Name: &ast.Identifier{Value: "Point"},
+						Rhs: &ast.StructTypeExpr{
+							Fields: []ast.StructTypeField{
+								{Name: "x", Type: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}}},
+								{Name: "y", Type: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}}},
 							},
 						},
 					},
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.DeclareStmt{
@@ -275,10 +275,10 @@ func TestAnalyzer_Analyze(t *testing.T) {
 			program: &ast.Program{
 				Decls: []ast.Decl{
 					&ast.TypeDecl{
-						Name: &ast.NamedType{Name: "Bad"},
-						Rhs: &ast.ProductType{
-							Fields: []ast.Param{
-								{Name: "x", Type: &ast.NamedType{Name: "unknownType"}},
+						Name: &ast.Identifier{Value: "Bad"},
+						Rhs: &ast.StructTypeExpr{
+							Fields: []ast.StructTypeField{
+								{Name: "x", Type: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "unknownType"}}},
 							},
 						},
 					},
@@ -291,15 +291,17 @@ func TestAnalyzer_Analyze(t *testing.T) {
 			program: &ast.Program{
 				Decls: []ast.Decl{
 					&ast.TypeDecl{
-						Name: &ast.NamedType{Name: "Point"},
-						Rhs: &ast.ProductType{
-							Fields: []ast.Param{{Name: "x", Type: &ast.NamedType{Name: "int"}}},
+						Name: &ast.Identifier{Value: "Point"},
+						Rhs: &ast.StructTypeExpr{
+							Fields: []ast.StructTypeField{
+								{Name: "x", Type: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}}},
+							},
 						},
 					},
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.DeclareStmt{
@@ -328,8 +330,8 @@ func TestAnalyzer_Analyze(t *testing.T) {
 				Decls: []ast.Decl{
 					&ast.FnDecl{
 						Name:       "main",
-						Params:     []ast.Param{},
-						ReturnType: &ast.NamedType{Name: "int"},
+						Params:     []*ast.Param{},
+						ReturnType: &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}},
 						Body: &ast.BlockStmt{
 							Statements: []ast.Stmt{
 								&ast.DeclareStmt{
@@ -385,8 +387,8 @@ func TestAnalyzer_ResolveAstType(t *testing.T) {
 		want     Type
 		wantErr  bool
 	}{
-		{"int", &ast.NamedType{Name: "int"}, IntType{}, false},
-		{"unknown", &ast.NamedType{Name: "FooBar"}, UnknownType{}, true},
+		{"int", &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "int"}}, IntType{}, false},
+		{"unknown", &ast.NamedTypeExpr{Name: &ast.Identifier{Value: "FooBar"}}, UnknownType{}, true},
 	}
 
 	for _, tt := range tests {
@@ -1138,7 +1140,7 @@ func TestAssignment(t *testing.T) {
 				for (true) {
 					x = 5
 				}
-				return x  
+				return x
 			}`,
 		},
 	}
@@ -1975,7 +1977,7 @@ func TestSemaErrorPaths(t *testing.T) {
 
 	for _, input := range cases {
 		t.Run(input, func(t *testing.T) {
-			errors, _ := analyzeInput(t, input)
+			_, errors := analyzeInput(t, input)
 			require.NotEmpty(t, errors)
 		})
 	}
@@ -2101,7 +2103,7 @@ func TestTaskTypeAndStructuralGenerics(t *testing.T) {
 			input: `
 			fn process(t Task<int>) {}
 			async fn get_string() string { return "hello" }
-			
+
 			fn main() int {
 				process(get_string())
 				return 0

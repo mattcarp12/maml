@@ -6,15 +6,15 @@ import "github.com/mattcarp12/maml/frontend/ast"
 func (a *Analyzer) discoverTypes(program *ast.Program) {
 	for _, decl := range program.Decls {
 		if td, ok := decl.(*ast.TypeDecl); ok {
-			if _, exists := a.scope.types[td.Name.Name]; exists {
-				a.errorf(td.Pos(), "type '%s' already defined", td.Name.Name)
+			if _, exists := a.scope.types[td.Name.Value]; exists {
+				a.errorf(td.Pos(), "type '%s' already defined", td.Name.Value)
 				continue
 			}
 			switch td.Rhs.(type) {
-			case *ast.ProductType:
-				a.scope.types[td.Name.Name] = &StructType{Name: td.Name.Name}
-			case *ast.SumType:
-				a.scope.types[td.Name.Name] = &SumType{BaseName: td.Name.Name}
+			case *ast.StructTypeExpr:
+				a.scope.types[td.Name.Value] = &StructType{Name: td.Name.Value}
+			case *ast.SumTypeExpr:
+				a.scope.types[td.Name.Value] = &SumType{BaseName: td.Name.Value}
 			}
 		}
 	}
@@ -29,10 +29,10 @@ func (a *Analyzer) resolveTypeBodies(program *ast.Program) {
 }
 
 func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
-	existingType := a.scope.types[v.Name.Name]
+	existingType := a.scope.types[v.Name.Value]
 
 	switch rhs := v.Rhs.(type) {
-	case *ast.ProductType:
+	case *ast.StructTypeExpr:
 		st, ok := existingType.(*StructType)
 		if !ok {
 			return
@@ -42,7 +42,7 @@ func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
 			st.Fields = append(st.Fields, StructField{Name: f.Name, Type: fieldType})
 		}
 
-	case *ast.SumType:
+	case *ast.SumTypeExpr:
 		st, ok := existingType.(*SumType)
 		if !ok {
 			return
@@ -79,8 +79,8 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 	var resolvedType Type = UnknownType{}
 
 	switch t := expr.(type) {
-	case *ast.NamedType:
-		switch t.Name {
+	case *ast.NamedTypeExpr:
+		switch t.Name.Value {
 		case "int":
 			resolvedType = IntType{}
 		case "bool":
@@ -90,7 +90,7 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 		case "unit":
 			resolvedType = UnitType{}
 		default:
-			if found := a.lookupCustomType(t.Name); found != nil {
+			if found := a.lookupCustomType(t.Name.Value); found != nil {
 				resolvedType = found
 			} else {
 				a.errorf(t.Pos(), "unknown type %s", t.Name)
@@ -98,12 +98,12 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
 		}
 
 	// NEW: Handle []T
-	case *ast.SliceType:
+	case *ast.SliceTypeExpr:
 		baseType := a.resolveAstType(t.Base)
 		resolvedType = SliceType{Base: baseType}
 
 	// NEW: Handle [N]T
-	case *ast.ArrayType:
+	case *ast.ArrayTypeExpr:
 		baseType := a.resolveAstType(t.Base)
 		resolvedType = ArrayType{Base: baseType, Size: int(t.Size)}
 

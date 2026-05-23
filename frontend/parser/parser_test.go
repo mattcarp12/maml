@@ -236,7 +236,7 @@ func TestFunctionDeclarations(t *testing.T) {
 			require.True(t, ok)
 
 			assert.Equal(t, tt.fnName, fn.Name)
-			assert.Equal(t, tt.returnType, fn.ReturnType.(*ast.NamedType).Name)
+			assert.Equal(t, tt.returnType, fn.ReturnType.(*ast.NamedTypeExpr).Name.Value)
 			assert.Len(t, fn.Params, tt.paramCount)
 			assert.Len(t, fn.Body.Statements, tt.stmtCount)
 		})
@@ -250,9 +250,9 @@ func TestFunctionParamTypes(t *testing.T) {
 
 	require.Len(t, fn.Params, 2)
 	assert.Equal(t, "x", fn.Params[0].Name)
-	assert.Equal(t, "int", fn.Params[0].Type.(*ast.NamedType).Name)
+	assert.Equal(t, "int", fn.Params[0].Type.(*ast.NamedTypeExpr).Name.Value)
 	assert.Equal(t, "y", fn.Params[1].Name)
-	assert.Equal(t, "int", fn.Params[1].Type.(*ast.NamedType).Name)
+	assert.Equal(t, "int", fn.Params[1].Type.(*ast.NamedTypeExpr).Name.Value)
 }
 
 func TestTypeDeclaration(t *testing.T) {
@@ -298,9 +298,9 @@ func TestTypeDeclaration(t *testing.T) {
 
 			td, ok := program.Decls[0].(*ast.TypeDecl)
 			require.True(t, ok)
-			assert.Equal(t, tt.typeName, td.Name.Name)
+			assert.Equal(t, tt.typeName, td.Name.Value)
 
-			pt, ok := td.Rhs.(*ast.ProductType)
+			pt, ok := td.Rhs.(*ast.StructTypeExpr)
 			require.True(t, ok)
 			assert.Len(t, pt.Fields, tt.fieldCount)
 		})
@@ -1567,7 +1567,7 @@ func TestSumTypeDeclarations(t *testing.T) {
 			td, ok := program.Decls[0].(*ast.TypeDecl)
 			require.True(t, ok)
 
-			sum, ok := td.Rhs.(*ast.SumType)
+			sum, ok := td.Rhs.(*ast.SumTypeExpr)
 			require.True(t, ok)
 			assert.Len(t, sum.Variants, tt.expectedVariants)
 		})
@@ -1668,7 +1668,6 @@ func TestIndexExpressionEdgeCases(t *testing.T) {
 	}
 }
 
-
 func TestAwaitPrecedence(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1706,8 +1705,8 @@ func TestUnitTypeAndBareReturns(t *testing.T) {
 		input := "fn do_nothing() unit {}"
 		program := parseProgram(t, input)
 		fn := program.Decls[0].(*ast.FnDecl)
-		
-		assert.Equal(t, "unit", fn.ReturnType.(*ast.NamedType).Name)
+
+		assert.Equal(t, "unit", fn.ReturnType.(*ast.NamedTypeExpr).Name.Value)
 	})
 
 	t.Run("parse bare return", func(t *testing.T) {

@@ -37,6 +37,8 @@ llvm::Value *compileCallExpr(CodegenContext &ctx, const nlohmann::json &expr) {
   std::vector<llvm::Type *> argTys;
   for (const auto &arg : expr["arguments"]) {
     llvm::Value *argVal = evaluateExpression(ctx, arg["argument"]);
+    if (!argVal) return nullptr;
+
     llvm::Type *expectedTy = llvmTypeFor(ctx, arg["argument"]["maml_type"]);
 
     if (argVal->getType()->isPointerTy() && !expectedTy->isPointerTy() && !expectedTy->isArrayTy()) {

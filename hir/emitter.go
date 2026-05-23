@@ -157,6 +157,24 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 		res["operator"] = n.Operator
 		res["right"] = e.marshalNode(n.Right)
 
+	case *ast.StackAllocExpr:
+		res["node_type"] = "StackAllocExpr"
+		res["value"] = e.marshalNode(n.Value)
+		res["maml_type"] = e.marshalType(e.typeMap[n])
+
+	case *ast.HeapAllocExpr:
+		res["node_type"] = "HeapAllocExpr"
+		res["value"] = e.marshalNode(n.Value)
+		res["maml_type"] = e.marshalType(e.typeMap[n])
+
+	case *ast.RetainStmt:
+		res["node_type"] = "RetainStmt"
+		res["value"] = e.marshalNode(n.Value)
+
+	case *ast.ReleaseStmt:
+		res["node_type"] = "ReleaseStmt"
+		res["value"] = e.marshalNode(n.Value)
+
 	case *ast.ArrayLiteral:
 		res["node_type"] = "ArrayLiteral"
 		var elements []interface{}
@@ -177,14 +195,14 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 		}
 		res["fields"] = fields
 
-	case *ast.VariantLiteral:
+	case *ast.VariantPattern:
 		res["node_type"] = "VariantLiteral"
-		res["variant_name"] = n.VariantName
+		res["variant_name"] = n.Name
 		fields := make([]interface{}, 0)
 		for _, f := range n.Fields {
 			fields = append(fields, map[string]interface{}{
-				"name":  f.Name.Value,
-				"value": e.marshalNode(f.Value),
+				"name":  f.Binding.Value,
+				"value": e.marshalNode(f.Binding),
 			})
 		}
 		res["fields"] = fields

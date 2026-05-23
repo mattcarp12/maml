@@ -281,17 +281,11 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 }
 
 func (p *Parser) parseBreakStmt() ast.Stmt {
-	p.expectStatementEnd()
-
-	return &ast.BreakStmt{
-		Token: p.curToken,
-	}
+	stmt := &ast.BreakStmt{Token: p.curToken}
+	return stmt
 }
 
 func (p *Parser) parseContinueStmt() ast.Stmt {
-	p.expectStatementEnd()
-
-	return &ast.ContinueStmt{
-		Token: p.curToken,
-	}
+	stmt := &ast.ContinueStmt{Token: p.curToken}
+	return stmt
 }

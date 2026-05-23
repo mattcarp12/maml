@@ -82,7 +82,7 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"for":      FOR,
 	"own":      OWN,
-	"contunue": CONTINUE,
+	"continue": CONTINUE,
 	"break":    BREAK,
 }
 

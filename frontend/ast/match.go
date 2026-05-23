@@ -6,122 +6,222 @@ import (
 	"strings"
 )
 
-// MatchExpr represents: match subject { case Pat { body } ... }
+// =============================================================================
+// Match Expressions
+// =============================================================================
+
+// MatchExpr represents a pattern matching expression.
+//
+// Example:
+//
+//	match value {
+//	    Some(x) => x,
+//	    None    => 0,
+//	}
 type MatchExpr struct {
+	Pos_ Position
+	End_ Position
+
 	Subject Expr
 	Arms    []MatchArm
-	Pos_    Position
-	End_    Position
 }
 
+// MatchArm represents a single match arm.
+type MatchArm struct {
+	Pos_ Position
+	End_ Position
+
+	Pattern Pattern
+	Body    Expr
+}
+
+// =============================================================================
+// Pattern Nodes
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Wildcard Pattern
+// -----------------------------------------------------------------------------
+
+// WildcardPattern represents:
+//
+//	_
+type WildcardPattern struct {
+	Pos_ Position
+}
+
+// -----------------------------------------------------------------------------
+// Literal Pattern
+// -----------------------------------------------------------------------------
+
+// LiteralPattern represents:
+//
+//	42
+//	"hello"
+//	true
+type LiteralPattern struct {
+	Pos_ Position
+	End_ Position
+
+	Value Expr
+}
+
+// -----------------------------------------------------------------------------
+// Variant Pattern
+// -----------------------------------------------------------------------------
+
+// VariantPatternField represents a destructured variant field binding.
+//
+// Example:
+//
+//	x in:
+//	    Some { x }
+type VariantPatternField struct {
+	Field   string
+	Binding *Identifier
+}
+
+// VariantPattern represents a sum-type variant pattern.
+//
+// Examples:
+//
+//	Some(x)
+//	Ok(value)
+//	Error { code, message }
+type VariantPattern struct {
+	Pos_ Position
+	End_ Position
+
+	Name    string
+	Binding *Identifier
+	Fields  []VariantPatternField
+}
+
+// =============================================================================
+// Interface Implementations
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// MatchExpr
+// -----------------------------------------------------------------------------
+
 func (m *MatchExpr) Pos() Position { return m.Pos_ }
+
 func (m *MatchExpr) End() Position { return m.End_ }
+
 func (m *MatchExpr) String() string {
 	var out bytes.Buffer
+
 	out.WriteString("match ")
 	out.WriteString(m.Subject.String())
 	out.WriteString(" {\n")
+
 	for _, arm := range m.Arms {
 		out.WriteString("\t")
 		out.WriteString(arm.String())
 		out.WriteString("\n")
 	}
+
 	out.WriteString("}")
+
 	return out.String()
 }
+
 func (m *MatchExpr) exprNode() {}
 
-// MatchArm represents a single case arm: case Pat { body }
-type MatchArm struct {
-	Pattern Pattern
-	Body    *BlockStmt
-	Pos_    Position
+// -----------------------------------------------------------------------------
+// MatchArm
+// -----------------------------------------------------------------------------
+
+func (m *MatchArm) String() string {
+	return fmt.Sprintf(
+		"%s => %s,",
+		m.Pattern.String(),
+		m.Body.String(),
+	)
 }
 
-func (a *MatchArm) String() string {
-	return fmt.Sprintf("case %s %s", a.Pattern.String(), a.Body.String())
+// -----------------------------------------------------------------------------
+// WildcardPattern
+// -----------------------------------------------------------------------------
+
+func (w *WildcardPattern) Pos() Position { return w.Pos_ }
+
+func (w *WildcardPattern) End() Position {
+	return Position{
+		Line: w.Pos_.Line,
+		Col:  w.Pos_.Col + 1,
+	}
 }
 
-// Pattern is the interface all pattern nodes implement.
-type Pattern interface {
-	Node
-	patternNode()
-	String() string
-	Pos() Position
+func (w *WildcardPattern) String() string {
+	return "_"
 }
 
-// WildcardPattern: _
-type WildcardPattern struct {
-	Pos_ Position
+func (w *WildcardPattern) patternNode() {}
+
+// -----------------------------------------------------------------------------
+// LiteralPattern
+// -----------------------------------------------------------------------------
+
+func (l *LiteralPattern) Pos() Position { return l.Pos_ }
+
+func (l *LiteralPattern) End() Position { return l.End_ }
+
+func (l *LiteralPattern) String() string {
+	return l.Value.String()
 }
 
-func (w *WildcardPattern) patternNode()   {}
-func (w *WildcardPattern) Pos() Position  { return w.Pos_ }
-func (w *WildcardPattern) String() string { return "_" }
-func (w *WildcardPattern) End() Position  { return w.Pos_ }
+func (l *LiteralPattern) patternNode() {}
 
-// LiteralPattern: 42, true, false
-type LiteralPattern struct {
-	Value Expr // IntLiteral or BoolLiteral
-	Pos_  Position
-}
+// -----------------------------------------------------------------------------
+// VariantPattern
+// -----------------------------------------------------------------------------
 
-func (l *LiteralPattern) patternNode()   {}
-func (l *LiteralPattern) Pos() Position  { return l.Pos_ }
-func (l *LiteralPattern) String() string { return l.Value.String() }
-func (l *LiteralPattern) End() Position  { return l.Pos_ }
-
-type VariantPattern struct {
-	Name    string
-	Binding *Identifier    // single binding: case Circle(c)
-	Fields  []FieldBinding // field bindings: case Circle{radius: r}
-	Pos_    Position
-}
-
-// FieldBinding is one field destructuring in a pattern: radius: r
-type FieldBinding struct {
-	Field   string
-	Binding *Identifier
-}
-
-func (v *VariantPattern) patternNode()  {}
 func (v *VariantPattern) Pos() Position { return v.Pos_ }
+
+func (v *VariantPattern) End() Position { return v.End_ }
+
 func (v *VariantPattern) String() string {
+	var out bytes.Buffer
+
+	out.WriteString(v.Name)
+
 	if v.Binding != nil {
-		return fmt.Sprintf("%s(%s)", v.Name, v.Binding.Value)
+		out.WriteString("(")
+		out.WriteString(v.Binding.String())
+		out.WriteString(")")
 	}
+
 	if len(v.Fields) > 0 {
-		var parts []string
-		for _, fb := range v.Fields {
-			parts = append(parts, fmt.Sprintf("%s: %s", fb.Field, fb.Binding.Value))
+		var fields []string
+
+		for _, f := range v.Fields {
+			fields = append(fields, f.String())
 		}
-		return fmt.Sprintf("%s{%s}", v.Name, strings.Join(parts, ", "))
-	}
-	return v.Name
-}
-func (v *VariantPattern) End() Position { return v.Pos_ }
 
-// VariantLiteral represents a sum type constructor expression:
-//
-//	Circle{radius: 5}    — variant with payload
-//	Point                — unit variant (Fields is empty)
-type VariantLiteral struct {
-	VariantName string // "Circle", "Point", etc.
-	Fields      []StructField
-	Pos_        Position
-	End_        Position
+		out.WriteString(" { ")
+		out.WriteString(strings.Join(fields, ", "))
+		out.WriteString(" }")
+	}
+
+	return out.String()
 }
 
-func (vl *VariantLiteral) Pos() Position { return vl.Pos_ }
-func (vl *VariantLiteral) End() Position { return vl.End_ }
-func (vl *VariantLiteral) String() string {
-	if len(vl.Fields) == 0 {
-		return vl.VariantName
+func (v *VariantPattern) patternNode() {}
+
+// -----------------------------------------------------------------------------
+// VariantPatternField
+// -----------------------------------------------------------------------------
+
+func (v *VariantPatternField) String() string {
+	if v.Binding == nil {
+		return v.Field
 	}
-	var fields []string
-	for _, f := range vl.Fields {
-		fields = append(fields, fmt.Sprintf("%s: %s", f.Name.String(), f.Value.String()))
+
+	if v.Field == v.Binding.Value {
+		return v.Field
 	}
-	return fmt.Sprintf("%s{%s}", vl.VariantName, strings.Join(fields, ", "))
+
+	return fmt.Sprintf("%s: %s", v.Field, v.Binding.String())
 }
-func (vl *VariantLiteral) exprNode() {}

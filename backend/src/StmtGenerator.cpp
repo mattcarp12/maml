@@ -20,7 +20,10 @@ static void compileBlockStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
 static void compileDeclareStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   auto &Builder = ctx.Builder;
   std::string_view varName = stmt["name"].get<std::string_view>();
+
   llvm::Value *initVal = evaluateExpression(ctx, stmt["value"]);
+  if (!initVal) return;
+
   nlohmann::json typeJson = stmt["value"]["maml_type"];
   llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
 
@@ -96,6 +99,8 @@ static void compileAssignStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
 
   const nlohmann::json &rhsNode = stmt.contains("rvalue") ? stmt["rvalue"] : stmt["value"];
   llvm::Value *rhsVal = evaluateExpression(ctx, rhsNode);
+  if (!rhsVal) return;
+
   nlohmann::json typeJson = rhsNode["maml_type"];
 
   llvm::Type *valTy = llvmTypeFor(ctx, typeJson);

@@ -2,49 +2,58 @@ package ast
 
 import "fmt"
 
-// Position tracks where exactly a node lives in the source code
+// =============================================================================
+// Source Positions
+// =============================================================================
+
+// Position tracks a location within a source file.
 type Position struct {
 	Line int
 	Col  int
-	// File string
 }
 
 func (p Position) String() string {
 	return fmt.Sprintf("%d:%d", p.Line, p.Col)
 }
 
-// Node is the base contract for everything in the AST.
+// =============================================================================
+// Core Node Interfaces
+// =============================================================================
+
+// Node is the base contract implemented by every AST node.
 type Node interface {
 	Pos() Position
 	End() Position
 	String() string
+	Clone() Node
 }
 
-// -----------------------------------------------------------------------------
-// Core Classifications
-// -----------------------------------------------------------------------------
-
-// Decl represents a top-level declaraton (Functions, Structs, Types).
-// Declarations introduce names into the package scope.
+// Decl represents a top-level declaration.
 type Decl interface {
 	Node
 	declNode()
 }
 
-// Stmt represents an action within a block (Assignment, Return, Ifs)
-// Statements do not evaluate to a value
+// Stmt represents an executable statement.
 type Stmt interface {
 	Node
 	stmtNode()
 }
 
-// Expr represents a computation that evaluates to a value (Math, Variables, Function calls)
+// Expr represents a value-producing expression.
 type Expr interface {
 	Node
 	exprNode()
 }
 
+// TypeExpr represents a type-level expression.
 type TypeExpr interface {
 	Node
 	typeNode()
+}
+
+// Pattern represents a match-pattern node.
+type Pattern interface {
+	Node
+	patternNode()
 }

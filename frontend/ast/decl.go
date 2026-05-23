@@ -6,157 +6,199 @@ import (
 	"strings"
 )
 
-// -----------------------------------------------------------------------------
-// Root Node
-// -----------------------------------------------------------------------------
+// =============================================================================
+// Program Root
+// =============================================================================
 
-// Program is the root of the AST.
+// Program is the root AST node for a source file or compilation unit.
 type Program struct {
 	Decls []Decl
 }
 
+// =============================================================================
+// Function Declarations
+// =============================================================================
+
+// Param represents a function parameter.
+type Param struct {
+	Pos_ Position
+	End_ Position
+
+	Name string
+	Type TypeExpr
+
+	Mut bool
+	Own bool
+}
+
+// FnDecl represents a function declaration.
+//
+// Example:
+//
+//	fn add(a: int, b: int) -> int {
+//	    return a + b
+//	}
+type FnDecl struct {
+	Pos_ Position
+	End_ Position
+
+	Name       string
+	IsAsync    bool
+	Params     []*Param
+	ReturnType TypeExpr
+	Body       *BlockStmt
+}
+
+// =============================================================================
+// Type Declarations
+// =============================================================================
+
+// TypeDecl represents a named type declaration.
+//
+// Example:
+//
+//	type Point = struct {
+//	    x: int,
+//	    y: int,
+//	}
+type TypeDecl struct {
+	Pos_ Position
+	End_ Position
+
+	Name *Identifier
+	Rhs  TypeExpr
+}
+
+// =============================================================================
+// Interface Implementations
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Program
+// -----------------------------------------------------------------------------
+
 func (p *Program) Pos() Position {
-	if len(p.Decls) > 0 {
-		return p.Decls[0].Pos()
+	if len(p.Decls) == 0 {
+		return Position{}
 	}
-	return Position{Line: 1, Col: 0}
+
+	return p.Decls[0].Pos()
 }
+
 func (p *Program) End() Position {
-	if len(p.Decls) > 0 {
-		return p.Decls[len(p.Decls)-1].End()
+	if len(p.Decls) == 0 {
+		return Position{}
 	}
-	return Position{Line: 1, Col: 0}
+
+	return p.Decls[len(p.Decls)-1].End()
 }
+
 func (p *Program) String() string {
 	var out bytes.Buffer
-	for _, d := range p.Decls {
+
+	for i, d := range p.Decls {
 		out.WriteString(d.String())
-		out.WriteString("\n")
+
+		if i != len(p.Decls)-1 {
+			out.WriteString("\n\n")
+		}
 	}
+
 	return out.String()
 }
 
 // -----------------------------------------------------------------------------
-// Declarations
+// Param
 // -----------------------------------------------------------------------------
 
-type Param struct {
-	Name string
-	Type TypeExpr
-	Mut  bool
-	Own  bool
-	Pos_ Position
-}
-
 func (p *Param) String() string {
-	prefix := ""
-	if p.Mut {
-		prefix = "mut "
-	} else if p.Own {
-		prefix = "own "
-	}
-	return fmt.Sprintf("%s%s: %s", prefix, p.Name, p.Type.String())
-}
-func (p *Param) Pos() Position { return p.Pos_ }
-func (p *Param) End() Position { return p.Type.End() }
+	var prefixes []string
 
-// FnDecl represents a function definition.
-type FnDecl struct {
-	Name       string
-	Params     []Param
-	ReturnType TypeExpr
-	Body       *BlockStmt
-	IsAsync    bool
-	Pos_       Position
+	if p.Mut {
+		prefixes = append(prefixes, "mut")
+	}
+
+	if p.Own {
+		prefixes = append(prefixes, "own")
+	}
+
+	prefix := ""
+
+	if len(prefixes) > 0 {
+		prefix = strings.Join(prefixes, " ") + " "
+	}
+
+	if p.Type == nil {
+		return prefix + p.Name
+	}
+
+	return fmt.Sprintf(
+		"%s%s: %s",
+		prefix,
+		p.Name,
+		p.Type.String(),
+	)
 }
+
+func (p *Param) Pos() Position { return p.Pos_ }
+func (p *Param) End() Position { return p.End_ }
+
+// -----------------------------------------------------------------------------
+// FnDecl
+// -----------------------------------------------------------------------------
 
 func (f *FnDecl) Pos() Position { return f.Pos_ }
-func (f *FnDecl) End() Position { return f.Body.End() }
+
+func (f *FnDecl) End() Position { return f.End_ }
+
 func (f *FnDecl) String() string {
-	var params []string
-	for _, p := range f.Params {
-		params = append(params, p.String())
-	}
+	var out bytes.Buffer
 
-	prefix := "fn"
 	if f.IsAsync {
-		prefix = "async fn"
+		out.WriteString("async ")
 	}
 
-	return fmt.Sprintf("%s %s(%s) %s %s",
-		prefix, f.Name, strings.Join(params, ", "), f.ReturnType.String(), f.Body.String())
+	out.WriteString("fn ")
+	out.WriteString(f.Name)
+	out.WriteString("(")
+
+	for i, p := range f.Params {
+		out.WriteString(p.String())
+
+		if i != len(f.Params)-1 {
+			out.WriteString(", ")
+		}
+	}
+
+	out.WriteString(")")
+
+	if f.ReturnType != nil {
+		out.WriteString(" -> ")
+		out.WriteString(f.ReturnType.String())
+	}
+
+	out.WriteString(" ")
+	out.WriteString(f.Body.String())
+
+	return out.String()
 }
+
 func (f *FnDecl) declNode() {}
 
-// TypeDecl represents: type Name = TypeRhs
-type TypeDecl struct {
-	Name *NamedType
-	Rhs  TypeExpr // An interface that ProductType, SumType, etc. will implement
-	Pos_ Position
+// -----------------------------------------------------------------------------
+// TypeDecl
+// -----------------------------------------------------------------------------
+
+func (t *TypeDecl) Pos() Position { return t.Pos_ }
+
+func (t *TypeDecl) End() Position { return t.End_ }
+
+func (t *TypeDecl) String() string {
+	return fmt.Sprintf(
+		"type %s = %s",
+		t.Name.String(),
+		t.Rhs.String(),
+	)
 }
 
-func (td *TypeDecl) Pos() Position { return td.Pos_ }
-func (td *TypeDecl) End() Position { return td.Rhs.End() }
-func (td *TypeDecl) String() string {
-	return fmt.Sprintf("type %s = %s", td.Name.String(), td.Rhs.String())
-}
-func (td *TypeDecl) declNode() {}
-
-// ProductType represents the struct body: { field1 type1, field2 type2 }
-type ProductType struct {
-	Fields []Param // We can reuse your Param struct since it's just Name + Type!
-	Pos_   Position
-	End_   Position
-}
-
-func (pt *ProductType) Pos() Position { return pt.Pos_ }
-func (pt *ProductType) End() Position { return pt.End_ }
-func (pt *ProductType) String() string {
-	var fields []string
-	for _, f := range pt.Fields {
-		fields = append(fields, fmt.Sprintf("%s %s", f.Name, f.Type.String()))
-	}
-	return fmt.Sprintf("{ %s }", strings.Join(fields, ", "))
-}
-func (pt *ProductType) typeNode() {} // Ensure TypeRhs interfaces match
-
-// SumVariant represents one arm of a sum type:
-//
-//	| Circle { radius int }
-//	| Point                    (unit variant, Fields is empty)
-type SumVariant struct {
-	Name   string
-	Fields []Param // empty for unit variants
-	Pos_   Position
-}
-
-func (sv *SumVariant) String() string {
-	if len(sv.Fields) == 0 {
-		return "| " + sv.Name
-	}
-	var fields []string
-	for _, f := range sv.Fields {
-		fields = append(fields, f.String())
-	}
-	return fmt.Sprintf("| %s { %s }", sv.Name, strings.Join(fields, ", "))
-}
-
-// SumType represents a user-defined sum type declaration RHS:
-//
-//	| Circle { radius int } | Rect { width int, height int } | Point
-type SumType struct {
-	Variants []SumVariant
-	Pos_     Position
-	End_     Position
-}
-
-func (st *SumType) Pos() Position { return st.Pos_ }
-func (st *SumType) End() Position { return st.End_ }
-func (st *SumType) String() string {
-	var parts []string
-	for _, v := range st.Variants {
-		parts = append(parts, v.String())
-	}
-	return strings.Join(parts, "\n")
-}
-func (st *SumType) typeNode() {}
+func (t *TypeDecl) declNode() {}
