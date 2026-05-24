@@ -12,7 +12,7 @@ import (
 
 // Program is the root AST node for a source file or compilation unit.
 type Program struct {
-	Decls []Decl
+	Decls []Decl `json:"decls"`
 }
 
 // =============================================================================
@@ -21,14 +21,14 @@ type Program struct {
 
 // Param represents a function parameter.
 type Param struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name string
-	Type TypeExpr
+	Name string   `json:"name"`
+	Type TypeExpr `json:"type"`
 
-	Mut bool
-	Own bool
+	Mut bool `json:"mut"`
+	Own bool `json:"own"`
 }
 
 // FnDecl represents a function declaration.
@@ -39,14 +39,14 @@ type Param struct {
 //	    return a + b
 //	}
 type FnDecl struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name       string
-	IsAsync    bool
-	Params     []*Param
-	ReturnType TypeExpr
-	Body       *BlockStmt
+	Name       string     `json:"name"`
+	IsAsync    bool       `json:"is_async"`
+	Params     []*Param   `json:"params"`
+	ReturnType TypeExpr   `json:"return_type,omitempty"`
+	Body       *BlockStmt `json:"body"`
 }
 
 // =============================================================================
@@ -62,11 +62,11 @@ type FnDecl struct {
 //	    y: int,
 //	}
 type TypeDecl struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name *Identifier
-	Rhs  TypeExpr
+	Name *Identifier `json:"name"`
+	Rhs  TypeExpr    `json:"rhs"`
 }
 
 // =============================================================================

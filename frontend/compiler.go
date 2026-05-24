@@ -34,51 +34,26 @@ type FrontendResult struct {
 //
 // ALL frontend compilation flows should go through this function.
 func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
-	// ---------------------------------------------------------------------
 	// 1. Parse
-	// ---------------------------------------------------------------------
-
 	l := lexer.New(src)
 	p := parser.New(l)
-
 	program := p.ParseProgram()
-
 	if len(p.Errors()) > 0 {
 		return nil, fmt.Errorf("parser syntax errors:\n%s", strings.Join(p.Errors(), "\n"))
 	}
 
-	// ---------------------------------------------------------------------
 	// 2. Pre-Sema Lowering (Inliner Pass)
-	// ---------------------------------------------------------------------
-
 	inlinePass := lower.NewInlinePass(program)
 	program = ast.Rewrite(inlinePass, program).(*ast.Program)
 
-	// ---------------------------------------------------------------------
 	// 3. Semantic Analysis
-	// ---------------------------------------------------------------------
-
 	semaAnalyzer := sema.New()
-
 	typeMap, semaErrors := semaAnalyzer.Analyze(program)
 	if len(semaErrors) > 0 {
 		return nil, formatErrors("Semantic", semaErrors)
 	}
 
-	// ---------------------------------------------------------------------
-	// 4. CFG Analysis
-	// ---------------------------------------------------------------------
-
-	cfgAnalyzer := cfg.NewAnalyzer(typeMap)
-	cfgGraphs, cfgResults, cfgErrors := cfgAnalyzer.Analyze(program)
-	if len(cfgErrors) > 0 {
-		return nil, formatErrors("Control Flow", cfgErrors)
-	}
-
-	// ---------------------------------------------------------------------
-	// 5. Post-Sema Lowering Passes (Control Flow, Aggregates, Async)
-	// ---------------------------------------------------------------------
-
+	// 4. Post-Sema Lowering Passes (Control Flow, Aggregates, Async)
 	loweringPass := lower.NewPass(typeMap)
 	program = ast.Rewrite(loweringPass, program).(*ast.Program)
 
@@ -88,35 +63,29 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	asyncPass := lower.NewAsyncPass(typeMap)
 	program = ast.Rewrite(asyncPass, program).(*ast.Program)
 
-	// ---------------------------------------------------------------------
-	// 6. Escape Analysis
-	// ---------------------------------------------------------------------
+	// 5. CFG Analysis
+	cfgAnalyzer := cfg.NewAnalyzer(typeMap)
+	cfgGraphs, cfgResults, cfgErrors := cfgAnalyzer.Analyze(program)
+	if len(cfgErrors) > 0 {
+		return nil, formatErrors("Control Flow", cfgErrors)
+	}
 
+	// 6. Escape Analysis
 	escapeAnalyzer := escape.New(typeMap)
 	escapeMap := escapeAnalyzer.Analyze(program)
 
-	// ---------------------------------------------------------------------
 	// 7. Allocation Lowering Pass
-	// ---------------------------------------------------------------------
-
 	allocPass := lower.NewAllocPass(escapeMap)
 	program = ast.Rewrite(allocPass, program).(*ast.Program)
 
-	// ---------------------------------------------------------------------
 	// 8. Ownership Analysis
-	// ---------------------------------------------------------------------
-
 	ownershipAnalyzer := ownership.New(typeMap)
-
 	ownershipErrors := ownershipAnalyzer.Analyze(program)
 	if len(ownershipErrors) > 0 {
 		return nil, formatErrors("Ownership", ownershipErrors)
 	}
 
-	// ---------------------------------------------------------------------
 	// 9. ARC Lowering Pass
-	// ---------------------------------------------------------------------
-
 	arcPass := lower.NewARCPass(typeMap)
 	program = ast.Rewrite(arcPass, program).(*ast.Program)
 

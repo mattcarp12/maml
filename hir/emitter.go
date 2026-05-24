@@ -139,7 +139,7 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 		var args []interface{}
 		for _, arg := range n.Arguments {
 			args = append(args, map[string]interface{}{
-				"value": e.marshalNode(arg.Argument),
+				"argument": e.marshalNode(arg.Argument),
 				"own":   arg.Own,
 				"mut":   arg.Mut,
 			})
@@ -160,13 +160,22 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 	case *ast.StackAllocExpr:
 		res["node_type"] = "StackAllocExpr"
 		res["value"] = e.marshalNode(n.Value)
-		res["maml_type"] = e.marshalType(e.typeMap[n])
+
+		t := e.typeMap[n]
+		if t == nil {
+			t = e.typeMap[n.Value]
+		}
+		res["maml_type"] = e.marshalType(t)
 
 	case *ast.HeapAllocExpr:
 		res["node_type"] = "HeapAllocExpr"
 		res["value"] = e.marshalNode(n.Value)
-		res["maml_type"] = e.marshalType(e.typeMap[n])
 
+		t := e.typeMap[n]
+		if t == nil {
+			t = e.typeMap[n.Value]
+		}
+		res["maml_type"] = e.marshalType(t)
 	case *ast.RetainStmt:
 		res["node_type"] = "RetainStmt"
 		res["value"] = e.marshalNode(n.Value)
@@ -182,6 +191,9 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 			elements = append(elements, e.marshalNode(el))
 		}
 		res["elements"] = elements
+		if t, ok := e.typeMap[n]; ok && t != nil {
+			res["maml_type"] = e.marshalType(t)
+		}
 
 	case *ast.StructLiteral:
 		res["node_type"] = "StructLiteral"
@@ -194,6 +206,9 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 			})
 		}
 		res["fields"] = fields
+		if t, ok := e.typeMap[n]; ok && t != nil {
+			res["maml_type"] = e.marshalType(t)
+		}
 
 	case *ast.VariantPattern:
 		res["node_type"] = "VariantLiteral"
@@ -216,6 +231,9 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 		res["node_type"] = "IndexExpr"
 		res["left"] = e.marshalNode(n.Left)
 		res["index"] = e.marshalNode(n.Index)
+		if t, ok := e.typeMap[n]; ok && t != nil {
+			res["maml_type"] = e.marshalType(t)
+		}
 
 	case *ast.SliceExpr:
 		res["node_type"] = "SliceExpr"
@@ -226,6 +244,9 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 	case *ast.Identifier:
 		res["node_type"] = "Identifier"
 		res["value"] = n.Value
+		if t, ok := e.typeMap[n]; ok && t != nil {
+			res["maml_type"] = e.marshalType(t)
+		}
 
 	case *ast.IntLiteral:
 		res["node_type"] = "IntLiteral"
@@ -238,6 +259,8 @@ func (e *Emitter) marshalNode(node ast.Node) map[string]interface{} {
 	case *ast.StringLiteral:
 		res["node_type"] = "StringLiteral"
 		res["value"] = n.Value
+	case *ast.AsyncPrologueExpr:
+		res["node_type"] = "AsyncPrologueExpr"
 	}
 
 	return res

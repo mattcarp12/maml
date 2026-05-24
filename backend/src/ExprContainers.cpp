@@ -178,6 +178,10 @@ llvm::Value *compileSliceExpr(CodegenContext &ctx, const nlohmann::json &expr) {
 }
 
 llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr) {
+  if (!expr["left"].contains("maml_type") || expr["left"]["maml_type"].is_null()) {
+    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on left side of index expression!", expr);
+    return nullptr;
+  }
   auto &Builder = ctx.Builder;
   llvm::Value *leftVal = evaluateExpression(ctx, expr["left"]);
   llvm::Value *indexVal = evaluateExpression(ctx, expr["index"]);
@@ -213,6 +217,10 @@ llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr) {
 }
 
 llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
+  if (!e["object"].contains("maml_type") || e["object"]["maml_type"].is_null()) {
+    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on object in field access!", e);
+    return nullptr;
+  }
   auto &Builder = ctx.Builder;
   llvm::Value *objVal = evaluateExpression(ctx, e["object"]);
   std::string_view fieldName = e["field"].get<std::string_view>();
@@ -268,11 +276,19 @@ llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
 }
 
 llvm::Value *compileArrayLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+  if (!expr.contains("maml_type") || expr["maml_type"].is_null()) {
+    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on ArrayLiteral!", expr);
+    return nullptr;
+  }
   llvm::Type *arrayTy = llvmTypeFor(ctx, expr["maml_type"]);
   return ctx.Builder->CreateAlloca(arrayTy, nullptr, "array_lit");
 }
 
 llvm::Value *compileStructLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+  if (!expr.contains("maml_type") || expr["maml_type"].is_null()) {
+    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on StructLiteral!", expr);
+    return nullptr;
+  }
   llvm::Type *structTy = llvmTypeFor(ctx, expr["maml_type"]);
   return ctx.Builder->CreateAlloca(structTy, nullptr, "struct_lit");
 }

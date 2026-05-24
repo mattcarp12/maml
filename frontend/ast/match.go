@@ -19,20 +19,20 @@ import (
 //	    None    => 0,
 //	}
 type MatchExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Subject Expr
-	Arms    []MatchArm
+	Subject Expr       `json:"subject"`
+	Arms    []MatchArm `json:"arms"`
 }
 
 // MatchArm represents a single match arm.
 type MatchArm struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Pattern Pattern
-	Body    Expr
+	Pattern Pattern `json:"pattern"`
+	Body    Expr    `json:"body"`
 }
 
 // =============================================================================
@@ -47,7 +47,7 @@ type MatchArm struct {
 //
 //	_
 type WildcardPattern struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 }
 
 // -----------------------------------------------------------------------------
@@ -60,10 +60,10 @@ type WildcardPattern struct {
 //	"hello"
 //	true
 type LiteralPattern struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Value Expr
+	Value Expr `json:"value"`
 }
 
 // -----------------------------------------------------------------------------
@@ -77,8 +77,8 @@ type LiteralPattern struct {
 //	x in:
 //	    Some { x }
 type VariantPatternField struct {
-	Field   string
-	Binding *Identifier
+	Field   string      `json:"field"`
+	Binding *Identifier `json:"binding"`
 }
 
 // VariantPattern represents a sum-type variant pattern.
@@ -89,12 +89,12 @@ type VariantPatternField struct {
 //	Ok(value)
 //	Error { code, message }
 type VariantPattern struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name    string
-	Binding *Identifier
-	Fields  []VariantPatternField
+	Name    string                `json:"name"`
+	Binding *Identifier           `json:"binding,omitempty"`
+	Fields  []VariantPatternField `json:"fields,omitempty"`
 }
 
 // =============================================================================

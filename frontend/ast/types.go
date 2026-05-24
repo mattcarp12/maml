@@ -19,10 +19,10 @@ import (
 //	Point
 //	Result<T>
 type NamedTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name *Identifier
+	Name *Identifier `json:"name"`
 }
 
 // =============================================================================
@@ -35,11 +35,11 @@ type NamedTypeExpr struct {
 //
 //	[int; 4]
 type ArrayTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Size int
-	Base TypeExpr
+	Size int      `json:"size"`
+	Base TypeExpr `json:"base"`
 }
 
 // SliceTypeExpr represents a dynamically-sized slice type.
@@ -48,10 +48,10 @@ type ArrayTypeExpr struct {
 //
 //	[]int
 type SliceTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Base TypeExpr
+	Base TypeExpr `json:"base"`
 }
 
 // VectorTypeExpr represents a SIMD/vector type.
@@ -60,10 +60,10 @@ type SliceTypeExpr struct {
 //
 //	vector<int>
 type VectorTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Base TypeExpr
+	Base TypeExpr `json:"base"`
 }
 
 // MapTypeExpr represents a map/dictionary type.
@@ -72,11 +72,11 @@ type VectorTypeExpr struct {
 //
 //	map<string, int>
 type MapTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Key   TypeExpr
-	Value TypeExpr
+	Key   TypeExpr `json:"key"`
+	Value TypeExpr `json:"value"`
 }
 
 // TaskTypeExpr represents an async task/future type.
@@ -85,10 +85,10 @@ type MapTypeExpr struct {
 //
 //	task<int>
 type TaskTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Base TypeExpr
+	Base TypeExpr `json:"base"`
 }
 
 // =============================================================================
@@ -97,8 +97,8 @@ type TaskTypeExpr struct {
 
 // StructTypeField represents a struct field definition.
 type StructTypeField struct {
-	Name string
-	Type TypeExpr
+	Name string   `json:"name"`
+	Type TypeExpr `json:"type"`
 }
 
 // StructTypeExpr represents a struct type definition.
@@ -110,11 +110,11 @@ type StructTypeField struct {
 //	    y: int,
 //	}
 type StructTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name   string
-	Fields []StructTypeField
+	Name   string            `json:"name"`
+	Fields []StructTypeField `json:"fields"`
 }
 
 // =============================================================================
@@ -129,11 +129,11 @@ type StructTypeExpr struct {
 //	None
 //	Error { code: int }
 type VariantTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name   string
-	Fields []StructTypeField
+	Name   string            `json:"name"`
+	Fields []StructTypeField `json:"fields,omitempty"`
 }
 
 // SumTypeExpr represents an algebraic sum type.
@@ -145,12 +145,12 @@ type VariantTypeExpr struct {
 //	    None,
 //	}
 type SumTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name     string
-	TypeArgs []TypeExpr
-	Variants []VariantTypeExpr
+	Name     string            `json:"name"`
+	TypeArgs []TypeExpr        `json:"type_args,omitempty"`
+	Variants []VariantTypeExpr `json:"variants"`
 }
 
 // =============================================================================
@@ -163,11 +163,11 @@ type SumTypeExpr struct {
 //
 //	fn(int, int) -> int
 type FunctionTypeExpr struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Params []TypeExpr
-	Return TypeExpr
+	Params []TypeExpr `json:"params"`
+	Return TypeExpr   `json:"return"`
 }
 
 // =============================================================================
@@ -197,7 +197,11 @@ func (a *ArrayTypeExpr) Pos() Position { return a.Pos_ }
 func (a *ArrayTypeExpr) End() Position { return a.End_ }
 
 func (a *ArrayTypeExpr) String() string {
-	return fmt.Sprintf("[%d]%s", a.Size, a.Base.String())
+	return fmt.Sprintf(
+		"[%d]%s",
+		a.Size,
+		a.Base.String(),
+	)
 }
 
 func (a *ArrayTypeExpr) typeNode() {}
@@ -395,9 +399,9 @@ func (f *FunctionTypeExpr) typeNode() {}
 // GenericType represents a parameterized type used as either a type expression
 // or a value-level constructor expression (e.g. Vec<int>, Map<string, int>).
 type GenericType struct {
-	Pos_   Position
-	Name   string
-	Params []TypeExpr
+	Pos_   Position   `json:"-"`
+	Name   string     `json:"name"`
+	Params []TypeExpr `json:"params"`
 }
 
 func (g *GenericType) Pos() Position { return g.Pos_ }

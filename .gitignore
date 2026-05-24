@@ -4,3 +4,4 @@ runtime/zig-pkg
 build
 bin
 .cache
+lm_files

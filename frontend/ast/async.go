@@ -14,8 +14,8 @@ import "fmt"
 //   - it carries different lifetime / ownership semantics
 //   - it requires special lowering to LLVM coroutine intrinsics
 type AwaitExpr struct {
-	Value Expr
-	Pos_  Position
+	Value Expr     `json:"value"`
+	Pos_  Position `json:"-"`
 }
 
 func (a *AwaitExpr) Pos() Position { return a.Pos_ }
@@ -32,7 +32,7 @@ func (a *AwaitExpr) exprNode() {}
 // AsyncPrologueExpr represents the explicit allocation and setup of an LLVM coroutine.
 // It instructs the backend to emit coro.id, coro.size, coro.begin, and allocate the Promise.
 type AsyncPrologueExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 }
 
 func (a *AsyncPrologueExpr) Pos() Position  { return a.Pos_ }

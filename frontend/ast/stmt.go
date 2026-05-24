@@ -12,10 +12,10 @@ import (
 // =============================================================================
 
 type BlockStmt struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Statements []Stmt
+	Statements []Stmt `json:"statements"`
 }
 
 // =============================================================================
@@ -23,18 +23,18 @@ type BlockStmt struct {
 // =============================================================================
 
 type DeclareStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Name    string
-	Mutable bool
-	Value   Expr
+	Name    string `json:"name"`
+	Mutable bool   `json:"mutable"`
+	Value   Expr   `json:"value"`
 }
 
 type AssignStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	LValue Expr
-	RValue Expr
+	LValue Expr `json:"lvalue"`
+	RValue Expr `json:"rvalue"`
 }
 
 // =============================================================================
@@ -42,31 +42,31 @@ type AssignStmt struct {
 // =============================================================================
 
 type ReturnStmt struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 // YieldStmt represents:
 //
 //	=> <expr>
 type YieldStmt struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 // ExprStmt represents an expression used as a statement.
 type ExprStmt struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 type ForStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Init      Stmt
-	Condition Expr
-	Post      Stmt
-	Body      *BlockStmt
+	Init      Stmt       `json:"init"`
+	Condition Expr       `json:"condition"`
+	Post      Stmt       `json:"post"`
+	Body      *BlockStmt `json:"body"`
 }
 
 // =============================================================================
@@ -74,11 +74,11 @@ type ForStmt struct {
 // =============================================================================
 
 type BreakStmt struct {
-	Token token.Token
+	Token token.Token `json:"-"`
 }
 
 type ContinueStmt struct {
-	Token token.Token
+	Token token.Token `json:"-"`
 }
 
 // =============================================================================
@@ -89,10 +89,10 @@ type ContinueStmt struct {
 //
 // This acts as the primitive iterative construct used during lowering.
 type LoopStmt struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Body *BlockStmt
+	Body *BlockStmt `json:"body"`
 }
 
 // =============================================================================
@@ -100,13 +100,13 @@ type LoopStmt struct {
 // =============================================================================
 
 type RetainStmt struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 type ReleaseStmt struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 // =============================================================================

@@ -11,24 +11,24 @@ import (
 // =============================================================================
 
 type Identifier struct {
-	Pos_  Position
-	Value string
+	Pos_  Position `json:"-"`
+	Value string   `json:"value"`
 }
 
 type IntLiteral struct {
-	Pos_  Position
-	End_  Position
-	Value int64
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Value int64    `json:"value"`
 }
 
 type BoolLiteral struct {
-	Pos_  Position
-	Value bool
+	Pos_  Position `json:"-"`
+	Value bool     `json:"value"`
 }
 
 type StringLiteral struct {
-	Pos_  Position
-	Value string
+	Pos_  Position `json:"-"`
+	Value string   `json:"value"`
 }
 
 // =============================================================================
@@ -41,11 +41,11 @@ type StringLiteral struct {
 //
 //	x: 10
 type StructField struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Name  *Identifier
-	Value Expr
+	Name  *Identifier `json:"name"`
+	Value Expr        `json:"value"`
 }
 
 // StructLiteral represents a struct literal.
@@ -54,19 +54,19 @@ type StructField struct {
 //
 //	Point{x: 10, y: 20}
 type StructLiteral struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Type   *Identifier
-	Fields []StructField
+	Type   *Identifier   `json:"struct_type"`
+	Fields []StructField `json:"fields"`
 }
 
 // ArrayLiteral represents an array literal.
 type ArrayLiteral struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 
-	Elements []Expr
+	Elements []Expr `json:"elements"`
 }
 
 // =============================================================================
@@ -74,58 +74,58 @@ type ArrayLiteral struct {
 // =============================================================================
 
 type CallExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Function  Expr
-	Arguments []CallArg
+	Function  Expr      `json:"function"`
+	Arguments []CallArg `json:"arguments"`
 }
 
 type CallArg struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Argument Expr
-	Mut      bool
-	Own      bool
+	Argument Expr `json:"value"`
+	Mut      bool `json:"mut"`
+	Own      bool `json:"own"`
 }
 
 type InfixExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Left     Expr
-	Operator string
-	Right    Expr
+	Left     Expr   `json:"left"`
+	Operator string `json:"operator"`
+	Right    Expr   `json:"right"`
 }
 
 type PrefixExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Operator string
-	Right    Expr
+	Operator string `json:"operator"`
+	Right    Expr   `json:"right"`
 }
 
 // FieldAccess represents:
 //
 //	object.field
 type FieldAccess struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Object Expr
-	Field  *Identifier
+	Object Expr        `json:"object"`
+	Field  *Identifier `json:"field"`
 }
 
 type IndexExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Left  Expr
-	Index Expr
+	Left  Expr `json:"left"`
+	Index Expr `json:"index"`
 }
 
 type SliceExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Left Expr
-	Low  Expr
-	High Expr
+	Left Expr `json:"left"`
+	Low  Expr `json:"low"`
+	High Expr `json:"high"`
 }
 
 // =============================================================================
@@ -133,11 +133,11 @@ type SliceExpr struct {
 // =============================================================================
 
 type IfExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 
-	Condition   Expr
-	Consequence *BlockStmt
-	Alternative *BlockStmt
+	Condition   Expr       `json:"condition"`
+	Consequence *BlockStmt `json:"consequence"`
+	Alternative *BlockStmt `json:"alternative,omitempty"`
 }
 
 // =============================================================================
@@ -145,13 +145,13 @@ type IfExpr struct {
 // =============================================================================
 
 type StackAllocExpr struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 type HeapAllocExpr struct {
-	Pos_  Position
-	Value Expr
+	Pos_  Position `json:"-"`
+	Value Expr     `json:"value"`
 }
 
 // =============================================================================

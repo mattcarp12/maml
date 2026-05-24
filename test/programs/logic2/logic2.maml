@@ -15,7 +15,9 @@ fn main() int {
     // Should NOT execute (short-circuits on false)
     if (false && true) {
         score = score - 100
+    } else {
+        score = score - 5
     }
     
-    return score // Should exit with status 15
+    return score // Should exit with status 10
 }

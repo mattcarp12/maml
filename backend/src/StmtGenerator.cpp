@@ -21,22 +21,42 @@ static void compileDeclareStmt(CodegenContext &ctx, const nlohmann::json &stmt) 
   auto &Builder = ctx.Builder;
   std::string_view varName = stmt["name"].get<std::string_view>();
 
+  if (stmt["value"]["maml_type"].is_null()) {
+    std::cerr << "\n[CRITICAL ERROR] 'maml_type' is missing for declaration of variable: " << varName << "\n";
+    ctx.Error.fatal("Missing type information aborted compilation.");
+    return;
+  }
+
   llvm::Value *initVal = evaluateExpression(ctx, stmt["value"]);
   if (!initVal) return;
 
   nlohmann::json typeJson = stmt["value"]["maml_type"];
   llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
 
-  llvm::AllocaInst *alloca = Builder->CreateAlloca(valTy, nullptr, std::string(varName));
-
-  if (initVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
-    llvm::Value *loadedData = Builder->CreateLoad(valTy, initVal, "array_load");
-    Builder->CreateStore(loadedData, alloca);
-  } else {
-    Builder->CreateStore(initVal, alloca);
+  // 1. Extract the RHS node type
+  std::string_view rhsNodeType = "unknown";
+  if (stmt["value"].contains("node_type")) {
+    rhsNodeType = stmt["value"]["node_type"].get<std::string_view>();
   }
 
-  ctx.SymbolEnv.back()[std::string(varName)] = alloca;
+  llvm::Value *storagePtr = nullptr;
+
+  // 2. If the frontend explicitly heap-allocated this (e.g., an escaping array),
+  // bind the variable directly to the heap pointer. Do NOT copy it to the stack!
+  if (rhsNodeType == "HeapAllocExpr") {
+    storagePtr = initVal;
+  } else {
+    storagePtr = Builder->CreateAlloca(valTy, nullptr, std::string(varName));
+
+    if (initVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
+      llvm::Value *loadedData = Builder->CreateLoad(valTy, initVal, "array_load");
+      Builder->CreateStore(loadedData, storagePtr);
+    } else {
+      Builder->CreateStore(initVal, storagePtr);
+    }
+  }
+
+  ctx.SymbolEnv.back()[std::string(varName)] = storagePtr;
 }
 
 static llvm::Value *computeLValue(CodegenContext &ctx, const nlohmann::json &lvalueNode, bool &isPointerReassignment) {
@@ -60,17 +80,53 @@ static llvm::Value *computeLValue(CodegenContext &ctx, const nlohmann::json &lva
   }
 
   if (lnodeType == "FieldAccess") {
-    return compileFieldAccess(ctx, lvalueNode);
+    auto &Builder = ctx.Builder;
+
+    // 1. Recursively compute the true L-Value pointer of the base struct object
+    bool dummy = false;
+    llvm::Value *objPtr = computeLValue(ctx, lvalueNode["object"], dummy);
+
+    if (!objPtr) {
+      ctx.Error.fatal("Could not compute LValue for struct object", lvalueNode);
+      return nullptr;
+    }
+
+    // 2. Extract the struct type and field name from the AST node
+    nlohmann::json structType = lvalueNode["object"]["maml_type"];
+    std::string_view fieldName = lvalueNode["field"].get<std::string_view>();
+
+    // 3. Locate the matching field index
+    int index = -1;
+    for (int i = 0; i < structType["fields"].size(); ++i) {
+      if (structType["fields"][i]["name"].get<std::string_view>() == fieldName) {
+        index = i;
+        break;
+      }
+    }
+
+    if (index < 0) {
+      ctx.Error.fatal("Field '" + std::string(fieldName) + "' not found in struct LValue", lvalueNode);
+      return nullptr;
+    }
+
+    // 4. Return the GEP pointer directly into the struct's actual, permanent memory!
+    llvm::Type *baseTy = llvmTypeFor(ctx, structType);
+    return Builder->CreateGEP(baseTy, objPtr, {Builder->getInt32(0), Builder->getInt32(index)}, "fieldptr");
   }
 
   if (lnodeType == "IndexExpr") {
+    if (!lvalueNode["left"].contains("maml_type") || lvalueNode["left"]["maml_type"].is_null()) {
+      ctx.Error.fatal("CRITICAL: Missing 'maml_type' on left side of assignment!", lvalueNode);
+      return nullptr;
+    }
+
     llvm::Value *leftVal = evaluateExpression(ctx, lvalueNode["left"]);
     llvm::Value *indexVal = evaluateExpression(ctx, lvalueNode["index"]);
     llvm::Type *leftTy = llvmTypeFor(ctx, lvalueNode["left"]["maml_type"]);
 
     llvm::Value *leftPtr = leftVal;
     if (!leftVal->getType()->isPointerTy()) {
-      llvm::AllocaInst *spill = Builder->CreateAlloca(leftTy, nullptr, "lvalue_spill");
+      llvm::AllocaInst *spill = Builder->CreateAlloca(leftTy, nullptr, "slice_spill");
       Builder->CreateStore(leftVal, spill);
       leftPtr = spill;
     }
@@ -78,8 +134,9 @@ static llvm::Value *computeLValue(CodegenContext &ctx, const nlohmann::json &lva
     if (leftTy->isArrayTy()) {
       return Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), indexVal}, "array_idx_assign");
     } else {
+      // Slices
       llvm::Value *dataPtr =
-          Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(1)}, "data_ptr_assign");
+          Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(1)}, "data_ptr");
       llvm::Value *data = Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtr);
       return Builder->CreateGEP(llvmTypeFor(ctx, lvalueNode["maml_type"]), data, indexVal, "slice_idx_assign");
     }
@@ -118,11 +175,8 @@ static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   auto &Builder = ctx.Builder;
 
   // Coroutine early-out: suspend points handle ARC, just return the handle.
-  // Still need to drain the scope metadata so compileFunction's popScope
-  // doesn't double-free on the (already-terminated) exit block.
   if (llvm::Value *coroHdl = ctx.resolveSymbol(rt::CORO_HDL)) {
     Builder->CreateRet(coroHdl);
-    ctx.SymbolEnv.clear();
     return;
   }
 
@@ -141,8 +195,6 @@ static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
   } else {
     Builder->CreateRetVoid();
   }
-
-  ctx.SymbolEnv.clear();
 }
 
 static void compileLoopStmt(CodegenContext &ctx, const nlohmann::json &stmt) {

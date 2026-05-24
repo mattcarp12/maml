@@ -41,56 +41,63 @@ func (p *AggregatePass) Rewrite(node ast.Node) ast.Node {
 func (p *AggregatePass) lowerArray(arr *ast.ArrayLiteral) ast.Node {
 	p.counter++
 	tmpName := fmt.Sprintf("_arr_tmp_%d", p.counter)
-	aggIdent := &ast.Identifier{Value: tmpName, Pos_: arr.Pos()}
-	p.typeMap[aggIdent] = p.typeMap[arr]
 
-	// Create the empty allocation marker
-	emptyArr := &ast.ArrayLiteral{Elements: nil, Pos_: arr.Pos(), End_: arr.End_}
+	// 1. Create the new empty allocation marker and TYPE IT!
+	emptyArr := &ast.ArrayLiteral{Pos_: arr.Pos(), End_: arr.End()}
 	p.typeMap[emptyArr] = p.typeMap[arr]
 
-	// Declare the temporary variable (must be mutable so we can assign fields)
+	// 2. Create the variable declaration: mut tmp = []
 	decl := &ast.DeclareStmt{
 		Name:    tmpName,
-		Value:   emptyArr,
 		Mutable: true,
+		Value:   emptyArr,
 		Pos_:    arr.Pos(),
 	}
 
-	stmts := []ast.Stmt{decl}
+	var stmts []ast.Stmt
+	stmts = append(stmts, decl)
 
-	// SEMA maps ArrayLiterals to an ArrayType. We need it to type the IndexExpr.
-	// (Safely cast, assuming your SEMA uses a struct pointer or interface for Arrays)
-	// We'll fall back to UnknownType if cast fails to prevent panics.
-	var elementType sema.Type = &sema.UnknownType{}
-	if arrTy, ok := p.typeMap[arr].(*sema.ArrayType); ok {
-		elementType = arrTy.Base
-	}
+	// 3. Build assignments for each element: tmp[i] = elem
+	for i, elem := range arr.Elements {
+		// Ensure the new identifier gets the array's type
+		ident := &ast.Identifier{Value: tmpName, Pos_: arr.Pos()}
+		p.typeMap[ident] = p.typeMap[arr]
 
-	for i, el := range arr.Elements {
-		idxExpr := &ast.IndexExpr{
-			Left:  aggIdent,
-			Index: &ast.IntLiteral{Value: int64(i), Pos_: el.Pos()},
-			Pos_:  el.Pos(),
+		indexExpr := &ast.IndexExpr{
+			Left:  ident,
+			Index: &ast.IntLiteral{Value: int64(i), Pos_: arr.Pos(), End_: arr.End()},
+			Pos_:  arr.Pos(),
 		}
-		p.typeMap[idxExpr] = elementType
+		// Safely type the index expression using the element's resolved type
+		p.typeMap[indexExpr] = p.typeMap[elem]
 
 		assign := &ast.AssignStmt{
-			LValue: idxExpr,
-			RValue: el,
-			Pos_:   el.Pos(),
+			LValue: indexExpr,
+			RValue: p.Rewrite(elem).(ast.Expr), // Recursively lower inner elements
+			Pos_:   arr.Pos(),
 		}
 		stmts = append(stmts, assign)
 	}
 
-	// Yield the populated array out of the block
-	stmts = append(stmts, &ast.YieldStmt{Value: aggIdent, Pos_: arr.End()})
+	// 4. Yield the populated array: => tmp
+	yieldIdent := &ast.Identifier{Value: tmpName, Pos_: arr.Pos()}
+	p.typeMap[yieldIdent] = p.typeMap[arr]
 
+	yield := &ast.YieldStmt{
+		Value: yieldIdent,
+		Pos_:  arr.Pos(),
+	}
+	p.typeMap[yield] = p.typeMap[arr] // TYPE IT!
+
+	stmts = append(stmts, yield)
+
+	// 5. Wrap everything in a BlockStmt
 	block := &ast.BlockStmt{
 		Statements: stmts,
 		Pos_:       arr.Pos(),
 		End_:       arr.End(),
 	}
-	p.typeMap[block] = p.typeMap[arr]
+	p.typeMap[block] = p.typeMap[arr] // TYPE IT!
 
 	return block
 }
@@ -98,58 +105,67 @@ func (p *AggregatePass) lowerArray(arr *ast.ArrayLiteral) ast.Node {
 func (p *AggregatePass) lowerStruct(str *ast.StructLiteral) ast.Node {
 	p.counter++
 	tmpName := fmt.Sprintf("_str_tmp_%d", p.counter)
-	aggIdent := &ast.Identifier{Value: tmpName, Pos_: str.Pos()}
-	p.typeMap[aggIdent] = p.typeMap[str]
 
-	emptyStr := &ast.StructLiteral{Type: str.Type, Fields: nil, Pos_: str.Pos(), End_: str.End_}
+	// 1. Create the new empty allocation marker and TYPE IT!
+	emptyStr := &ast.StructLiteral{
+		Type: str.Type,
+		Pos_: str.Pos(),
+		End_: str.End(),
+	}
 	p.typeMap[emptyStr] = p.typeMap[str]
 
+	// 2. Create the variable declaration: mut tmp = StructType{}
 	decl := &ast.DeclareStmt{
 		Name:    tmpName,
-		Value:   emptyStr,
 		Mutable: true,
+		Value:   emptyStr,
 		Pos_:    str.Pos(),
 	}
 
-	stmts := []ast.Stmt{decl}
+	var stmts []ast.Stmt
+	stmts = append(stmts, decl)
 
-	// Lookup field types for the assignments
-	strType, isStruct := p.typeMap[str].(*sema.StructType)
+	// 3. Build assignments for each field: tmp.field = value
+	for _, field := range str.Fields {
+		// Ensure the new identifier gets the struct's type
+		ident := &ast.Identifier{Value: tmpName, Pos_: str.Pos()}
+		p.typeMap[ident] = p.typeMap[str]
 
-	for _, f := range str.Fields {
-		fieldAcc := &ast.FieldAccess{
-			Object: aggIdent,
-			Field:  f.Name,
-			Pos_:   f.Pos_,
+		fieldAccess := &ast.FieldAccess{
+			Object: ident,
+			Field:  field.Name,
+			Pos_:   field.Pos_,
 		}
-
-		var fType sema.Type = &sema.UnknownType{}
-		if isStruct {
-			for _, def := range strType.Fields {
-				if def.Name == f.Name.Value {
-					fType = def.Type
-					break
-				}
-			}
-		}
-		p.typeMap[fieldAcc] = fType
+		// Safely type the field access using the field value's resolved type
+		p.typeMap[fieldAccess] = p.typeMap[field.Value]
 
 		assign := &ast.AssignStmt{
-			LValue: fieldAcc,
-			RValue: f.Value,
-			Pos_:   f.Pos_,
+			LValue: fieldAccess,
+			RValue: p.Rewrite(field.Value).(ast.Expr), // Recursively lower inner fields
+			Pos_:   field.Pos_,
 		}
 		stmts = append(stmts, assign)
 	}
 
-	stmts = append(stmts, &ast.YieldStmt{Value: aggIdent, Pos_: str.End()})
+	// 4. Yield the populated struct: => tmp
+	yieldIdent := &ast.Identifier{Value: tmpName, Pos_: str.Pos()}
+	p.typeMap[yieldIdent] = p.typeMap[str]
 
+	yield := &ast.YieldStmt{
+		Value: yieldIdent,
+		Pos_:  str.Pos(),
+	}
+	p.typeMap[yield] = p.typeMap[str] // TYPE IT!
+
+	stmts = append(stmts, yield)
+
+	// 5. Wrap everything in a BlockStmt
 	block := &ast.BlockStmt{
 		Statements: stmts,
 		Pos_:       str.Pos(),
 		End_:       str.End(),
 	}
-	p.typeMap[block] = p.typeMap[str]
+	p.typeMap[block] = p.typeMap[str] // TYPE IT!
 
 	return block
 }

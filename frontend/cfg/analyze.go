@@ -13,7 +13,7 @@ type Result struct {
 	Warnings      []ast.CompileError
 }
 
-func Analyze(fn *ast.FnDecl, g *CFG) *Result {
+func AnalyzeFunc(fn *ast.FnDecl, g *CFG) *Result {
 	res := &Result{
 		AlwaysReturns: AlwaysReturns(g),
 		Errors:        []ast.CompileError{},
