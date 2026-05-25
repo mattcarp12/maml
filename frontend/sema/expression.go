@@ -1,342 +1,621 @@
-// sema/expression.go
 package sema
 
 import (
-	"strings"
-
 	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/types"
 )
 
-func (a *Analyzer) analyzeExpr(expr ast.Expr) Type {
-	var t Type
+// =============================================================================
+// The Master Expression Dispatcher
+// =============================================================================
+
+func (a *Analyzer) buildExpr(expr ast.Expr) tast.Expr {
+	if expr == nil {
+		return nil
+	}
 
 	switch e := expr.(type) {
 	case *ast.IntLiteral:
-		t = IntType{}
+		return &tast.IntLiteral{Pos_: e.Pos_, End_: e.End_, Value: e.Value, Type: types.IntType{}}
 	case *ast.BoolLiteral:
-		t = BoolType{}
+		return &tast.BoolLiteral{Pos_: e.Pos_, Value: e.Value, Type: types.BoolType{}}
 	case *ast.StringLiteral:
-		t = StringType{}
+		return &tast.StringLiteral{Pos_: e.Pos_, Value: e.Value, Type: types.StringType{}}
 	case *ast.Identifier:
-		t = a.analyzeIdentifier(e)
+		return a.buildIdentifier(e)
 	case *ast.InfixExpr:
-		t = a.analyzeInfixExpr(e)
+		return a.buildInfixExpr(e)
 	case *ast.PrefixExpr:
-		t = a.analyzePrefixExpr(e)
+		return a.buildPrefixExpr(e)
 	case *ast.IfExpr:
-		t = a.analyzeIfExpr(e)
-	case *ast.MatchExpr:
-		t = a.analyzeMatchExpr(e)
+		return a.buildIfExpr(e)
 	case *ast.CallExpr:
-		t = a.analyzeCallExpr(e)
-	case *ast.AwaitExpr:
-		t = a.analyzeAwaitExpr(e)
+		return a.buildCallExpr(e)
 	case *ast.StructLiteral:
-		// Check if this is a variant constructor (e.g. Circle{radius: 5})
-		// before falling through to struct literal analysis.
-		if sym := a.resolve(e.Type.Value); sym != nil && sym.Kind == VariantSymbol {
-			t = a.analyzeVariantLiteral(e, sym)
-		} else {
-			t = a.analyzeStructLiteral(e)
-		}
+		return a.buildStructLiteral(e)
 	case *ast.FieldAccess:
-		t = a.analyzeFieldAccess(e)
+		return a.buildFieldAccess(e)
 	case *ast.ArrayLiteral:
-		t = a.analyzeArrayLiteral(e)
+		return a.buildArrayLiteral(e)
 	case *ast.IndexExpr:
-		t = a.analyzeIndexExpr(e)
+		return a.buildIndexExpr(e)
 	case *ast.SliceExpr:
-		t = a.analyzeSliceExpr(e)
-	case *ast.BlockStmt:
-		t = a.analyzeBlockExpr(e)
-	default:
-		a.errorf(expr.Pos(), "expression type not recognized: %T", expr)
-		t = UnknownType{}
+		return a.buildSliceExpr(e)
+	case *ast.AwaitExpr:
+		return a.buildAwaitExpr(e)
+	case *ast.GenericType:
+		return a.buildGenericType(e)
+	case *ast.MatchExpr:
+		return a.buildMatchExpr(e) 
 	}
 
-	a.TypeMap[expr] = t
-	return t
+	a.errorf(expr.Pos(), "unsupported expression type during TAST construction: %T", expr)
+	return nil
 }
 
-func (a *Analyzer) analyzeIdentifier(e *ast.Identifier) Type {
+// =============================================================================
+// Primitive Builders
+// =============================================================================
+
+func (a *Analyzer) buildIdentifier(e *ast.Identifier) *tast.Identifier {
 	sym := a.resolve(e.Value)
 	if sym == nil {
 		a.errorf(e.Pos(), "undefined name '%s'", e.Value)
-		return UnknownType{}
+		return &tast.Identifier{Pos_: e.Pos_, Value: e.Value, Type: types.UnknownType{}}
 	}
-	return sym.Type
-}
-func (a *Analyzer) analyzeInfixExpr(e *ast.InfixExpr) Type {
-	left := a.analyzeExpr(e.Left)
-	right := a.analyzeExpr(e.Right)
-
-	if !left.Equals(UnknownType{}) && !right.Equals(UnknownType{}) && !left.Equals(right) {
-		a.errorf(e.Pos(), "type mismatch: cannot %s '%s' and '%s'",
-			e.Operator, left.String(), right.String())
-	}
-
-	switch e.Operator {
-	case "==", "!=", "<", ">", "<=", ">=", "&&", "||":
-		return BoolType{}
-	default:
-		return left
+	return &tast.Identifier{
+		Pos_:   e.Pos_,
+		Value:  e.Value,
+		Type:   sym.Type,
+		Symbol: sym,
 	}
 }
 
-func (a *Analyzer) analyzePrefixExpr(e *ast.PrefixExpr) Type {
-	right := a.analyzeExpr(e.Right)
+func (a *Analyzer) buildInfixExpr(e *ast.InfixExpr) *tast.InfixExpr {
+	leftNode := a.buildExpr(e.Left)
+	rightNode := a.buildExpr(e.Right)
 
+	leftType := typeOf(leftNode)
+	rightType := typeOf(rightNode)
+
+	// Math and Logic Rules
+	var resultType types.Type = types.UnknownType{}
+	if leftType.Equals(rightType) {
+		switch e.Operator {
+		case "+", "-", "*", "/", "%":
+			if leftType.Equals(types.IntType{}) {
+				resultType = types.IntType{}
+			} else {
+				a.errorf(e.Pos(), "type mismatch: cannot %s '%s' and '%s'", e.Operator, leftType.String(), rightType.String())
+			}
+		case "==", "!=", "<", "<=", ">", ">=":
+			resultType = types.BoolType{}
+		case "&&", "||":
+			if leftType.Equals(types.BoolType{}) {
+				resultType = types.BoolType{}
+			} else {
+				a.errorf(e.Pos(), "type mismatch: cannot %s non-booleans", e.Operator)
+			}
+		}
+	} else if !types.IsUnknown(leftType) && !types.IsUnknown(rightType) {
+		a.errorf(e.Pos(), "type mismatch: cannot %s '%s' and '%s'", e.Operator, leftType.String(), rightType.String())
+	}
+
+	return &tast.InfixExpr{
+		Pos_:     e.Pos_,
+		Left:     leftNode,
+		Operator: e.Operator,
+		Right:    rightNode,
+		Type:     resultType,
+	}
+}
+
+func (a *Analyzer) buildPrefixExpr(e *ast.PrefixExpr) *tast.PrefixExpr {
+	rightNode := a.buildExpr(e.Right)
+	rightType := typeOf(rightNode)
+
+	var resultType types.Type = types.UnknownType{}
 	switch e.Operator {
 	case "!":
-		if !right.Equals(BoolType{}) && !right.Equals(UnknownType{}) {
-			a.errorf(e.Pos(), "operator '!' cannot be applied to type '%s'", right.String())
+		if rightType.Equals(types.BoolType{}) {
+			resultType = types.BoolType{}
+		} else if !types.IsUnknown(rightType) {
+			a.errorf(e.Pos(), "operator '!' expects 'bool', got '%s'", rightType.String())
 		}
-		return BoolType{}
 	case "-":
-		if !right.Equals(IntType{}) && !right.Equals(UnknownType{}) {
-			a.errorf(e.Pos(), "operator '-' cannot be applied to type '%s'", right.String())
+		if rightType.Equals(types.IntType{}) {
+			resultType = types.IntType{}
+		} else if !types.IsUnknown(rightType) {
+			a.errorf(e.Pos(), "operator '-' expects 'int', got '%s'", rightType.String())
 		}
-		return IntType{}
-	default:
-		a.errorf(e.Pos(), "unknown prefix operator '%s'", e.Operator)
-		return UnknownType{}
+	}
+
+	return &tast.PrefixExpr{
+		Pos_:     e.Pos_,
+		Operator: e.Operator,
+		Right:    rightNode,
+		Type:     resultType,
 	}
 }
 
-func (a *Analyzer) analyzeIfExpr(e *ast.IfExpr) Type {
-	cond := a.analyzeExpr(e.Condition)
-	if !cond.Equals(BoolType{}) && !cond.Equals(UnknownType{}) {
+// =============================================================================
+// Control Flow Expressions
+// =============================================================================
+
+func (a *Analyzer) buildIfExpr(e *ast.IfExpr) *tast.IfExpr {
+	condNode := a.buildExpr(e.Condition)
+	condType := typeOf(condNode)
+
+	if !condType.Equals(types.BoolType{}) && !types.IsUnknown(condType) {
 		a.errorf(e.Pos(), "IF condition must be a boolean")
 	}
 
-	a.analyzeBlockStmt(e.Consequence)
-	thenYield := a.extractYieldType(e.Consequence)
+	consBlock := a.buildBlockStmt(e.Consequence)
+	consYield := typeOfBlock(consBlock)
 
-	var elseYield Type = UnknownType{}
+	var altBlock *tast.BlockStmt
+	altYield := types.Type(types.UnitType{})
+
 	if e.Alternative != nil {
-		a.analyzeBlockStmt(e.Alternative)
-		elseYield = a.extractYieldType(e.Alternative)
+		altBlock = a.buildBlockStmt(e.Alternative)
+		altYield = typeOfBlock(altBlock)
 	}
 
-	finalYield := thenYield
-	if !thenYield.Equals(UnknownType{}) && !elseYield.Equals(UnknownType{}) {
-		if !thenYield.Equals(elseYield) {
-			if merged := mergeTypes(thenYield, elseYield); merged != nil {
-				finalYield = merged
-			} else {
-				a.errorf(e.Pos(), "type mismatch: if branches yield different types ('%s' vs '%s')",
-					thenYield.String(), elseYield.String())
-			}
-		}
-	} else if thenYield.Equals(UnknownType{}) {
-		finalYield = elseYield
-	}
+	resultType := mergeTypes(consYield, altYield)
 
-	// Back-propagate to ensure phi nodes match perfectly
-	a.TypeMap[e] = finalYield
-	a.updateBlockYield(e.Consequence, finalYield)
-	if e.Alternative != nil {
-		a.updateBlockYield(e.Alternative, finalYield)
+	return &tast.IfExpr{
+		Pos_:        e.Pos_,
+		Condition:   condNode,
+		Consequence: consBlock,
+		Alternative: altBlock,
+		Type:        resultType,
 	}
-
-	return finalYield
 }
 
-func (a *Analyzer) extractYieldType(block *ast.BlockStmt) Type {
-	if len(block.Statements) == 0 {
-		return UnknownType{}
-	}
-	last := block.Statements[len(block.Statements)-1]
-	if yield, ok := last.(*ast.YieldStmt); ok {
-		return a.TypeMap[yield.Value]
-	}
-	return UnknownType{}
-}
+func (a *Analyzer) buildCallExpr(e *ast.CallExpr) *tast.CallExpr {
+	var funcNode tast.Expr
+	var funcType types.Type
 
-// analyzeCallExpr type-checks a call and enforces ownership transfer for own arguments.
-func (a *Analyzer) analyzeCallExpr(e *ast.CallExpr) Type {
-	// NEW: Check if we are invoking a constructor on a generic type symbol
+	// Handle generic constructors (e.g., Vec<int>())
 	if genType, isGen := e.Function.(*ast.GenericType); isGen {
-		resolvedType := a.resolveAstType(genType)
+		funcNode = a.buildGenericType(genType)
+		funcType = typeOf(funcNode)
+	} else {
+		funcNode = a.buildExpr(e.Function)
+		funcType = typeOf(funcNode)
+	}
 
-		// Ensure constructors are called with 0 arguments for bootstrapping
-		if len(e.Arguments) != 0 {
-			a.errorf(e.Pos(), "container constructor expects 0 arguments")
+	var resultType types.Type = types.UnknownType{}
+
+	// Validate arity and extract function signature
+	ft, isFunc := funcType.(*types.FunctionType)
+	if isFunc {
+		if len(e.Arguments) != len(ft.Params) {
+			a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d", len(ft.Params), len(e.Arguments))
 		}
-		return resolvedType
+		resultType = ft.Return
 	}
 
-	// Intercept variant constructors: Some(x), None, Ok(x), Err(e)
-	if ident, ok := e.Function.(*ast.Identifier); ok {
-		switch ident.Value {
-		case "Some":
-			if len(e.Arguments) != 1 {
-				a.errorf(e.Pos(), "Some expects exactly 1 argument, got %d", len(e.Arguments))
-				return UnknownType{}
-			}
-			innerType := a.analyzeExpr(e.Arguments[0].Argument)
-			return NewOptionType(innerType)
-
-		case "None":
-			if len(e.Arguments) != 0 {
-				a.errorf(e.Pos(), "None takes no arguments")
-				return UnknownType{}
-			}
-			// None without a known inner type — UnknownType base will be resolved
-			// by context (the variable declaration or function return type).
-			// For now return a sentinel; type inference would fix this properly.
-			return NewOptionType(UnknownType{})
-
-		case "Ok":
-			if len(e.Arguments) != 1 {
-				a.errorf(e.Pos(), "Ok expects exactly 1 argument, got %d", len(e.Arguments))
-				return UnknownType{}
-			}
-			innerType := a.analyzeExpr(e.Arguments[0].Argument)
-			// Error type is unknown at construction — resolved by context.
-			return NewResultType(innerType, UnknownType{})
-
-		case "Err":
-			if len(e.Arguments) != 1 {
-				a.errorf(e.Pos(), "Err expects exactly 1 argument, got %d", len(e.Arguments))
-				return UnknownType{}
-			}
-			errType := a.analyzeExpr(e.Arguments[0].Argument)
-			return NewResultType(UnknownType{}, errType)
-
-		// NEW: Compiler Built-ins for Concurrency
-		case "spawn":
-			if len(e.Arguments) != 1 {
-				a.errorf(e.Pos(), "spawn expects exactly 1 argument (a Task)")
-				return UnknownType{}
-			}
-			argType := a.analyzeExpr(e.Arguments[0].Argument)
-			if _, isTask := argType.(TaskType); !isTask {
-				a.errorf(e.Arguments[0].Argument.Pos(), "spawn expects a Task, got '%s'", argType.String())
-			}
-			return IntType{} // Return dummy int (e.g., 0 for success)
-
-		case "run_executor":
-			if len(e.Arguments) != 0 {
-				a.errorf(e.Pos(), "run_executor expects 0 arguments")
-			}
-			return IntType{} // Return int so it can be returned out of main
-		}
-	}
-
-	fnTypeExpr := a.analyzeExpr(e.Function)
-	fnType, ok := fnTypeExpr.(*FunctionType)
-	if !ok {
-		if !fnTypeExpr.Equals(UnknownType{}) {
-			a.errorf(e.Pos(), "cannot call non-function type '%s'", fnTypeExpr.String())
-		}
-		return UnknownType{}
-	}
-
-	if len(e.Arguments) != len(fnType.Params) {
-		a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d",
-			len(fnType.Params), len(e.Arguments))
-		return UnknownType{}
-	}
-
+	var args []tast.CallArg
 	for i, arg := range e.Arguments {
-		actualType := a.analyzeExpr(arg.Argument)
-		expectedType := fnType.Params[i]
+		argNode := a.buildExpr(arg.Argument)
+		argType := typeOf(argNode)
 
-		isCoercible := false
-		if _, isSlice := expectedType.(SliceType); isSlice {
-			if arrTy, isArr := actualType.(ArrayType); isArr && arrTy.Base.Equals(expectedType.(SliceType).Base) {
-				isCoercible = true
+		if isFunc && i < len(ft.Params) {
+			// 1. Static Type Check
+			if !argType.Equals(ft.Params[i]) && !types.IsUnknown(argType) {
+				a.errorf(arg.Pos_, "argument %d type mismatch: expected '%s', got '%s'", i+1, ft.Params[i].String(), argType.String())
 			}
-			if vecTy, isVec := actualType.(VectorType); isVec && vecTy.Base.Equals(expectedType.(SliceType).Base) {
-				isCoercible = true
+
+			// 2. Static Capability / Modifier Check
+			switch ft.ParamModes[i] {
+			case types.ParamMutBorrow:
+				if !arg.Mut {
+					a.errorf(arg.Pos_, "argument %d requires 'mut' modifier to match function signature", i+1)
+				}
+				if arg.Own {
+					a.errorf(arg.Pos_, "argument %d expects 'mut', got 'own'", i+1)
+				}
+			case types.ParamOwned:
+				if !arg.Own {
+					a.errorf(arg.Pos_, "argument %d requires 'own' modifier to match function signature", i+1)
+				}
+				if arg.Mut {
+					a.errorf(arg.Pos_, "argument %d expects 'own', got 'mut'", i+1)
+				}
+			case types.ParamBorrow:
+				if arg.Mut || arg.Own {
+					a.errorf(arg.Pos_, "argument %d does not take ownership modifiers", i+1)
+				}
 			}
 		}
 
-		if !isCoercible && !actualType.Equals(expectedType) && !actualType.Equals(UnknownType{}) {
-			a.errorf(arg.Argument.Pos(), "argument %d type mismatch: expected '%s', got '%s'",
-				i, expectedType.String(), actualType.String())
-		}
+		args = append(args, tast.CallArg{
+			Pos_:     arg.Pos_,
+			Argument: argNode,
+			Mut:      arg.Mut,
+			Own:      arg.Own,
+		})
 	}
 
-	return fnType.Return
+	return &tast.CallExpr{
+		Pos_:      e.Pos_,
+		Function:  funcNode,
+		Arguments: args,
+		Type:      resultType,
+	}
 }
 
-func (a *Analyzer) analyzeAwaitExpr(e *ast.AwaitExpr) Type {
-	// 1. Context Validation: Must be inside an async function
+func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 	if a.currentFn == nil || !a.currentFn.IsAsync {
 		a.errorf(e.Pos(), "cannot use 'await' outside of an async function")
-		return UnknownType{}
 	}
 
-	// 2. Type Validation: Evaluate the right side and ensure it's a Task
-	right := a.analyzeExpr(e.Value)
+	valNode := a.buildExpr(e.Value)
+	valType := typeOf(valNode)
 
-	taskType, isTask := right.(TaskType)
-	if !isTask {
-		if !right.Equals(UnknownType{}) { // Prevent cascading errors
-			a.errorf(e.Pos(), "cannot await non-task type '%s'", right.String())
-		}
-		return UnknownType{}
+	var resultType types.Type = types.UnknownType{}
+	if taskTy, ok := valType.(types.TaskType); ok {
+		resultType = taskTy.Base
+	} else if !types.IsUnknown(valType) {
+		a.errorf(e.Pos(), "cannot await non-task type '%s'", valType.String())
 	}
 
-	// 3. Unbox: Await yields the inner Base/Result value
-	return taskType.Base
+	return &tast.AwaitExpr{
+		Pos_:  e.Pos_,
+		Value: valNode,
+		Type:  resultType,
+	}
 }
 
-func (a *Analyzer) analyzeStructLiteral(e *ast.StructLiteral) Type {
+// =============================================================================
+// Container Expressions
+// =============================================================================
+
+func (a *Analyzer) buildArrayLiteral(e *ast.ArrayLiteral) *tast.ArrayLiteral {
+	if len(e.Elements) == 0 {
+		a.errorf(e.Pos(), "cannot infer type of empty array literal")
+		return &tast.ArrayLiteral{Pos_: e.Pos_, Elements: nil, Type: types.UnknownType{}}
+	}
+
+	var elems []tast.Expr
+	var baseType types.Type
+
+	for i, el := range e.Elements {
+		elNode := a.buildExpr(el)
+		elType := typeOf(elNode)
+		elems = append(elems, elNode)
+
+		if i == 0 {
+			baseType = elType
+		} else if !elType.Equals(baseType) && !types.IsUnknown(elType) {
+			a.errorf(el.Pos(), "array element %d type mismatch: expected '%s', got '%s'", i, baseType.String(), elType.String())
+		}
+	}
+
+	return &tast.ArrayLiteral{
+		Pos_:     e.Pos_,
+		End_:     e.End_,
+		Elements: elems,
+		Type:     types.ArrayType{Base: baseType, Size: len(elems)},
+	}
+}
+
+func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
+	leftNode := a.buildExpr(e.Left)
+	idxNode := a.buildExpr(e.Index)
+
+	leftType := typeOf(leftNode)
+	idxType := typeOf(idxNode)
+
+	if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
+		a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", idxType.String())
+	}
+
+	var resultType types.Type = types.UnknownType{}
+	switch ty := leftType.(type) {
+	case types.ArrayType:
+		resultType = ty.Base
+	case types.SliceType:
+		resultType = ty.Base
+	case types.VectorType:
+		resultType = ty.Base
+	case types.StringType:
+		resultType = types.IntType{} // Characters are currently ints
+	default:
+		if !types.IsUnknown(leftType) {
+			a.errorf(e.Left.Pos(), "cannot index non-array/slice type '%s'", leftType.String())
+		}
+	}
+
+	return &tast.IndexExpr{
+		Pos_:  e.Pos_,
+		Left:  leftNode,
+		Index: idxNode,
+		Type:  resultType,
+	}
+}
+
+func (a *Analyzer) buildSliceExpr(e *ast.SliceExpr) *tast.SliceExpr {
+	leftNode := a.buildExpr(e.Left)
+	leftType := typeOf(leftNode)
+
+	var lowNode, highNode tast.Expr
+
+	if e.Low != nil {
+		lowNode = a.buildExpr(e.Low)
+		if t := typeOf(lowNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+			a.errorf(e.Low.Pos(), "slice low index must be an integer")
+		}
+	}
+	if e.High != nil {
+		highNode = a.buildExpr(e.High)
+		if t := typeOf(highNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+			a.errorf(e.High.Pos(), "slice high index must be an integer")
+		}
+	}
+
+	var resultType types.Type = types.UnknownType{}
+	switch ty := leftType.(type) {
+	case types.ArrayType:
+		resultType = types.SliceType{Base: ty.Base}
+	case types.SliceType, types.VectorType:
+		resultType = leftType
+	case types.StringType:
+		resultType = types.StringType{}
+	default:
+		if !types.IsUnknown(leftType) {
+			a.errorf(e.Left.Pos(), "cannot slice non-array/slice type '%s'", leftType.String())
+		}
+	}
+
+	return &tast.SliceExpr{
+		Pos_: e.Pos_,
+		Left: leftNode,
+		Low:  lowNode,
+		High: highNode,
+		Type: resultType,
+	}
+}
+
+// =============================================================================
+// Structs & Variants
+// =============================================================================
+
+func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral {
+	sym := a.resolve(e.Type.Value)
+	if sym != nil && sym.Kind == types.VariantSymbol {
+		return a.buildVariantLiteral(e, sym)
+	}
+
 	structDef := a.lookupStruct(e.Type.Value)
 	if structDef == nil {
 		a.errorf(e.Type.Pos(), "undefined struct type '%s'", e.Type.Value)
-		return UnknownType{}
+		return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
 	}
 
+	var tastFields []tast.StructField
 	seen := make(map[string]bool)
-	for _, f := range e.Fields {
-		a.checkStructFieldLiteral(structDef, &f, seen)
+
+	for _, field := range e.Fields {
+		a.checkStructFieldLiteral(&field, seen)
+		valNode := a.buildExpr(field.Value)
+		valType := typeOf(valNode)
+
+		// Type check field
+		expectedIdx := structDef.GetFieldIndex(field.Name.Value)
+		if expectedIdx != -1 {
+			expectedType := structDef.Fields[expectedIdx].Type
+			if !valType.Equals(expectedType) && !types.IsUnknown(valType) {
+				a.errorf(field.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'",
+					field.Name.Value, expectedType.String(), valType.String())
+			}
+		}
+
+		tastFields = append(tastFields, tast.StructField{
+			Pos_:  field.Pos_,
+			End_:  field.End_,
+			Name:  &tast.Identifier{Pos_: field.Name.Pos_, Value: field.Name.Value},
+			Value: valNode,
+		})
 	}
 
-	if len(seen) < len(structDef.Fields) {
-		missing := a.getMissingFields(structDef, seen)
-		a.errorf(e.Pos(), "missing fields in struct literal: %s", strings.Join(missing, ", "))
+	if missing := a.getMissingFields(structDef, seen); len(missing) > 0 {
+		a.errorf(e.Pos(), "missing field '%s' in struct literal", missing)
 	}
 
-	return structDef
+	return &tast.StructLiteral{
+		Pos_:   e.Pos_,
+		End_:   e.End_,
+		Fields: tastFields,
+		Type:   structDef,
+	}
 }
 
-func (a *Analyzer) lookupStruct(name string) *StructType {
+func (a *Analyzer) buildVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.StructLiteral {
+	variant := sym.Variant
+	sumType := sym.SumType
+
+	var tastFields []tast.StructField
+	seen := make(map[string]bool)
+
+	for _, field := range e.Fields {
+		name := field.Name.Value
+		if seen[name] {
+			a.errorf(field.Name.Pos(), "duplicate field '%s' in variant literal", name)
+			continue
+		}
+		seen[name] = true
+
+		valNode := a.buildExpr(field.Value)
+		valType := typeOf(valNode)
+
+		// Find the expected type
+		var expectedType types.Type
+		for _, vField := range variant.Fields {
+			if vField.Name == name {
+				expectedType = vField.Type
+				break
+			}
+		}
+
+		if expectedType == nil {
+			a.errorf(field.Name.Pos(), "field '%s' does not exist on variant '%s'", name, variant.Name)
+		} else if !valType.Equals(expectedType) && !types.IsUnknown(valType) {
+			a.errorf(field.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'",
+				name, expectedType.String(), valType.String())
+		}
+
+		tastFields = append(tastFields, tast.StructField{
+			Pos_:  field.Pos_,
+			End_:  field.End_,
+			Name:  &tast.Identifier{Pos_: field.Name.Pos_, Value: name},
+			Value: valNode,
+		})
+	}
+
+	// Check missing
+	for _, f := range variant.Fields {
+		if !seen[f.Name] {
+			a.errorf(e.Pos(), "missing field '%s' in variant literal", f.Name)
+		}
+	}
+
+	return &tast.StructLiteral{
+		Pos_:   e.Pos_,
+		End_:   e.End_,
+		Fields: tastFields,
+		Type:   sumType,
+	}
+}
+
+func (a *Analyzer) buildFieldAccess(e *ast.FieldAccess) *tast.FieldAccess {
+	objNode := a.buildExpr(e.Object)
+	objType := typeOf(objNode)
+
+	var resultType types.Type = types.UnknownType{}
+
+	if st, ok := objType.(*types.StructType); ok {
+		idx := st.GetFieldIndex(e.Field.Value)
+		if idx != -1 {
+			resultType = st.Fields[idx].Type
+		} else {
+			a.errorf(e.Field.Pos(), "field '%s' does not exist on struct '%s'", e.Field.Value, st.Name)
+		}
+	} else if !types.IsUnknown(objType) {
+		a.errorf(e.Pos(), "cannot access field '%s' on non-struct type '%s'", e.Field.Value, objType.String())
+	}
+
+	return &tast.FieldAccess{
+		Pos_:   e.Pos_,
+		Object: objNode,
+		Field:  &tast.Identifier{Pos_: e.Field.Pos_, Value: e.Field.Value, Type: resultType},
+		Type:   resultType,
+	}
+}
+
+func (a *Analyzer) buildGenericType(e *ast.GenericType) *tast.Identifier {
+	resolvedType := a.resolveAstType(e)
+	return &tast.Identifier{
+		Pos_:  e.Pos_,
+		Value: e.Name,
+		Type:  resolvedType,
+	}
+}
+
+// =============================================================================
+// Helper Methods & Stub
+// =============================================================================
+
+// typeOf cleanly extracts the bound type from any TAST expression interface.
+func typeOf(expr tast.Expr) types.Type {
+	if expr == nil {
+		return types.UnknownType{}
+	}
+	switch e := expr.(type) {
+	case *tast.IntLiteral:
+		return e.Type
+	case *tast.BoolLiteral:
+		return e.Type
+	case *tast.StringLiteral:
+		return e.Type
+	case *tast.Identifier:
+		return e.Type
+	case *tast.InfixExpr:
+		return e.Type
+	case *tast.PrefixExpr:
+		return e.Type
+	case *tast.IfExpr:
+		return e.Type
+	case *tast.CallExpr:
+		return e.Type
+	case *tast.FieldAccess:
+		return e.Type
+	case *tast.IndexExpr:
+		return e.Type
+	case *tast.SliceExpr:
+		return e.Type
+	case *tast.StructLiteral:
+		return e.Type
+	case *tast.ArrayLiteral:
+		return e.Type
+	case *tast.AwaitExpr:
+		return e.Type
+	case *tast.MatchExpr:
+		return e.Type
+	}
+	return types.UnknownType{}
+}
+
+// typeOfBlock evaluates the unified return type of a block by checking its final Yield statement.
+func typeOfBlock(block *tast.BlockStmt) types.Type {
+	if block == nil || len(block.Statements) == 0 {
+		return types.UnitType{}
+	}
+	last := block.Statements[len(block.Statements)-1]
+	if yield, ok := last.(*tast.YieldStmt); ok {
+		return typeOf(yield.Value)
+	}
+	return types.UnitType{}
+}
+
+func mergeTypes(t1, t2 types.Type) types.Type {
+	if t1 == nil || t2 == nil {
+		return nil
+	}
+	if t1.Equals(t2) {
+		return t1
+	}
+	if !types.IsUnknown(t1) && !types.IsUnknown(t2) {
+		// They conflict
+		return types.UnknownType{}
+	}
+	if types.IsUnknown(t1) {
+		return t2
+	}
+	return t1
+}
+
+func (a *Analyzer) lookupStruct(name string) *types.StructType {
 	t := a.lookupCustomType(name)
 	if t == nil {
 		return nil
 	}
-	st, _ := t.(*StructType)
+	st, _ := t.(*types.StructType)
 	return st
 }
 
-func (a *Analyzer) checkStructFieldLiteral(st *StructType, literalField *ast.StructField, seen map[string]bool) {
+func (a *Analyzer) checkStructFieldLiteral(literalField *ast.StructField, seen map[string]bool) {
 	name := literalField.Name.Value
 	if seen[name] {
 		a.errorf(literalField.Name.Pos(), "duplicate field '%s' in struct literal", name)
 		return
 	}
 	seen[name] = true
-
-	idx := st.GetFieldIndex(name)
-	if idx < 0 {
-		a.errorf(literalField.Name.Pos(), "struct '%s' has no field '%s'", st.Name, name)
-		return
-	}
-
-	expected := st.Fields[idx].Type
-	actual := a.analyzeExpr(literalField.Value)
-	if !actual.Equals(expected) && !actual.Equals(UnknownType{}) {
-		a.errorf(literalField.Value.Pos(),
-			"type mismatch for field '%s': expected '%s', got '%s'",
-			name, expected.String(), actual.String())
-	}
 }
 
-func (a *Analyzer) getMissingFields(st *StructType, seen map[string]bool) []string {
+func (a *Analyzer) getMissingFields(st *types.StructType, seen map[string]bool) []string {
 	var missing []string
 	for _, f := range st.Fields {
 		if !seen[f.Name] {
@@ -344,337 +623,4 @@ func (a *Analyzer) getMissingFields(st *StructType, seen map[string]bool) []stri
 		}
 	}
 	return missing
-}
-
-func (a *Analyzer) analyzeFieldAccess(e *ast.FieldAccess) Type {
-	objType := a.analyzeExpr(e.Object)
-	if objType.Equals(UnknownType{}) {
-		return UnknownType{}
-	}
-
-	// Built-in methods on Vec<T>
-	if vecTy, isVec := objType.(VectorType); isVec {
-		switch e.Field.Value {
-		case "push":
-			// push takes the element by value (immutable borrow — caller retains ownership).
-			return &FunctionType{
-				Params:     []Type{vecTy.Base},
-				ParamModes: []ParamMode{ParamBorrow},
-				Return:     UnitType{},
-			}
-		case "push_own":
-			// push_own takes ownership of the element.
-			return &FunctionType{
-				Params:     []Type{vecTy.Base},
-				ParamModes: []ParamMode{ParamOwned},
-				Return:     UnitType{},
-			}
-		case "len":
-			return &FunctionType{
-				Params:     []Type{},
-				ParamModes: []ParamMode{},
-				Return:     IntType{},
-			}
-		default:
-			a.errorf(e.Field.Pos(), "unknown method '%s' on type '%s'", e.Field.Value, objType.String())
-			return UnknownType{}
-		}
-	}
-
-	// Built-in methods on Map<K, V>
-	if mapTy, isMap := objType.(MapType); isMap {
-		switch e.Field.Value {
-		case "put":
-			// put takes both key and value by immutable borrow.
-			return &FunctionType{
-				Params:     []Type{mapTy.Key, mapTy.Value},
-				ParamModes: []ParamMode{ParamBorrow, ParamBorrow},
-				Return:     UnitType{},
-			}
-		case "get":
-			// get takes the key by immutable borrow, returns the value type.
-			return &FunctionType{
-				Params:     []Type{mapTy.Key},
-				ParamModes: []ParamMode{ParamBorrow},
-				Return:     mapTy.Value,
-			}
-		default:
-			a.errorf(e.Field.Pos(), "unknown method '%s' on type '%s'", e.Field.Value, objType.String())
-			return UnknownType{}
-		}
-	}
-
-	st, ok := objType.(*StructType)
-	if !ok {
-		a.errorf(e.Object.Pos(), "cannot access field '%s' on non-struct type '%s'",
-			e.Field.Value, objType.String())
-		return UnknownType{}
-	}
-
-	idx := st.GetFieldIndex(e.Field.Value)
-	if idx < 0 {
-		a.errorf(e.Field.Pos(), "field '%s' does not exist on struct '%s'", e.Field.Value, st.Name)
-		return UnknownType{}
-	}
-
-	return st.Fields[idx].Type
-}
-
-func (a *Analyzer) analyzeArrayLiteral(e *ast.ArrayLiteral) Type {
-	if len(e.Elements) == 0 {
-		a.errorf(e.Pos(), "cannot infer type of empty array literal")
-		return UnknownType{}
-	}
-
-	firstType := a.analyzeExpr(e.Elements[0])
-	for i, elem := range e.Elements[1:] {
-		elemType := a.analyzeExpr(elem)
-		if !elemType.Equals(firstType) && !elemType.Equals(UnknownType{}) {
-			a.errorf(elem.Pos(), "array element %d type mismatch: expected '%s', got '%s'",
-				i+1, firstType.String(), elemType.String())
-		}
-	}
-
-	return ArrayType{Base: firstType, Size: len(e.Elements)}
-}
-
-func (a *Analyzer) analyzeIndexExpr(e *ast.IndexExpr) Type {
-	leftType := a.analyzeExpr(e.Left)
-	indexType := a.analyzeExpr(e.Index)
-
-	if leftType.Equals(UnknownType{}) || indexType.Equals(UnknownType{}) {
-		return UnknownType{}
-	}
-
-	var baseType Type
-
-	switch t := leftType.(type) {
-	case ArrayType:
-		baseType = t.Base
-	case SliceType:
-		baseType = t.Base
-	case StringType:
-		baseType = IntType{}
-	default:
-		a.errorf(e.Left.Pos(), "cannot index non-array/slice type '%s'", leftType.String())
-		return UnknownType{}
-	}
-
-	if !indexType.Equals(IntType{}) {
-		a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", indexType.String())
-		return UnknownType{}
-	}
-
-	return baseType
-}
-
-func (a *Analyzer) analyzeSliceExpr(e *ast.SliceExpr) Type {
-	leftType := a.analyzeExpr(e.Left)
-	if leftType.Equals(UnknownType{}) {
-		return UnknownType{}
-	}
-
-	var baseType Type
-
-	switch t := leftType.(type) {
-	case ArrayType:
-		baseType = t.Base
-	case SliceType:
-		baseType = t.Base
-	default:
-		a.errorf(e.Left.Pos(), "cannot slice non-array/slice type '%s'", leftType.String())
-		return UnknownType{}
-	}
-
-	if e.Low != nil {
-		lowType := a.analyzeExpr(e.Low)
-		if !lowType.Equals(IntType{}) && !lowType.Equals(UnknownType{}) {
-			a.errorf(e.Low.Pos(), "slice low index must be an integer, got '%s'", lowType.String())
-		}
-	}
-
-	if e.High != nil {
-		highType := a.analyzeExpr(e.High)
-		if !highType.Equals(IntType{}) && !highType.Equals(UnknownType{}) {
-			a.errorf(e.High.Pos(), "slice high index must be an integer, got '%s'", highType.String())
-		}
-	}
-
-	return SliceType{Base: baseType}
-}
-
-func (a *Analyzer) analyzeVariantLiteral(e *ast.StructLiteral, sym *Symbol) Type {
-	variant := sym.Variant
-	sumType := sym.SumType
-
-	if variant.IsUnit() && len(e.Fields) > 0 {
-		a.errorf(e.Pos(), "unit variant '%s' takes no fields", variant.Name)
-		return sumType
-	}
-
-	// Check fields match the variant's declared fields.
-	seen := make(map[string]bool)
-	for _, f := range e.Fields {
-		name := f.Name.Value
-		if seen[name] {
-			a.errorf(f.Name.Pos(), "duplicate field '%s' in variant literal", name)
-			continue
-		}
-		seen[name] = true
-
-		// Find the field in the variant definition.
-		found := false
-		for _, vf := range variant.Fields {
-			if vf.Name == name {
-				found = true
-				actual := a.analyzeExpr(f.Value)
-				if !actual.Equals(vf.Type) && !actual.Equals(UnknownType{}) {
-					a.errorf(f.Value.Pos(),
-						"type mismatch for field '%s': expected '%s', got '%s'",
-						name, vf.Type.String(), actual.String())
-				}
-				break
-			}
-		}
-		if !found {
-			a.errorf(f.Name.Pos(), "variant '%s' has no field '%s'", variant.Name, name)
-		}
-	}
-
-	// Check for missing fields.
-	for _, vf := range variant.Fields {
-		if !seen[vf.Name] {
-			a.errorf(e.Pos(), "missing field '%s' in variant '%s'", vf.Name, variant.Name)
-		}
-	}
-
-	return sumType
-}
-
-func (a *Analyzer) analyzeBlockExpr(block *ast.BlockStmt) Type {
-	// 1. Push a new variable scope so declarations inside the match arm
-	// (or block) don't leak into the outer scope.
-	a.pushScope()
-	defer a.popScope()
-
-	// 2. Default to UnitType for statement-level blocks.
-	// (Adjust this to &sema.UnitType{} or sema.UnitType{} based on your implementation)
-	var blockType Type = UnitType{}
-
-	// 3. Type-check each statement in the block sequentially
-	for i, stmt := range block.Statements {
-		// Evaluate the statement's side effects and inner expressions
-		a.analyzeStmt(stmt)
-
-		// 4. If we encounter a YieldStmt, its value dictates the block's return type
-		if yieldStmt, ok := stmt.(*ast.YieldStmt); ok {
-			// Extract the type of the yielded expression
-			yieldType := a.analyzeExpr(yieldStmt.Value)
-
-			// Store it so we can type the block itself
-			blockType = yieldType
-
-			// 5. Enforce that YieldStmt acts as a terminator (Dead Code check)
-			if i < len(block.Statements)-1 {
-				a.errorf(yieldStmt.Pos(), "statements after a yield ('=>') are unreachable")
-			}
-		}
-	}
-
-	// 6. Store the resolved type in the type map so later compiler passes
-	// know the type of this block.
-	a.TypeMap[block] = blockType
-
-	return blockType
-}
-
-func mergeTypes(a, b Type) Type {
-	if a == nil || b == nil {
-		return nil
-	}
-
-	// 1. Direct Unknown resolution
-	if isUnknown(a) {
-		return b
-	}
-	if isUnknown(b) {
-		return a
-	}
-
-	// 2. Generic SumType Unification
-	stA, okA := a.(*SumType)
-	stB, okB := b.(*SumType)
-	if okA && okB {
-		// Structurally verify they are the same base type with the same number of arguments
-		if stA.BaseName == stB.BaseName && len(stA.TypeArgs) == len(stB.TypeArgs) {
-
-			// Unify the generic type arguments
-			mergedArgs := make([]Type, len(stA.TypeArgs))
-			for i := range stA.TypeArgs {
-				mergedArg := mergeTypes(stA.TypeArgs[i], stB.TypeArgs[i])
-				if mergedArg == nil {
-					return nil // Type arguments are incompatible
-				}
-				mergedArgs[i] = mergedArg
-			}
-
-			// If it's a built-in generic, use the unified arguments to regenerate the type
-			switch stA.BaseName {
-			case "Option":
-				return NewOptionType(mergedArgs[0])
-			case "Result":
-				return NewResultType(mergedArgs[0], mergedArgs[1])
-			}
-
-			// For user-defined SumTypes, return a merged copy
-			merged := &SumType{
-				BaseName: stA.BaseName,
-				TypeArgs: mergedArgs,
-			}
-
-			// ... (keep your existing loop that unifies stA.Variants and stB.Variants here) ...
-
-			return merged
-		}
-	}
-
-	// 3. Fallback for primitives / basic structs
-	if a.Equals(b) {
-		return a
-	}
-
-	return nil
-}
-
-// Helper: Propagates a fully unified type down to nested branching expressions.
-func (a *Analyzer) propagateType(expr ast.Expr, t Type) {
-	if expr == nil {
-		return
-	}
-	a.TypeMap[expr] = t
-
-	switch e := expr.(type) {
-	case *ast.IfExpr:
-		if e.Consequence != nil {
-			a.updateBlockYield(e.Consequence, t)
-		}
-		if e.Alternative != nil {
-			a.updateBlockYield(e.Alternative, t)
-		}
-	case *ast.MatchExpr:
-		for _, arm := range e.Arms {
-			a.updateBlockYield(arm.Body.(*ast.BlockStmt), t)
-		}
-	}
-}
-
-// Helper: Finds the final YieldStmt in a block and updates its type.
-func (a *Analyzer) updateBlockYield(block *ast.BlockStmt, t Type) {
-	if len(block.Statements) == 0 {
-		return
-	}
-	last := block.Statements[len(block.Statements)-1]
-	if yield, ok := last.(*ast.YieldStmt); ok {
-		a.propagateType(yield.Value, t)
-	}
 }

@@ -1,9 +1,14 @@
-// sema/function.go
 package sema
 
 import (
 	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/types"
 )
+
+// =============================================================================
+// Pass 1: Function Hoisting
+// =============================================================================
 
 func (a *Analyzer) registerFunctions(program *ast.Program) {
 	for _, decl := range program.Decls {
@@ -17,88 +22,100 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	if v.Name == "main" && v.IsAsync {
 		a.errorf(v.Pos(), "the 'main' function cannot be async; you must manually spawn tasks and run the executor")
 	}
-	paramTypes := make([]Type, len(v.Params))
-	paramModes := make([]ParamMode, len(v.Params))
+
+	paramTypes := make([]types.Type, len(v.Params))
+	paramModes := make([]types.ParamMode, len(v.Params))
+
 	for i, p := range v.Params {
 		paramTypes[i] = a.resolveAstType(p.Type)
 		switch {
 		case p.Own:
-			paramModes[i] = ParamOwned
+			paramModes[i] = types.ParamOwned
 		case p.Mut:
-			paramModes[i] = ParamMutBorrow
+			paramModes[i] = types.ParamMutBorrow
 		default:
-			paramModes[i] = ParamBorrow
+			paramModes[i] = types.ParamBorrow
 		}
 	}
 
-	var retType Type
+	var returnType types.Type = types.UnitType{}
 	if v.ReturnType != nil {
-		retType = a.resolveAstType(v.ReturnType)
-	} else {
-		retType = UnitType{}
+		returnType = a.resolveAstType(v.ReturnType)
 	}
 
-	// NEW: If the function is async, it returns a Task<T>, not T.
-	if v.IsAsync {
-		retType = TaskType{Base: retType}
+	fnType := &types.FunctionType{
+		Params:     paramTypes,
+		ParamModes: paramModes,
+		Return:     returnType,
 	}
 
-	a.scope.symbols[v.Name] = &Symbol{
-		Kind:    FuncSymbol,
-		Name:    v.Name,
-		Mutable: false,
-		Type:    &FunctionType{Params: paramTypes, ParamModes: paramModes, Return: retType},
+	sym := &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: v.Name,
+		Type: fnType,
 	}
+
+	a.scope.symbols[v.Name] = sym
 }
 
-func (a *Analyzer) analyzeFunctionBodies(program *ast.Program) {
-	for _, decl := range program.Decls {
-		if fn, ok := decl.(*ast.FnDecl); ok {
-			a.analyzeFnBody(fn)
-		}
-	}
-}
+// =============================================================================
+// Pass 2: TAST Construction
+// =============================================================================
 
-func (a *Analyzer) analyzeFnBody(v *ast.FnDecl) {
+// buildFnBody replaces the old analyzeFnBody.
+// It type-checks the function parameters and body, returning a fully-hydrated TAST node.
+func (a *Analyzer) buildFnBody(v *ast.FnDecl) *tast.FnDecl {
 	a.currentFn = v
 	defer func() { a.currentFn = nil }()
 
-	for _, param := range v.Params {
-		pType := a.resolveAstType(param.Type)
+	// 1. Retrieve the permanently bound function symbol from Pass 1
+	fnSym := a.resolve(v.Name)
+	fnType := fnSym.Type.(*types.FunctionType)
 
-		var mode ParamMode
-		var mutable bool
+	// Set the expected return type so inner ReturnStmts can validate against it
+	a.expectedReturn = fnType.Return
 
-		switch {
-		case param.Own:
-			mode = ParamOwned
-			mutable = true
+	// 2. Prepare the local scope for the function body
+	a.pushScope()
+	defer a.popScope()
 
-		case param.Mut:
-			mode = ParamMutBorrow
-			mutable = true
-
-		default:
-			mode = ParamBorrow
-			mutable = false
+	// 3. Hydrate the parameters and inject them into the local scope
+	tastParams := make([]*tast.Param, len(v.Params))
+	for i, p := range v.Params {
+		paramSym := &types.Symbol{
+			Kind:      types.VarSymbol,
+			Name:      p.Name,
+			Type:      fnType.Params[i],
+			Mutable:   p.Mut,
+			ParamMode: fnType.ParamModes[i],
 		}
 
-		a.scope.symbols[param.Name] = &Symbol{
-			Kind:      VarSymbol,
-			Name:      param.Name,
-			Mutable:   mutable,
-			Type:      pType,
-			ParamMode: mode,
+		a.scope.symbols[p.Name] = paramSym
+
+		tastParams[i] = &tast.Param{
+			Pos_:   p.Pos_,
+			End_:   p.End_,
+			Name:   p.Name,
+			Type:   fnType.Params[i],
+			Symbol: paramSym,
 		}
 	}
 
-	if v.ReturnType != nil {
-		a.expectedReturn = a.resolveAstType(v.ReturnType)
-	} else {
-		a.expectedReturn = UnitType{}
+	// 4. Construct the strictly-typed block statement (the body)
+	var tastBody *tast.BlockStmt
+	if v.Body != nil {
+		tastBody = a.buildBlockStmt(v.Body)
 	}
 
-	defer func() { a.expectedReturn = nil }()
-
-	a.analyzeBlockStmt(v.Body)
+	// 5. Return the fully-hydrated TAST Function Declaration
+	return &tast.FnDecl{
+		Pos_:       v.Pos_,
+		End_:       v.End_,
+		Name:       v.Name,
+		Params:     tastParams,
+		ReturnType: fnType.Return,
+		Body:       tastBody,
+		IsAsync:    v.IsAsync,
+		Symbol:     fnSym,
+	}
 }

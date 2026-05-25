@@ -7,6 +7,7 @@
 namespace maml {
 
 void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt);
+void compileTerminator(CodegenContext &ctx, const nlohmann::json &term);
 
 } // namespace maml
 

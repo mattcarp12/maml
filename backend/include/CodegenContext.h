@@ -40,8 +40,11 @@ class CodegenContext {
   ErrorHandler Error;
 
   FastMap<llvm::Type *> TypeCache;
-  ViewMap<llvm::Value *> SymbolTable;             // keyed by rt:: constexpr strings — safe as ViewMap
-  std::vector<FastMap<llvm::Value *>> SymbolEnv;  // owns its keys — was ViewMap, latent UAF
+  ViewMap<llvm::Value *> SymbolTable;
+  std::vector<FastMap<llvm::Value *>> SymbolEnv;
+
+  std::unordered_map<int, llvm::BasicBlock *> Blocks;
+
   std::vector<llvm::BasicBlock *> LoopExitStack;
 
   CodegenContext(const std::string &moduleName);

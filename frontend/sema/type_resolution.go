@@ -1,7 +1,14 @@
-// sema/type_resolution.go
 package sema
 
-import "github.com/mattcarp12/maml/frontend/ast"
+import (
+	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/types"
+)
+
+// =============================================================================
+// Pass 1: Type Hoisting
+// =============================================================================
 
 func (a *Analyzer) discoverTypes(program *ast.Program) {
 	for _, decl := range program.Decls {
@@ -12,9 +19,9 @@ func (a *Analyzer) discoverTypes(program *ast.Program) {
 			}
 			switch td.Rhs.(type) {
 			case *ast.StructTypeExpr:
-				a.scope.types[td.Name.Value] = &StructType{Name: td.Name.Value}
+				a.scope.types[td.Name.Value] = &types.StructType{Name: td.Name.Value}
 			case *ast.SumTypeExpr:
-				a.scope.types[td.Name.Value] = &SumType{BaseName: td.Name.Value}
+				a.scope.types[td.Name.Value] = &types.SumType{BaseName: td.Name.Value}
 			}
 		}
 	}
@@ -33,40 +40,32 @@ func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
 
 	switch rhs := v.Rhs.(type) {
 	case *ast.StructTypeExpr:
-		st, ok := existingType.(*StructType)
-		if !ok {
-			return
-		}
+		st := existingType.(*types.StructType)
 		for _, f := range rhs.Fields {
-			fieldType := a.resolveAstType(f.Type)
-			st.Fields = append(st.Fields, StructField{Name: f.Name, Type: fieldType})
+			st.Fields = append(st.Fields, types.StructField{
+				Name: f.Name,
+				Type: a.resolveAstType(f.Type),
+			})
 		}
-
 	case *ast.SumTypeExpr:
-		st, ok := existingType.(*SumType)
-		if !ok {
-			return
-		}
-		for i, astVariant := range rhs.Variants {
-			variant := SumVariant{
-				Name:         astVariant.Name,
+		st := existingType.(*types.SumType)
+		for i, v := range rhs.Variants {
+			variant := types.SumVariant{
+				Name:         v.Name,
 				Discriminant: i,
 			}
-			for _, f := range astVariant.Fields {
-				fieldType := a.resolveAstType(f.Type)
-				variant.Fields = append(variant.Fields, StructField{
+			for _, f := range v.Fields {
+				variant.Fields = append(variant.Fields, types.StructField{
 					Name: f.Name,
-					Type: fieldType,
+					Type: a.resolveAstType(f.Type),
 				})
 			}
 			st.Variants = append(st.Variants, variant)
 
-			// Register the variant name as a symbol in global scope so that
-			// Circle{...} and Point are recognized as constructors.
-			a.scope.symbols[astVariant.Name] = &Symbol{
-				Kind:    VariantSymbol,
-				Name:    astVariant.Name,
-				Mutable: false,
+			// Register the variant constructor in the symbol table
+			a.scope.symbols[v.Name] = &types.Symbol{
+				Kind:    types.VariantSymbol,
+				Name:    v.Name,
 				Type:    st,
 				SumType: st,
 				Variant: &st.Variants[i],
@@ -75,108 +74,98 @@ func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
 	}
 }
 
-func (a *Analyzer) resolveAstType(expr ast.TypeExpr) Type {
-	var resolvedType Type = UnknownType{}
+// =============================================================================
+// Pass 2: TAST Construction
+// =============================================================================
 
-	switch t := expr.(type) {
-	case *ast.NamedTypeExpr:
-		switch t.Name.Value {
-		case "int":
-			resolvedType = IntType{}
-		case "bool":
-			resolvedType = BoolType{}
-		case "string":
-			resolvedType = StringType{}
-		case "unit":
-			resolvedType = UnitType{}
-		default:
-			if found := a.lookupCustomType(t.Name.Value); found != nil {
-				resolvedType = found
-			} else {
-				a.errorf(t.Pos(), "unknown type %s", t.Name)
-			}
-		}
+func (a *Analyzer) buildTypeDecl(td *ast.TypeDecl) *tast.TypeDecl {
+	// 1. Retrieve the fully resolved type from Pass 1
+	resolvedType := a.lookupCustomType(td.Name.Value)
 
-	// NEW: Handle []T
-	case *ast.SliceTypeExpr:
-		baseType := a.resolveAstType(t.Base)
-		resolvedType = SliceType{Base: baseType}
-
-	// NEW: Handle [N]T
-	case *ast.ArrayTypeExpr:
-		baseType := a.resolveAstType(t.Base)
-		resolvedType = ArrayType{Base: baseType, Size: int(t.Size)}
-
-	case *ast.GenericType:
-		switch t.Name {
-		case "Vec":
-			if len(t.Params) != 1 {
-				a.errorf(t.Pos(), "Vec expects exactly 1 type argument, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			base := a.resolveAstType(t.Params[0])
-			resolvedType = VectorType{Base: base}
-
-		case "Map":
-			if len(t.Params) != 2 {
-				a.errorf(t.Pos(), "Map expects exactly 2 type arguments, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			key := a.resolveAstType(t.Params[0])
-			val := a.resolveAstType(t.Params[1])
-
-			// FIXED: Strict scalar hashability enforcement
-			switch key.(type) {
-			case IntType, StringType, BoolType:
-				// Allowed scalar keys
-			default:
-				a.errorf(t.Pos(), "map key type '%s' is not hashable; only int, string, and bool are permitted", key.String())
-				return UnknownType{}
-			}
-
-			resolvedType = MapType{Key: key, Value: val}
-
-		case "Option":
-			if len(t.Params) != 1 {
-				a.errorf(t.Pos(), "Option expects exactly 1 type argument, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			base := a.resolveAstType(t.Params[0])
-			resolvedType = NewOptionType(base)
-
-		case "Result":
-			if len(t.Params) != 2 {
-				a.errorf(t.Pos(), "Result expects exactly 2 type arguments, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			val := a.resolveAstType(t.Params[0])
-			err := a.resolveAstType(t.Params[1])
-			resolvedType = NewResultType(val, err)
-
-		case "Task":
-			if len(t.Params) != 1 {
-				a.errorf(t.Pos(), "Task expects exactly 1 type argument, got %d", len(t.Params))
-				return UnknownType{}
-			}
-			base := a.resolveAstType(t.Params[0])
-			resolvedType = TaskType{Base: base}
-
-		default:
-			if found := a.lookupCustomType(t.Name); found != nil {
-				// Generic user types not yet supported — error clearly.
-				a.errorf(t.Pos(), "type '%s' is not a generic type", t.Name)
-				return UnknownType{}
-			}
-			a.errorf(t.Pos(), "unknown generic type '%s'", t.Name)
-			return UnknownType{}
-		}
+	// 2. Create the permanently bound symbol for this type declaration
+	sym := &types.Symbol{
+		Kind: types.VarSymbol,
+		Name: td.Name.Value,
+		Type: resolvedType,
 	}
 
-	a.TypeMap[expr] = resolvedType
-	return resolvedType
+	// 3. Construct the TAST node, completely discarding the AST Rhs tree
+	return &tast.TypeDecl{
+		Pos_: td.Pos_,
+		End_: td.End_,
+		Name: &tast.Identifier{
+			Pos_:  td.Name.Pos_,
+			Value: td.Name.Value,
+			Type:  resolvedType,
+		},
+		Type:   resolvedType,
+		Symbol: sym,
+	}
 }
 
-func (a *Analyzer) lookupCustomType(name string) Type {
+// =============================================================================
+// Helper: AST -> Semantic Type Translation
+// =============================================================================
+
+func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
+	if expr == nil {
+		return types.UnknownType{}
+	}
+	switch e := expr.(type) {
+	case *ast.NamedTypeExpr:
+		switch e.Name.Value {
+		case "int":
+			return types.IntType{}
+		case "bool":
+			return types.BoolType{}
+		case "string":
+			return types.StringType{}
+		case "unit":
+			return types.UnitType{}
+		default:
+			if custom := a.lookupCustomType(e.Name.Value); custom != nil {
+				return custom
+			}
+			a.errorf(e.Pos(), "unknown type %s", e.Name.Value)
+			return types.UnknownType{}
+		}
+	case *ast.ArrayTypeExpr:
+		return types.ArrayType{
+			Base: a.resolveAstType(e.Base),
+			Size: int(e.Size),
+		}
+	case *ast.SliceTypeExpr:
+		return types.SliceType{
+			Base: a.resolveAstType(e.Base),
+		}
+	case *ast.MapTypeExpr:
+		return types.MapType{
+			Key:   a.resolveAstType(e.Key),
+			Value: a.resolveAstType(e.Value),
+		}
+	case *ast.VectorTypeExpr:
+		return types.VectorType{
+			Base: a.resolveAstType(e.Base),
+		}
+	case *ast.TaskTypeExpr:
+		return types.TaskType{
+			Base: a.resolveAstType(e.Base),
+		}
+	case *ast.GenericType:
+		// Generics like Option<T> or Result<T, E>
+		if e.Name == "Option" && len(e.Params) == 1 {
+			return types.NewOptionType(a.resolveAstType(e.Params[0]))
+		}
+		if e.Name == "Result" && len(e.Params) == 2 {
+			return types.NewResultType(a.resolveAstType(e.Params[0]), a.resolveAstType(e.Params[1]))
+		}
+		a.errorf(e.Pos(), "unknown or invalid generic type %s", e.Name)
+		return types.UnknownType{}
+	}
+	return types.UnknownType{}
+}
+
+func (a *Analyzer) lookupCustomType(name string) types.Type {
 	for s := a.scope; s != nil; s = s.parent {
 		if custom, ok := s.types[name]; ok {
 			return custom

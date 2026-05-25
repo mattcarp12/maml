@@ -1,25 +1,27 @@
 package sema
 
+import "github.com/mattcarp12/maml/frontend/types"
+
 type Scope struct {
 	parent  *Scope
-	symbols map[string]*Symbol
-	types   map[string]Type
+	symbols map[string]*types.Symbol
+	types   map[string]types.Type
 }
 
 func newGlobalScope() *Scope {
 	global := &Scope{
-		symbols: make(map[string]*Symbol),
-		types:   make(map[string]Type),
+		symbols: make(map[string]*types.Symbol),
+		types:   make(map[string]types.Type),
 	}
 
-	global.symbols["puts"] = &Symbol{
-		Kind:    FuncSymbol,
+	global.symbols["puts"] = &types.Symbol{
+		Kind:    types.FuncSymbol,
 		Name:    "puts",
 		Mutable: false,
-		Type: &FunctionType{
-			Params:     []Type{StringType{}},
-			ParamModes: []ParamMode{ParamBorrow},
-			Return:     IntType{},
+		Type: &types.FunctionType{
+			Params:     []types.Type{types.StringType{}},
+			ParamModes: []types.ParamMode{types.ParamBorrow},
+			Return:     types.IntType{},
 		},
 	}
 
@@ -29,8 +31,8 @@ func newGlobalScope() *Scope {
 func (a *Analyzer) pushScope() {
 	a.scope = &Scope{
 		parent:  a.scope,
-		symbols: make(map[string]*Symbol),
-		types:   make(map[string]Type),
+		symbols: make(map[string]*types.Symbol),
+		types:   make(map[string]types.Type),
 	}
 }
 
@@ -41,7 +43,7 @@ func (a *Analyzer) popScope() {
 	a.scope = a.scope.parent
 }
 
-func (a *Analyzer) resolve(name string) *Symbol {
+func (a *Analyzer) resolve(name string) *types.Symbol {
 	for s := a.scope; s != nil; s = s.parent {
 		if sym, ok := s.symbols[name]; ok {
 			return sym

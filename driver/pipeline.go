@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/mattcarp12/maml/frontend"
-	"github.com/mattcarp12/maml/hir"
+	"github.com/mattcarp12/maml/frontend/mir"
 )
 
 // DefaultRuntimeLib gracefully handles being run from the CLI or inside tests
@@ -67,8 +67,8 @@ func (p *Pipeline) Build(srcPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create json file: %w", err)
 	}
-	emitter := hir.NewEmitter(res.TypeMap, res.EscapeMap)
-	if err := emitter.Emit(res.Program, jsonFile); err != nil {
+	emitter := mir.NewEmitter()
+	if err := emitter.Emit(res.MIR, jsonFile); err != nil {
 		jsonFile.Close()
 		return fmt.Errorf("failed to emit HIR JSON: %w", err)
 	}

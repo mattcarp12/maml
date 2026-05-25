@@ -15,17 +15,16 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
 
   std::string_view name = fn["name"].get<std::string_view>();
 
+  // 1. Resolve Return Type
   llvm::Type *retType = llvm::Type::getVoidTy(Context);
-  if (fn.contains("maml_type") && !fn["maml_type"].is_null()) {
-    retType = llvmTypeFor(ctx, fn["maml_type"]);
-  } else if (fn.contains("return_type") && !fn["return_type"].is_null()) {
+  if (fn.contains("return_type") && !fn["return_type"].is_null()) {
     retType = llvmTypeFor(ctx, fn["return_type"]);
   }
-
   if (name == "main") {
     retType = llvm::Type::getInt32Ty(Context);
   }
 
+  // 2. Resolve Parameter Types
   std::vector<llvm::Type *> paramTypes;
   if (fn.contains("params")) {
     for (const auto &p : fn["params"]) {
@@ -33,6 +32,7 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
     }
   }
 
+  // 3. Create the LLVM Function Signature
   llvm::StringRef llName(name.data(), name.size());
   llvm::FunctionType *FT = llvm::FunctionType::get(retType, paramTypes, false);
   llvm::Function *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, llName, *Module);
@@ -41,38 +41,73 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
     F->addFnAttr(llvm::Attribute::PresplitCoroutine);
   }
 
-  llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "entry", F);
-  Builder->SetInsertPoint(BB);
-
+  // 4. Reset Context State for the new function
   ctx.SymbolTable.clear();
+  ctx.Blocks.clear();
   ctx.pushScope();
 
-  unsigned Idx = 0;
-  for (auto &Arg : F->args()) {
-    std::string_view pName = fn["params"][Idx]["name"].get<std::string_view>();
-    llvm::Type *pType = paramTypes[Idx];
-    llvm::AllocaInst *alloca = Builder->CreateAlloca(pType, nullptr, std::string(pName));
-    Builder->CreateStore(&Arg, alloca);
-    ctx.SymbolEnv.back()[std::string(pName)] = alloca;
-    Idx++;
-  }
+  // ===========================================================================
+  // Basic Block Materialization
+  // ===========================================================================
 
-  if (fn.contains("body")) {
-    compileStatement(ctx, fn["body"]);
-  }
-
-  if (!Builder->GetInsertBlock()->getTerminator()) {
-    if (llvm::Value *coroHdl = ctx.resolveSymbol(rt::CORO_HDL)) {
-      Builder->CreateRet(coroHdl);
-    } else if (name == "main") {
-      Builder->CreateRet(llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 0));
-    } else if (retType->isVoidTy()) {
-      Builder->CreateRetVoid();
-    } else {
-      Builder->CreateRet(llvm::Constant::getNullValue(retType));
+  // Pre-allocate all basic blocks in LLVM before compiling any instructions.
+  // This mathematically guarantees forward-jumping terminators never fail.
+  if (fn.contains("blocks")) {
+    for (auto it = fn["blocks"].begin(); it != fn["blocks"].end(); ++it) {
+      int blockId = std::stoi(it.key());
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(Context, "bb_" + std::to_string(blockId), F);
+      ctx.Blocks[blockId] = bb;
     }
   }
 
+  // ===========================================================================
+  // Entry Point Setup & Parameter Allocation
+  // ===========================================================================
+
+  if (fn.contains("entry_block")) {
+    int entryId = fn["entry_block"].get<int>();
+    Builder->SetInsertPoint(ctx.Blocks[entryId]);
+
+    // Materialize the universal "_ret" register if the function returns a value
+    if (!retType->isVoidTy() && !fn.value("is_async", false)) {
+      llvm::AllocaInst *retAlloc = Builder->CreateAlloca(retType, nullptr, "_ret");
+      ctx.SymbolEnv.back()["_ret"] = retAlloc;
+    }
+
+    // Materialize arguments as stack-allocated variables in the entry block
+    unsigned Idx = 0;
+    for (auto &Arg : F->args()) {
+      std::string_view pName = fn["params"][Idx]["name"].get<std::string_view>();
+      llvm::Type *pType = paramTypes[Idx];
+      llvm::AllocaInst *alloca = Builder->CreateAlloca(pType, nullptr, std::string(pName));
+      Builder->CreateStore(&Arg, alloca);
+      ctx.SymbolEnv.back()[std::string(pName)] = alloca;
+      Idx++;
+    }
+
+    // ===========================================================================
+    // PHASE 9, STEP 3, 4, 5: Linear Instruction Translation
+    // ===========================================================================
+
+    if (fn.contains("blocks")) {
+      for (auto it = fn["blocks"].begin(); it != fn["blocks"].end(); ++it) {
+        int blockId = std::stoi(it.key());
+
+        Builder->SetInsertPoint(ctx.Blocks[blockId]);
+
+        if (it.value().contains("statements")) {
+          for (const auto &stmt : it.value()["statements"]) {
+            compileStatement(ctx, stmt);
+          }
+        }
+
+        // Emit the strict block exit routing!
+        compileTerminator(ctx, it.value()["terminator"]);
+      }
+    }
+  }
+
+  // Scope cleanup
   if (!ctx.SymbolEnv.empty()) {
     ctx.popScope();
   }

@@ -38,38 +38,6 @@ llvm::Value *compileIdentifier(CodegenContext &ctx, const nlohmann::json &expr) 
   return val;
 }
 
-llvm::Value *compileHeapAllocExpr(CodegenContext &ctx, const nlohmann::json &expr) {
-  auto &Builder = ctx.Builder;
-  llvm::Type *valTy = llvmTypeFor(ctx, expr["maml_type"]);
-
-  llvm::DataLayout DL(ctx.Module.get());
-  uint64_t allocSize = DL.getTypeAllocSize(valTy);
-
-  llvm::FunctionCallee mamlAlloc = ctx.Module->getOrInsertFunction(
-      "maml_alloc",
-      llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::Type::getInt64Ty(ctx.Context)}, false));
-
-  llvm::Value *heapPtr = Builder->CreateCall(
-      mamlAlloc, {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), allocSize)}, "heap_alloc");
-
-  llvm::Value *innerVal = evaluateExpression(ctx, expr["value"]);
-  if (!innerVal) return nullptr;
-
-  // If evaluating the inner value returned a stack pointer (like ArrayLiteral), copy the data.
-  if (innerVal->getType()->isPointerTy()) {
-    llvm::Value *loaded = Builder->CreateLoad(valTy, innerVal);
-    Builder->CreateStore(loaded, heapPtr);
-  } else {
-    Builder->CreateStore(innerVal, heapPtr);
-  }
-  return heapPtr;
-}
-
-llvm::Value *compileStackAllocExpr(CodegenContext &ctx, const nlohmann::json &expr) {
-  // Stack allocations just evaluate their inner literal (which generates an AllocaInst natively)
-  return evaluateExpression(ctx, expr["value"]);
-}
-
 llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr) {
   if (expr.is_null()) return nullptr;
 
@@ -87,17 +55,12 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
   if (nodeType == "Identifier") return compileIdentifier(ctx, expr);
   if (nodeType == "PrefixExpr") return compilePrefixExpr(ctx, expr);
   if (nodeType == "InfixExpr") return compileInfixExpr(ctx, expr);
-  if (nodeType == "IfExpr") return compileIfExpr(ctx, expr);
-  if (nodeType == "BlockStmt") return compileBlockExpr(ctx, expr);
   if (nodeType == "FieldAccess") return compileFieldAccess(ctx, expr);
   if (nodeType == "StringLiteral") return compileStringLiteral(ctx, expr);
   if (nodeType == "VariantLiteral") return compileVariantLiteral(ctx, expr);
   if (nodeType == "SliceExpr") return compileSliceExpr(ctx, expr);
-  if (nodeType == "AwaitExpr") return compileAwaitExpression(ctx, expr);
   if (nodeType == "CallExpr") return compileCallExpr(ctx, expr);
   if (nodeType == "IndexExpr") return compileIndexExpr(ctx, expr);
-  if (nodeType == "HeapAllocExpr") return compileHeapAllocExpr(ctx, expr);
-  if (nodeType == "StackAllocExpr") return compileStackAllocExpr(ctx, expr);
   if (nodeType == "AsyncPrologueExpr") return compileAsyncPrologueExpr(ctx, expr);
   if (nodeType == "ArrayLiteral") return compileArrayLiteral(ctx, expr);
   if (nodeType == "StructLiteral") return compileStructLiteral(ctx, expr);

@@ -4,376 +4,271 @@ import (
 	"fmt"
 
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/sema"
+	"github.com/mattcarp12/maml/frontend/hir"
+	"github.com/mattcarp12/maml/frontend/mir"
 )
 
-type Analyzer struct {
-	scope           *Scope
-	typeMap         map[ast.Node]sema.Type
-	errors          []ast.CompileError
-	aliasMap        map[string]string
-	aliasRefCount   map[string]int
-	suspensionCount int
+// BindingState manages the flow-sensitive lifecycle of a variable.
+type BindingState struct {
+	Invalidated bool // True if the variable was moved (use-after-move guard)
+	MutLocked   bool // True if the variable is currently exclusively borrowed
 }
 
-func New(typeMap map[ast.Node]sema.Type) *Analyzer {
-	return &Analyzer{
-		scope:         NewScope(nil),
-		typeMap:       typeMap,
-		errors:        []ast.CompileError{},
-		aliasMap:      make(map[string]string),
-		aliasRefCount: make(map[string]int),
-	}
+// BlockState represents the ownership environment at a specific CFG point.
+type BlockState struct {
+	Bindings map[string]*BindingState
 }
 
-func (a *Analyzer) Analyze(program *ast.Program) []ast.CompileError {
-	for _, decl := range program.Decls {
-		if fn, ok := decl.(*ast.FnDecl); ok {
-			a.analyzeFunction(fn)
+func newBlockState() *BlockState {
+	return &BlockState{Bindings: make(map[string]*BindingState)}
+}
+
+// clone creates a deep copy of the block state for dataflow merging.
+func (b *BlockState) clone() *BlockState {
+	c := newBlockState()
+	for k, v := range b.Bindings {
+		c.Bindings[k] = &BindingState{
+			Invalidated: v.Invalidated,
+			MutLocked:   v.MutLocked,
 		}
 	}
+	return c
+}
+
+type Analyzer struct {
+	errors []ast.CompileError
+}
+
+func New() *Analyzer {
+	return &Analyzer{
+		errors: []ast.CompileError{},
+	}
+}
+
+// Analyze performs a forward dataflow analysis over the MIR CFG (Phase 5).
+func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
+	stateIn := make(map[mir.BlockID]*BlockState)
+	stateOut := make(map[mir.BlockID]*BlockState)
+
+	// Initialize states
+	for id := range g.Blocks {
+		stateIn[id] = newBlockState()
+		stateOut[id] = newBlockState()
+	}
+
+	changed := true
+	for changed {
+		changed = false
+
+		for _, block := range g.Blocks {
+			// 1. Merge incoming states from predecessors
+			mergedIn := a.mergePredecessors(g, block, stateOut)
+			stateIn[block.ID] = mergedIn
+
+			// 2. Apply transfer functions over instructions
+			currentState := mergedIn.clone()
+			for _, inst := range block.Statements {
+				a.analyzeInstruction(inst, currentState)
+			}
+			a.analyzeTerminator(block.Terminator, currentState)
+
+			// 3. Check for fixed point
+			if !statesEqual(stateOut[block.ID], currentState) {
+				stateOut[block.ID] = currentState
+				changed = true
+			}
+		}
+	}
+
 	return a.errors
 }
 
-// --- THE VISITOR IMPL ---
-func (a *Analyzer) Visit(node ast.Node) ast.Visitor {
-	if node == nil {
-		return nil
+// mergePredecessors computes the conservative intersection of capabilities.
+// If a variable is invalidated in ANY predecessor path, it is invalidated here.
+func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateOut map[mir.BlockID]*BlockState) *BlockState {
+	merged := newBlockState()
+	preds := getPredecessors(g, block.ID)
+
+	if len(preds) == 0 {
+		return merged
 	}
 
-	switch n := node.(type) {
-	case *ast.BlockStmt:
-		a.pushScope()
-		defer a.popScope()
-		for _, stmt := range n.Statements {
-			ast.Walk(a, stmt)
-		}
-		return nil
-
-	case *ast.ForStmt:
-		a.pushScope()
-		defer a.popScope()
-		if n.Init != nil {
-			ast.Walk(a, n.Init)
-		}
-		if n.Condition != nil {
-			ast.Walk(a, n.Condition)
-		}
-		if n.Post != nil {
-			ast.Walk(a, n.Post)
-		}
-		if n.Body != nil {
-			for _, stmt := range n.Body.Statements {
-				ast.Walk(a, stmt)
-			}
-		}
-		return nil
-
-	case *ast.MatchExpr:
-		ast.Walk(a, n.Subject)
-		for _, arm := range n.Arms {
-			a.pushScope()
-			a.injectPatternBindings(arm.Pattern)
-			for _, stmt := range arm.Body.(*ast.BlockStmt).Statements {
-				ast.Walk(a, stmt)
-			}
-			a.popScope()
-		}
-		return nil
-
-	case *ast.DeclareStmt:
-		ast.Walk(a, n.Value) // Evaluate RHS first
-
-		if n.Mutable {
-			if ident, ok := n.Value.(*ast.Identifier); ok {
-				if src, exists := a.scope.Lookup(ident.Value); exists {
-					if src.Invalidated {
-						a.errorf(n.Pos(), "use of moved variable '%s'", ident.Value)
-						return nil
-					}
-					if src.Symbol.Kind != sema.VariantSymbol {
-						if !src.Symbol.Mutable {
-							a.errorf(n.Pos(), "cannot acquire mutable ownership of immutable variable '%s'", ident.Value)
-							return nil
-						}
-						if a.hasActiveAliases(ident.Value) {
-							a.errorf(n.Pos(), "cannot acquire mutable ownership of '%s': it has active immutable aliases", ident.Value)
-							return nil
-						}
-						src.Invalidated = true
-						a.removeAlias(ident.Value)
-					}
-				}
-			}
-		} else {
-			if ident, ok := n.Value.(*ast.Identifier); ok {
-				if src, exists := a.scope.Lookup(ident.Value); exists && !src.Invalidated {
-					a.recordAlias(n.Name, ident.Value)
-				}
-			}
-		}
-
-		var semaType sema.Type = sema.UnknownType{}
-		if t, ok := a.typeMap[n.Value]; ok {
-			semaType = t
-		}
-
-		a.scope.Bindings[n.Name] = &BindingState{
-			Symbol:               &sema.Symbol{Kind: sema.VarSymbol, Name: n.Name, Mutable: n.Mutable, Type: semaType},
-			DeclaredAtSuspension: a.suspensionCount,
-		}
-		return nil
-
-	case *ast.AssignStmt:
-		ast.Walk(a, n.LValue)
-		ast.Walk(a, n.RValue)
-
-		if indexExpr, ok := n.LValue.(*ast.IndexExpr); ok {
-			if leftType, exists := a.typeMap[indexExpr.Left]; exists {
-				if _, isString := leftType.(sema.StringType); isString {
-					a.errorf(n.Pos(), "strings are immutable and cannot be modified by index")
-					return nil
-				}
-			}
-		}
-
-		rootIdent := a.getRootIdentifier(n.LValue)
-		if rootIdent != nil {
-			if state, exists := a.scope.Lookup(rootIdent.Value); exists {
-				if state.Invalidated {
-					a.errorf(n.Pos(), "use of moved variable '%s'", rootIdent.Value)
-				} else if !state.Symbol.Mutable {
-					a.errorf(n.Pos(), "cannot mutate immutable variable '%s'", rootIdent.Value)
-				}
-			}
-		} else {
-			a.errorf(n.Pos(), "cannot assign to non-variable expression")
-		}
-		return nil
-
-	case *ast.CallExpr:
-		ast.Walk(a, n.Function)
-		fnType, ok := a.typeMap[n.Function].(*sema.FunctionType)
-
-		for i, arg := range n.Arguments {
-			ast.Walk(a, arg.Argument)
-			if !ok || i >= len(fnType.ParamModes) {
-				continue
-			}
-
-			paramMode := fnType.ParamModes[i]
-			switch paramMode {
-			case sema.ParamBorrow:
-				if arg.Mut || arg.Own {
-					a.errorf(arg.Argument.Pos(), "argument %d: parameter is an immutable borrow, remove modifiers", i)
-					continue
-				}
-				if ident, ok := arg.Argument.(*ast.Identifier); ok {
-					if src, exists := a.scope.Lookup(ident.Value); exists && src.Invalidated {
-						a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-					}
-				}
-
-			case sema.ParamMutBorrow:
-				if !arg.Mut || arg.Own {
-					a.errorf(arg.Argument.Pos(), "argument %d: parameter is a mutable borrow, use 'mut'", i)
-					continue
-				}
-				ident, ok := arg.Argument.(*ast.Identifier)
-				if !ok {
-					a.errorf(arg.Argument.Pos(), "argument %d: 'mut' can only be applied to a named variable", i)
-					continue
-				}
-				if src, exists := a.scope.Lookup(ident.Value); exists {
-					if src.Invalidated {
-						a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-					} else if !src.Symbol.Mutable {
-						a.errorf(arg.Argument.Pos(), "argument %d: cannot mutably borrow immutable variable '%s'", i, ident.Value)
-					}
-				}
-
-			case sema.ParamOwned:
-				if !arg.Own || arg.Mut {
-					a.errorf(arg.Argument.Pos(), "argument %d: parameter requires ownership transfer, use 'own'", i)
-					continue
-				}
-				ident, ok := arg.Argument.(*ast.Identifier)
-				if !ok {
-					a.errorf(arg.Argument.Pos(), "argument %d: 'own' can only transfer ownership of a named variable", i)
-					continue
-				}
-				if src, exists := a.scope.Lookup(ident.Value); exists {
-					if src.Invalidated {
-						a.errorf(arg.Argument.Pos(), "use of moved variable '%s'", ident.Value)
-					} else if a.hasActiveAliases(ident.Value) {
-						a.errorf(arg.Argument.Pos(), "argument %d: cannot transfer ownership of '%s': value has active aliases", i, ident.Value)
-					} else {
-						src.Invalidated = true
-						a.removeAlias(ident.Value)
-					}
-				}
-			}
-		}
-		return nil
-
-	case *ast.AwaitExpr:
-		a.suspensionCount++ // We crossed a suspension boundary!
-		ast.Walk(a, n.Value)
-		return nil
-
-	case *ast.Identifier:
-		if state, exists := a.scope.Lookup(n.Value); exists {
-			if state.Invalidated {
-				a.errorf(n.Pos(), "use of moved variable '%s'", n.Value)
-			}
-
-			// NEW: Cross-Await Borrow Check
-			if a.suspensionCount > state.DeclaredAtSuspension {
-				if state.Symbol.ParamMode == sema.ParamBorrow || state.Symbol.ParamMode == sema.ParamMutBorrow {
-					a.errorf(n.Pos(), "borrowed parameter '%s' cannot survive across an await suspension point (must be 'own' or copied)", n.Value)
-				}
-			}
-		}
-		return nil
-	}
-
-	return a // Default: let ast.Walk traverse children
-}
-
-func (a *Analyzer) analyzeFunction(fn *ast.FnDecl) {
-	a.pushScope()
-	defer a.popScope()
-	a.suspensionCount = 0
-
-	for _, param := range fn.Params {
-		mutable := param.Own || param.Mut
-		mode := sema.ParamBorrow
-		if param.Own {
-			mode = sema.ParamOwned
-		} else if param.Mut {
-			mode = sema.ParamMutBorrow
-		}
-
-		var paramType sema.Type = sema.UnknownType{}
-		if t, ok := a.typeMap[param.Type]; ok {
-			paramType = t
-		}
-
-		a.scope.Bindings[param.Name] = &BindingState{
-			Symbol: &sema.Symbol{Kind: sema.VarSymbol, Name: param.Name, Mutable: mutable, Type: paramType, ParamMode: mode},
+	// Initialize merged state with the first predecessor
+	firstPredState := stateOut[preds[0]]
+	for k, v := range firstPredState.Bindings {
+		merged.Bindings[k] = &BindingState{
+			Invalidated: v.Invalidated,
+			MutLocked:   v.MutLocked,
 		}
 	}
 
-	if fn.Body != nil {
-		for _, stmt := range fn.Body.Statements {
-			ast.Walk(a, stmt)
-		}
-	}
-}
-
-func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
-	a.errors = append(a.errors, ast.CompileError{Stage: "Ownership", Pos: pos, Msg: fmt.Sprintf(format, args...)})
-}
-
-func (a *Analyzer) pushScope() { a.scope = NewScope(a.scope) }
-
-func (a *Analyzer) popScope() {
-	if a.scope == nil || a.scope.Parent == nil {
-		return
-	}
-	for name := range a.scope.Bindings {
-		a.removeAlias(name)
-	}
-	a.scope = a.scope.Parent
-}
-
-func (a *Analyzer) injectPatternBindings(pat ast.Pattern) {
-	vp, ok := pat.(*ast.VariantPattern)
-	if !ok {
-		return
-	}
-
-	// Single binding match syntax
-	if vp.Binding != nil {
-		a.scope.Bindings[vp.Binding.Value] = &BindingState{
-			Symbol: &sema.Symbol{
-				Kind:    sema.VarSymbol,
-				Name:    vp.Binding.Value,
-				Mutable: false,
-				Type:    sema.UnknownType{},
-			},
-			Invalidated: false,
-		}
-		return
-	}
-
-	// Structural multi-field destructured variable definitions
-	for _, fb := range vp.Fields {
-		if fb.Binding != nil {
-			a.scope.Bindings[fb.Binding.Value] = &BindingState{
-				Symbol: &sema.Symbol{
-					Kind:    sema.VarSymbol,
-					Name:    fb.Binding.Value,
-					Mutable: false,
-					Type:    sema.UnknownType{},
-				},
-				Invalidated: false,
-			}
-		}
-	}
-}
-
-func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
-	switch e := expr.(type) {
-	case *ast.Identifier:
-		return e
-	case *ast.IndexExpr:
-		return a.getRootIdentifier(e.Left)
-	case *ast.SliceExpr:
-		return a.getRootIdentifier(e.Left)
-	case *ast.FieldAccess:
-		return a.getRootIdentifier(e.Object)
-	default:
-		return nil
-	}
-}
-
-func (a *Analyzer) canonicalName(name string) string {
-	for {
-		src, ok := a.aliasMap[name]
-		if !ok {
-			return name
-		}
-		name = src
-	}
-}
-
-func (a *Analyzer) recordAlias(alias, source string) {
-	canon := a.canonicalName(source)
-	a.aliasMap[alias] = canon
-	if _, ok := a.aliasRefCount[canon]; !ok {
-		a.aliasRefCount[canon] = 1
-	}
-	a.aliasRefCount[canon]++
-}
-
-func (a *Analyzer) removeAlias(name string) {
-	canon, isAlias := a.aliasMap[name]
-	if isAlias {
-		a.aliasRefCount[canon]--
-		delete(a.aliasMap, name)
-	} else {
-		if count, ok := a.aliasRefCount[name]; ok {
-			if count <= 1 {
-				delete(a.aliasRefCount, name)
+	// Intersect with remaining predecessors
+	for i := 1; i < len(preds); i++ {
+		predState := stateOut[preds[i]]
+		for k, mergedVal := range merged.Bindings {
+			if predVal, exists := predState.Bindings[k]; exists {
+				// Conservative intersection: if it's moved in any path, it's moved.
+				mergedVal.Invalidated = mergedVal.Invalidated || predVal.Invalidated
+				mergedVal.MutLocked = mergedVal.MutLocked || predVal.MutLocked
 			} else {
-				a.aliasRefCount[name] = count - 1
+				// If the variable doesn't exist in a predecessor, it's unsafe to use.
+				mergedVal.Invalidated = true
 			}
 		}
 	}
+
+	return merged
 }
 
-func (a *Analyzer) hasActiveAliases(name string) bool {
-	canon := a.canonicalName(name)
-	return a.aliasRefCount[canon] > 1
+func getPredecessors(g *mir.Graph, target mir.BlockID) []mir.BlockID {
+	var preds []mir.BlockID
+	for _, block := range g.Blocks {
+		switch t := block.Terminator.(type) {
+		case *mir.JumpTerminator:
+			if t.Target == target {
+				preds = append(preds, block.ID)
+			}
+		case *mir.BranchTerminator:
+			if t.TrueTarget == target || t.FalseTarget == target {
+				preds = append(preds, block.ID)
+			}
+		}
+	}
+	return preds
+}
+
+func statesEqual(s1, s2 *BlockState) bool {
+	if len(s1.Bindings) != len(s2.Bindings) {
+		return false
+	}
+	for k, v1 := range s1.Bindings {
+		v2, ok := s2.Bindings[k]
+		if !ok || v1.Invalidated != v2.Invalidated || v1.MutLocked != v2.MutLocked {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
+	// A zero-position fallback; in a complete compiler, MIR instructions
+	// should retain the ast.Position from their source HIR node.
+	pos := hir.Position{}
+
+	switch i := inst.(type) {
+	case *mir.TempDeclInst:
+		state.Bindings[i.Name] = &BindingState{Invalidated: false, MutLocked: false}
+
+	case *mir.RefAllocInst:
+		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
+
+	case *mir.AssignInst:
+		a.checkExprAccess(i.Expr, state)
+		// Reassignment revives the variable with a clean state
+		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
+
+	case *mir.CopyInst:
+		a.checkAccess(i.Src, state, pos)
+		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
+
+	case *mir.MoveInst:
+		a.checkAccess(i.Src, state, pos)
+		if binding, exists := state.Bindings[i.Src]; exists {
+			binding.Invalidated = true // Affine transfer of ownership
+		}
+		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
+
+	case *mir.MutBorrowInst:
+		a.checkAccess(i.Src, state, pos)
+		if binding, exists := state.Bindings[i.Src]; exists {
+			binding.MutLocked = true // Exclusivity lock established
+		}
+
+	case *mir.RefIncInst:
+		a.checkAccess(i.Src, state, pos)
+
+	case *mir.RefDecInst:
+		a.checkAccess(i.Src, state, pos)
+	}
+}
+
+func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
+	// A zero-position fallback; in a complete compiler, MIR terminators
+	// should retain the ast.Position from their source HIR node for exact error tracing.
+	pos := hir.Position{}
+
+	switch term.(type) {
+	case *mir.CoroSuspendTerminator:
+		// Phase 5 Invariant: Mutable borrows cannot cross await boundaries.
+		// If the task is suspended and rescheduled onto a different thread while
+		// holding an exclusive lock, it creates a severe data race.
+		for name, binding := range state.Bindings {
+			if binding.MutLocked {
+				a.errorf(pos, "mutable borrow of variable '%s' cannot survive across an async suspension point", name)
+			}
+		}
+
+	case *mir.ReturnTerminator, *mir.JumpTerminator, *mir.BranchTerminator, *mir.UnreachableTerminator:
+		// Standard control-flow terminators do not violate exclusivity rules.
+		// Liveness analysis and ARC injection (Phase 7) independently handle
+		// safely dropping these variables when they go out of scope.
+		return
+	}
+}
+
+func (a *Analyzer) errorf(pos hir.Position, format string, args ...interface{}) {
+	a.errors = append(a.errors, ast.CompileError{
+		Stage: "Ownership",
+		Pos:   pos.ToAST(), // TODO: In a full MIR implementation, position info should be threaded through MIR nodes
+		Msg:   fmt.Sprintf(format, args...),
+	})
+}
+
+// checkAccess verifies that a variable is legally readable/writable.
+func (a *Analyzer) checkAccess(name string, state *BlockState, pos hir.Position) {
+	binding, exists := state.Bindings[name]
+	if !exists {
+		return // Ignore unregistered symbols (e.g., globals or built-ins)
+	}
+
+	if binding.Invalidated {
+		a.errorf(pos, "use of moved variable '%s'", name)
+	} else if binding.MutLocked {
+		a.errorf(pos, "cannot access variable '%s' because it is mutably borrowed", name)
+	}
+}
+
+// checkExprAccess recursively validates access to variables inside a flattened expression.
+func (a *Analyzer) checkExprAccess(expr hir.Expr, state *BlockState) {
+	if expr == nil {
+		return
+	}
+
+	switch e := expr.(type) {
+	case *hir.Identifier:
+		a.checkAccess(e.Value, state, e.Pos())
+	case *hir.InfixExpr:
+		a.checkExprAccess(e.Left, state)
+		a.checkExprAccess(e.Right, state)
+	case *hir.PrefixExpr:
+		a.checkExprAccess(e.Right, state)
+	case *hir.CallExpr:
+		a.checkExprAccess(e.Function, state)
+		for _, arg := range e.Arguments {
+			a.checkExprAccess(arg.Argument, state)
+		}
+	case *hir.IndexExpr:
+		a.checkExprAccess(e.Left, state)
+		a.checkExprAccess(e.Index, state)
+	case *hir.SliceExpr:
+		a.checkExprAccess(e.Left, state)
+		if e.Low != nil {
+			a.checkExprAccess(e.Low, state)
+		}
+		if e.High != nil {
+			a.checkExprAccess(e.High, state)
+		}
+	case *hir.FieldAccess:
+		a.checkExprAccess(e.Object, state)
+	}
 }

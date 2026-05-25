@@ -1,169 +1,221 @@
 package sema
 
-import "github.com/mattcarp12/maml/frontend/ast"
+import (
+	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/types"
+)
 
-func (a *Analyzer) analyzeBlockStmt(body *ast.BlockStmt) {
+// =============================================================================
+// Block Scope
+// =============================================================================
+
+func (a *Analyzer) buildBlockStmt(body *ast.BlockStmt) *tast.BlockStmt {
+	if body == nil {
+		return nil
+	}
+
 	a.pushScope()
 	defer a.popScope()
 
-	for _, stmt := range body.Statements {
-		a.analyzeStmt(stmt)
+	var stmts []tast.Stmt
+	for _, s := range body.Statements {
+		if stmtNode := a.buildStmt(s); stmtNode != nil {
+			stmts = append(stmts, stmtNode)
+		}
+	}
+
+	return &tast.BlockStmt{
+		Pos_:       body.Pos_,
+		End_:       body.End_,
+		Statements: stmts,
 	}
 }
 
-func (a *Analyzer) analyzeStmt(stmt ast.Stmt) {
+// =============================================================================
+// Statement Dispatcher
+// =============================================================================
+
+func (a *Analyzer) buildStmt(stmt ast.Stmt) tast.Stmt {
+	if stmt == nil {
+		return nil
+	}
+
 	switch s := stmt.(type) {
 	case *ast.DeclareStmt:
-		a.analyzeDeclareStmt(s)
-
+		return a.buildDeclareStmt(s)
 	case *ast.AssignStmt:
-		a.analyzeAssignStmt(s)
-
+		return a.buildAssignStmt(s)
 	case *ast.ReturnStmt:
-		a.analyzeReturnStmt(s)
-
+		return a.buildReturnStmt(s)
 	case *ast.YieldStmt:
-		a.analyzeExpr(s.Value)
-
+		return a.buildYieldStmt(s)
 	case *ast.ExprStmt:
-		a.analyzeExpr(s.Value)
-
+		return a.buildExprStmt(s)
 	case *ast.ForStmt:
-		a.analyzeForStmt(s)
+		return a.buildForStmt(s)
+	case *ast.BreakStmt:
+		return &tast.BreakStmt{Pos_: s.Pos(), End_: s.End()}
+	case *ast.ContinueStmt:
+		return &tast.ContinueStmt{Pos_: s.Pos(), End_: s.End()}
+	case *ast.BlockStmt:
+		return a.buildBlockStmt(s)
 	}
+
+	return nil
 }
 
-func (a *Analyzer) analyzeDeclareStmt(s *ast.DeclareStmt) {
-	exprType := a.analyzeExpr(s.Value)
+// =============================================================================
+// Variable Statements
+// =============================================================================
 
+func (a *Analyzer) buildDeclareStmt(s *ast.DeclareStmt) *tast.DeclareStmt {
 	if _, exists := a.scope.symbols[s.Name]; exists {
-		a.errorf(s.Pos(), "variable '%s' is already declared", s.Name)
-		return
+		a.errorf(s.Pos_, "variable '%s' is already declared", s.Name)
 	}
 
-	if exprType.Equals(UnitType{}) {
-		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
-		return
+	tastValue := a.buildExpr(s.Value)
+	exprType := typeOf(tastValue)
+
+	if exprType.Equals(types.UnitType{}) {
+		a.errorf(s.Pos_, "cannot assign the result of a function that returns 'unit'")
 	}
 
-	a.scope.symbols[s.Name] = &Symbol{
-		Kind:    VarSymbol,
+	sym := &types.Symbol{
+		Kind:    types.VarSymbol,
 		Name:    s.Name,
-		Mutable: s.Mutable,
 		Type:    exprType,
+		Mutable: s.Mutable,
+	}
+
+	a.scope.symbols[s.Name] = sym
+
+	return &tast.DeclareStmt{
+		Pos_:   s.Pos_,
+		Symbol: sym,
+		Value:  tastValue,
 	}
 }
 
-func (a *Analyzer) analyzeAssignStmt(s *ast.AssignStmt) {
-	lvalType := a.analyzeExpr(s.LValue)
-	rvalType := a.analyzeExpr(s.RValue)
+func (a *Analyzer) buildAssignStmt(s *ast.AssignStmt) *tast.AssignStmt {
+	tastLValue := a.buildExpr(s.LValue)
+	tastRValue := a.buildExpr(s.RValue)
 
-	if rvalType.Equals(UnitType{}) {
-		a.errorf(s.Pos(), "cannot assign the result of a function that returns 'unit'")
-		return
+	lvalType := typeOf(tastLValue)
+	rvalType := typeOf(tastRValue)
+
+	// 1. Static Capability Check: Extract the root symbol and verify mutability
+	rootSym := a.getRootSymbol(tastLValue)
+	if rootSym == nil {
+		a.errorf(s.Pos_, "cannot assign to non-variable expression")
+	} else if !rootSym.Mutable {
+		a.errorf(s.Pos_, "cannot mutate immutable variable '%s'", rootSym.Name)
 	}
 
-	if !lvalType.Equals(UnknownType{}) &&
-		!rvalType.Equals(UnknownType{}) &&
-		!lvalType.Equals(rvalType) {
-
-		a.errorf(
-			s.Pos(),
-			"type mismatch: cannot assign '%s' to '%s'",
-			rvalType.String(),
-			lvalType.String(),
-		)
+	// 2. Static Type Check
+	if !lvalType.Equals(rvalType) && !types.IsUnknown(lvalType) && !types.IsUnknown(rvalType) {
+		a.errorf(s.Pos_, "type mismatch: cannot assign '%s' to '%s'", rvalType.String(), lvalType.String())
 	}
 
-	if indexExpr, ok := s.LValue.(*ast.IndexExpr); ok {
-		leftObjType := a.analyzeExpr(indexExpr.Left)
-
-		if leftObjType.Equals(StringType{}) {
-			a.errorf(
-				s.Pos(),
-				"strings are immutable and cannot be modified by index",
-			)
-			return
-		}
-	}
-
-	rootIdent := a.getRootIdentifier(s.LValue)
-	if rootIdent == nil {
-		a.errorf(s.Pos(), "cannot assign to non-variable expression")
+	return &tast.AssignStmt{
+		Pos_:   s.Pos_,
+		LValue: tastLValue,
+		RValue: tastRValue,
 	}
 }
 
-func (a *Analyzer) analyzeReturnStmt(s *ast.ReturnStmt) {
-	var retType Type
+// =============================================================================
+// Control Flow Statements
+// =============================================================================
 
-	if s.Value == nil {
-		retType = UnitType{}
-	} else {
-		retType = a.analyzeExpr(s.Value)
+func (a *Analyzer) buildReturnStmt(s *ast.ReturnStmt) *tast.ReturnStmt {
+	var tastValue tast.Expr
+	var retType types.Type = types.UnitType{}
+
+	if s.Value != nil {
+		tastValue = a.buildExpr(s.Value)
+		retType = typeOf(tastValue)
 	}
 
-	if a.expectedReturn != nil &&
-		!a.expectedReturn.Equals(UnknownType{}) {
+	if a.expectedReturn != nil && !retType.Equals(a.expectedReturn) && !types.IsUnknown(retType) {
+		a.errorf(s.Pos_, "type mismatch: expected return type '%s', got '%s'", a.expectedReturn.String(), retType.String())
+	}
 
-		if !retType.Equals(a.expectedReturn) &&
-			!retType.Equals(UnknownType{}) {
-
-			a.errorf(
-				s.Pos(),
-				"type mismatch: expected return type '%s', got '%s'",
-				a.expectedReturn.String(),
-				retType.String(),
-			)
-
-		} else if s.Value != nil {
-			a.propagateType(s.Value, a.expectedReturn)
-		}
+	return &tast.ReturnStmt{
+		Pos_:  s.Pos_,
+		Value: tastValue,
 	}
 }
 
-func (a *Analyzer) analyzeForStmt(s *ast.ForStmt) {
+func (a *Analyzer) buildForStmt(s *ast.ForStmt) *tast.ForStmt {
 	a.pushScope()
 	defer a.popScope()
 
+	var initStmt tast.Stmt
 	if s.Init != nil {
-		a.analyzeStmt(s.Init)
+		initStmt = a.buildStmt(s.Init)
 	}
 
+	var condExpr tast.Expr
 	if s.Condition != nil {
-		condType := a.analyzeExpr(s.Condition)
-
-		if !condType.Equals(BoolType{}) &&
-			!condType.Equals(UnknownType{}) {
-
-			a.errorf(
-				s.Condition.Pos(),
-				"condition must be of type 'bool', got '%s'",
-				condType.String(),
-			)
+		condExpr = a.buildExpr(s.Condition)
+		condType := typeOf(condExpr)
+		if !condType.Equals(types.BoolType{}) && !types.IsUnknown(condType) {
+			a.errorf(s.Condition.Pos(), "condition must be of type 'bool'")
 		}
 	}
 
+	var postStmt tast.Stmt
 	if s.Post != nil {
-		a.analyzeStmt(s.Post)
+		postStmt = a.buildStmt(s.Post)
 	}
 
-	a.analyzeBlockStmt(s.Body)
+	var bodyBlock *tast.BlockStmt
+	if s.Body != nil {
+		bodyBlock = a.buildBlockStmt(s.Body)
+	}
+
+	return &tast.ForStmt{
+		Pos_:      s.Pos_,
+		Init:      initStmt,
+		Condition: condExpr,
+		Post:      postStmt,
+		Body:      bodyBlock,
+	}
 }
 
-func (a *Analyzer) getRootIdentifier(expr ast.Expr) *ast.Identifier {
+func (a *Analyzer) buildYieldStmt(s *ast.YieldStmt) *tast.YieldStmt {
+	return &tast.YieldStmt{
+		Pos_:  s.Pos_,
+		Value: a.buildExpr(s.Value),
+	}
+}
+
+func (a *Analyzer) buildExprStmt(s *ast.ExprStmt) *tast.ExprStmt {
+	return &tast.ExprStmt{
+		Pos_:  s.Pos_,
+		Value: a.buildExpr(s.Value),
+	}
+}
+
+// =============================================================================
+// Semantic Root Extraction
+// =============================================================================
+
+// getRootSymbol recursively strips away fields and indices to find the base memory owner.
+func (a *Analyzer) getRootSymbol(expr tast.Expr) *types.Symbol {
+	if expr == nil {
+		return nil
+	}
 	switch e := expr.(type) {
-	case *ast.Identifier:
-		return e
-
-	case *ast.IndexExpr:
-		return a.getRootIdentifier(e.Left)
-
-	case *ast.SliceExpr:
-		return a.getRootIdentifier(e.Left)
-
-	case *ast.FieldAccess:
-		return a.getRootIdentifier(e.Object)
-
+	case *tast.Identifier:
+		return e.Symbol
+	case *tast.IndexExpr:
+		return a.getRootSymbol(e.Left)
+	case *tast.SliceExpr:
+		return a.getRootSymbol(e.Left)
+	case *tast.FieldAccess:
+		return a.getRootSymbol(e.Object)
 	default:
 		return nil
 	}

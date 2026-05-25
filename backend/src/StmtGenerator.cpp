@@ -1,252 +1,13 @@
 #include "StmtGenerator.h"
 
-#include <iostream>
+#include <llvm/IR/DataLayout.h>
+#include <llvm/IR/Intrinsics.h>
 
 #include "ExprGenerator.h"
 #include "RuntimeConstants.h"
 #include "TypeLowering.h"
 
 namespace maml {
-
-static void compileBlockStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  ctx.pushScope();
-  for (const auto &s : stmt["statements"]) {
-    compileStatement(ctx, s);
-    if (ctx.Builder->GetInsertBlock()->getTerminator()) break;
-  }
-  ctx.popScope();
-}
-
-static void compileDeclareStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-  std::string_view varName = stmt["name"].get<std::string_view>();
-
-  if (stmt["value"]["maml_type"].is_null()) {
-    std::cerr << "\n[CRITICAL ERROR] 'maml_type' is missing for declaration of variable: " << varName << "\n";
-    ctx.Error.fatal("Missing type information aborted compilation.");
-    return;
-  }
-
-  llvm::Value *initVal = evaluateExpression(ctx, stmt["value"]);
-  if (!initVal) return;
-
-  nlohmann::json typeJson = stmt["value"]["maml_type"];
-  llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
-
-  // 1. Extract the RHS node type
-  std::string_view rhsNodeType = "unknown";
-  if (stmt["value"].contains("node_type")) {
-    rhsNodeType = stmt["value"]["node_type"].get<std::string_view>();
-  }
-
-  llvm::Value *storagePtr = nullptr;
-
-  // 2. If the frontend explicitly heap-allocated this (e.g., an escaping array),
-  // bind the variable directly to the heap pointer. Do NOT copy it to the stack!
-  if (rhsNodeType == "HeapAllocExpr") {
-    storagePtr = initVal;
-  } else {
-    storagePtr = Builder->CreateAlloca(valTy, nullptr, std::string(varName));
-
-    if (initVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
-      llvm::Value *loadedData = Builder->CreateLoad(valTy, initVal, "array_load");
-      Builder->CreateStore(loadedData, storagePtr);
-    } else {
-      Builder->CreateStore(initVal, storagePtr);
-    }
-  }
-
-  ctx.SymbolEnv.back()[std::string(varName)] = storagePtr;
-}
-
-static llvm::Value *computeLValue(CodegenContext &ctx, const nlohmann::json &lvalueNode, bool &isPointerReassignment) {
-  auto &Builder = ctx.Builder;
-  std::string_view lnodeType = "unknown";
-  if (lvalueNode.contains("node_type")) {
-    lnodeType = lvalueNode["node_type"].get<std::string_view>();
-  }
-
-  if (lnodeType == "Identifier") {
-    std::string_view targetName = lvalueNode["value"].get<std::string_view>();
-    llvm::Value *targetPtr = ctx.resolveSymbol(targetName);
-    if (targetPtr) {
-      if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetPtr)) {
-        if (alloca->getAllocatedType()->isPointerTy()) {
-          isPointerReassignment = true;
-        }
-      }
-    }
-    return targetPtr;
-  }
-
-  if (lnodeType == "FieldAccess") {
-    auto &Builder = ctx.Builder;
-
-    // 1. Recursively compute the true L-Value pointer of the base struct object
-    bool dummy = false;
-    llvm::Value *objPtr = computeLValue(ctx, lvalueNode["object"], dummy);
-
-    if (!objPtr) {
-      ctx.Error.fatal("Could not compute LValue for struct object", lvalueNode);
-      return nullptr;
-    }
-
-    // 2. Extract the struct type and field name from the AST node
-    nlohmann::json structType = lvalueNode["object"]["maml_type"];
-    std::string_view fieldName = lvalueNode["field"].get<std::string_view>();
-
-    // 3. Locate the matching field index
-    int index = -1;
-    for (int i = 0; i < structType["fields"].size(); ++i) {
-      if (structType["fields"][i]["name"].get<std::string_view>() == fieldName) {
-        index = i;
-        break;
-      }
-    }
-
-    if (index < 0) {
-      ctx.Error.fatal("Field '" + std::string(fieldName) + "' not found in struct LValue", lvalueNode);
-      return nullptr;
-    }
-
-    // 4. Return the GEP pointer directly into the struct's actual, permanent memory!
-    llvm::Type *baseTy = llvmTypeFor(ctx, structType);
-    return Builder->CreateGEP(baseTy, objPtr, {Builder->getInt32(0), Builder->getInt32(index)}, "fieldptr");
-  }
-
-  if (lnodeType == "IndexExpr") {
-    if (!lvalueNode["left"].contains("maml_type") || lvalueNode["left"]["maml_type"].is_null()) {
-      ctx.Error.fatal("CRITICAL: Missing 'maml_type' on left side of assignment!", lvalueNode);
-      return nullptr;
-    }
-
-    llvm::Value *leftVal = evaluateExpression(ctx, lvalueNode["left"]);
-    llvm::Value *indexVal = evaluateExpression(ctx, lvalueNode["index"]);
-    llvm::Type *leftTy = llvmTypeFor(ctx, lvalueNode["left"]["maml_type"]);
-
-    llvm::Value *leftPtr = leftVal;
-    if (!leftVal->getType()->isPointerTy()) {
-      llvm::AllocaInst *spill = Builder->CreateAlloca(leftTy, nullptr, "slice_spill");
-      Builder->CreateStore(leftVal, spill);
-      leftPtr = spill;
-    }
-
-    if (leftTy->isArrayTy()) {
-      return Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), indexVal}, "array_idx_assign");
-    } else {
-      // Slices
-      llvm::Value *dataPtr =
-          Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(1)}, "data_ptr");
-      llvm::Value *data = Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtr);
-      return Builder->CreateGEP(llvmTypeFor(ctx, lvalueNode["maml_type"]), data, indexVal, "slice_idx_assign");
-    }
-  }
-
-  std::cerr << "Error: Invalid or undefined LValue in assignment\n";
-  return nullptr;
-}
-
-static void compileAssignStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-  const nlohmann::json &lvalueNode = stmt.contains("lvalue") ? stmt["lvalue"] : stmt["target"];
-
-  bool isPointerReassignment = false;
-  llvm::Value *targetPtr = computeLValue(ctx, lvalueNode, isPointerReassignment);
-  if (!targetPtr) return;
-
-  const nlohmann::json &rhsNode = stmt.contains("rvalue") ? stmt["rvalue"] : stmt["value"];
-  llvm::Value *rhsVal = evaluateExpression(ctx, rhsNode);
-  if (!rhsVal) return;
-
-  nlohmann::json typeJson = rhsNode["maml_type"];
-
-  llvm::Type *valTy = llvmTypeFor(ctx, typeJson);
-  if (isPointerReassignment) {
-    Builder->CreateStore(rhsVal, targetPtr);
-  } else if (rhsVal->getType()->isPointerTy() && (valTy->isStructTy() || valTy->isArrayTy())) {
-    llvm::Value *loadedData = Builder->CreateLoad(valTy, rhsVal, "array_load");
-    Builder->CreateStore(loadedData, targetPtr);
-  } else {
-    Builder->CreateStore(rhsVal, targetPtr);
-  }
-}
-
-static void compileReturnStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-
-  // Coroutine early-out: suspend points handle ARC, just return the handle.
-  if (llvm::Value *coroHdl = ctx.resolveSymbol(rt::CORO_HDL)) {
-    Builder->CreateRet(coroHdl);
-    return;
-  }
-
-  llvm::Value *retVal = evaluateExpression(ctx, stmt["value"]);
-
-  if (retVal) {
-    llvm::Function *F = Builder->GetInsertBlock()->getParent();
-    llvm::Type *expectedRetTy = F->getReturnType();
-    if (retVal->getType()->isPointerTy() && !expectedRetTy->isPointerTy()) {
-      retVal = Builder->CreateLoad(expectedRetTy, retVal, "ret_load");
-    }
-  }
-
-  if (retVal) {
-    Builder->CreateRet(retVal);
-  } else {
-    Builder->CreateRetVoid();
-  }
-}
-
-static void compileLoopStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-  llvm::Function *F = Builder->GetInsertBlock()->getParent();
-  llvm::BasicBlock *loopBB = llvm::BasicBlock::Create(ctx.Context, "loop.body", F);
-  llvm::BasicBlock *exitBB = llvm::BasicBlock::Create(ctx.Context, "loop.exit", F);
-
-  Builder->CreateBr(loopBB);
-  Builder->SetInsertPoint(loopBB);
-
-  ctx.LoopExitStack.push_back(exitBB);
-  compileBlockStmt(ctx, stmt["body"]);
-  ctx.LoopExitStack.pop_back();
-
-  if (!Builder->GetInsertBlock()->getTerminator()) {
-    Builder->CreateBr(loopBB);
-  }
-  Builder->SetInsertPoint(exitBB);
-}
-
-static void compileBreakStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  if (!ctx.LoopExitStack.empty()) {
-    ctx.Builder->CreateBr(ctx.LoopExitStack.back());
-  } else {
-    ctx.Error.fatal("Break statement encountered outside of a loop", stmt);
-  }
-}
-
-static void compileRetainStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
-  llvm::FunctionCallee retainFn = ctx.Module->getOrInsertFunction(
-      "maml_retain",
-      llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)}, false));
-
-  if (val && val->getType()->isPointerTy()) {
-    Builder->CreateCall(retainFn, {val});
-  }
-}
-
-static void compileReleaseStmt(CodegenContext &ctx, const nlohmann::json &stmt) {
-  auto &Builder = ctx.Builder;
-  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
-  llvm::FunctionCallee releaseFn = ctx.Module->getOrInsertFunction(
-      "maml_release",
-      llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)}, false));
-
-  if (val && val->getType()->isPointerTy()) {
-    Builder->CreateCall(releaseFn, {val});
-  }
-}
 
 void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
   if (stmt.is_null()) return;
@@ -256,42 +17,276 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     nodeType = stmt["node_type"].get<std::string_view>();
   }
 
-  if (nodeType == "BlockStmt") {
-    compileBlockStmt(ctx, stmt);
+  // ---------------------------------------------------------------------------
+  // 1. Structural Instructions
+  // ---------------------------------------------------------------------------
+
+  if (nodeType == "TempDeclInst") {
+    llvm::Type *ty = llvmTypeFor(ctx, stmt["maml_type"]);
+    std::string name = stmt["name"].get<std::string>();
+
+    // Allocate the temporary register on the stack
+    llvm::AllocaInst *alloca = ctx.Builder->CreateAlloca(ty, nullptr, name);
+
+    // Bind it to the flat function-level scope
+    ctx.SymbolEnv.back()[name] = alloca;
     return;
   }
-  if (nodeType == "DeclareStmt") {
-    compileDeclareStmt(ctx, stmt);
+
+  if (nodeType == "AssignInst") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *targetPtr = ctx.resolveSymbol(dst);
+
+    // Evaluate the flat, non-nested Right-Hand Side expression
+    llvm::Value *rhsVal = evaluateExpression(ctx, stmt["expr"]);
+
+    if (targetPtr && rhsVal) {
+      ctx.Builder->CreateStore(rhsVal, targetPtr);
+    } else {
+      ctx.Error.fatal("AssignInst failed: target pointer or rhs value is null", stmt);
+    }
     return;
   }
-  if (nodeType == "AssignStmt") {
-    compileAssignStmt(ctx, stmt);
+
+  // ---------------------------------------------------------------------------
+  // Coroutine Initialization
+  // ---------------------------------------------------------------------------
+
+  if (nodeType == "CoroPrologueInst") {
+    llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 0);
+    llvm::Value *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.Context));
+
+    // Create a basic 8-bit Promise object on the stack to hold the coroutine state
+    llvm::Type *promiseTy = llvm::Type::getInt8Ty(ctx.Context);
+    llvm::Value *promiseAlloc = ctx.Builder->CreateAlloca(promiseTy, nullptr, "promise");
+
+    // 1. coro.id
+    llvm::Function *coroIdFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_id);
+    llvm::Value *coroId = ctx.Builder->CreateCall(coroIdFn, {align, promiseAlloc, nullPtr, nullPtr}, "coro.id");
+    ctx.SymbolEnv.back()[std::string(rt::CORO_ID)] = coroId;
+
+    // 2. coro.size
+    llvm::Function *coroSizeFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_size,
+                                                                 {llvm::Type::getInt64Ty(ctx.Context)});
+    llvm::Value *coroSize = ctx.Builder->CreateCall(coroSizeFn, {}, "coro.size");
+
+    // 3. Alloc Memory
+    llvm::FunctionCallee mamlAlloc = ctx.Module->getOrInsertFunction(
+        rt::ALLOC, llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context),
+                                           {llvm::Type::getInt64Ty(ctx.Context)}, false));
+    llvm::Value *allocMem = ctx.Builder->CreateCall(mamlAlloc, {coroSize}, "coro.alloc.mem");
+
+    // 4. coro.begin
+    llvm::Function *coroBeginFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_begin);
+    llvm::Value *coroHdl = ctx.Builder->CreateCall(coroBeginFn, {coroId, allocMem}, "coro.hdl");
+    ctx.SymbolEnv.back()[std::string(rt::CORO_HDL)] = coroHdl;
     return;
   }
-  if (nodeType == "ReturnStmt") {
-    compileReturnStmt(ctx, stmt);
+
+  // ---------------------------------------------------------------------------
+  // Explicit Memory Opcodes
+  // ---------------------------------------------------------------------------
+
+  if (nodeType == "CopyInst" || nodeType == "MoveInst") {
+    std::string dst = stmt["dst"].get<std::string>();
+    std::string src = stmt["src"].get<std::string>();
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+
+    if (!dstPtr) {
+      ctx.Error.fatal("Move/Copy destination not found: " + dst, stmt);
+      return;
+    }
+
+    // Determine the type of the destination
+    llvm::Type *dstTy = nullptr;
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(dstPtr)) {
+      dstTy = alloca->getAllocatedType();
+    }
+
+    llvm::Value *srcVal = nullptr;
+
+    // Helper lambda to safely check if the string represents an integer
+    auto isInteger = [](const std::string &s) {
+      if (s.empty()) return false;
+      size_t start = (s[0] == '-' || s[0] == '+') ? 1 : 0;
+      if (start == s.length()) return false;  // Handle standalone "+" or "-"
+      return std::all_of(s.begin() + start, s.end(), [](unsigned char c) { return std::isdigit(c); });
+    };
+
+    // Fast-path evaluation for flat literal sources
+    if (src == "true") {
+      srcVal = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 1);
+    } else if (src == "false") {
+      srcVal = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+    } else if (src.find("zero_alloc") == 0) {
+      srcVal = llvm::Constant::getNullValue(dstTy);
+    } else if (isInteger(src)) {
+      srcVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), std::stoi(src));
+    } else {
+      // It is a variable name. Resolve it and load the data.
+      llvm::Value *srcPtr = ctx.resolveSymbol(src);
+      if (srcPtr) {
+        llvm::Type *srcTy = dstTy;
+        if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcPtr)) {
+          srcTy = alloca->getAllocatedType();
+        }
+        srcVal = ctx.Builder->CreateLoad(srcTy, srcPtr, src + "_val");
+      }
+    }
+
+    if (srcVal && !srcVal->getType()->isVoidTy()) {
+      ctx.Builder->CreateStore(srcVal, dstPtr);
+    } else if (!srcVal) {
+      ctx.Error.fatal("Move/Copy source invalid or undefined: " + src, stmt);
+    }
     return;
   }
-  if (nodeType == "LoopStmt") {
-    compileLoopStmt(ctx, stmt);
+
+  if (nodeType == "RefAllocInst") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Type *valTy = llvmTypeFor(ctx, stmt["maml_type"]);
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+
+    if (!dstPtr) return;
+
+    // Calculate exact byte size needed for the struct/array
+    llvm::DataLayout DL(ctx.Module.get());
+    uint64_t allocSize = DL.getTypeAllocSize(valTy);
+
+    // Invoke maml_alloc(size)
+    llvm::FunctionCallee mamlAlloc = ctx.Module->getOrInsertFunction(
+        rt::ALLOC, llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context),
+                                           {llvm::Type::getInt64Ty(ctx.Context)}, false));
+
+    llvm::Value *heapPtr = ctx.Builder->CreateCall(
+        mamlAlloc, {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), allocSize)}, "heap_alloc");
+
+    ctx.Builder->CreateStore(heapPtr, dstPtr);
     return;
   }
-  if (nodeType == "BreakStmt") {
-    compileBreakStmt(ctx, stmt);
+
+  if (nodeType == "RefIncInst" || nodeType == "RefDecInst") {
+    std::string src = stmt["src"].get<std::string>();
+    llvm::Value *srcPtr = ctx.resolveSymbol(src);
+    if (!srcPtr) return;
+
+    // The local variable holds a heap pointer; we must load that pointer to pass it to the runtime
+    llvm::Type *ptrTy = llvm::PointerType::getUnqual(ctx.Context);
+    llvm::Value *heapPtr = ctx.Builder->CreateLoad(ptrTy, srcPtr, src + "_load");
+
+    const char *hook = (nodeType == "RefIncInst") ? rt::RETAIN : rt::RELEASE;
+    llvm::FunctionCallee refFn = ctx.Module->getOrInsertFunction(
+        hook, llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {ptrTy}, false));
+
+    ctx.Builder->CreateCall(refFn, {heapPtr});
     return;
   }
-  if (nodeType == "RetainStmt") {
-    compileRetainStmt(ctx, stmt);
+
+  if (nodeType == "MutBorrowInst") {
+    // Affine uniqueness and mutable borrow exclusivity are mathematically proven
+    // by the frontend SEMA and Ownership passes.
+    // This is purely a compile-time assertion, so it compiles to a zero-cost runtime no-op!
     return;
   }
-  if (nodeType == "ReleaseStmt") {
-    compileReleaseStmt(ctx, stmt);
+
+  ctx.Error.fatal("Unsupported MIR Instruction encountered: " + std::string(nodeType), stmt);
+}
+
+void compileTerminator(CodegenContext &ctx, const nlohmann::json &term) {
+  if (term.is_null()) {
+    ctx.Builder->CreateUnreachable();
     return;
   }
-  if (nodeType == "YieldStmt" || nodeType == "ExprStmt") {
-    evaluateExpression(ctx, stmt["value"]);
+
+  std::string_view nodeType = term["node_type"].get<std::string_view>();
+
+  // --- RETURN TERMINATOR ---
+  if (nodeType == "ReturnTerminator") {
+    // Coroutine early-out: suspend points handle ARC, just return the handle.
+    if (llvm::Value *coroHdl = ctx.resolveSymbol(rt::CORO_HDL)) {
+      ctx.Builder->CreateRet(coroHdl);
+      return;
+    }
+
+    llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+    llvm::Type *retTy = F->getReturnType();
+
+    if (retTy->isVoidTy()) {
+      ctx.Builder->CreateRetVoid();
+    } else {
+      llvm::Value *retPtr = ctx.resolveSymbol("_ret");
+      if (retPtr) {
+        llvm::Value *retVal = ctx.Builder->CreateLoad(retTy, retPtr, "ret_load");
+        ctx.Builder->CreateRet(retVal);
+      } else {
+        // Failsafe for uninitialized paths
+        ctx.Builder->CreateRet(llvm::Constant::getNullValue(retTy));
+      }
+    }
     return;
   }
+
+  // --- UNCONDITIONAL JUMP ---
+  if (nodeType == "JumpTerminator") {
+    int target = term["target"].get<int>();
+    ctx.Builder->CreateBr(ctx.Blocks[target]);
+    return;
+  }
+
+  // --- CONDITIONAL BRANCH ---
+  if (nodeType == "BranchTerminator") {
+    llvm::Value *cond = evaluateExpression(ctx, term["condition"]);
+    int trueTarget = term["true_target"].get<int>();
+    int falseTarget = term["false_target"].get<int>();
+    ctx.Builder->CreateCondBr(cond, ctx.Blocks[trueTarget], ctx.Blocks[falseTarget]);
+    return;
+  }
+
+  // --- ASYNC SUSPENSION BOUNDARY ---
+  if (nodeType == "CoroSuspendTerminator") {
+    int resumeTarget = term["resume_target"].get<int>();
+    int cleanupTarget = term["cleanup_target"].get<int>();
+    int suspendTarget = term["suspend_target"].get<int>();
+
+    llvm::Function *coroSuspendFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_suspend);
+    llvm::Value *noneToken = llvm::ConstantTokenNone::get(ctx.Context);
+    llvm::Value *isFinalValue = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+
+    // Call the intrinsic which returns an i8 routing byte
+    llvm::Value *suspendResult = ctx.Builder->CreateCall(coroSuspendFn, {noneToken, isFinalValue}, "suspend_res");
+
+    // Build a transparent trampoline block to execute coro.free on the cleanup path.
+    // This allows Go to remain "dumb" about LLVM's internal memory management.
+    llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+    llvm::BasicBlock *trampolineBB = llvm::BasicBlock::Create(ctx.Context, "coro.cleanup.trampoline", parentFn);
+
+    // 3-Way Control Flow Split
+    llvm::SwitchInst *sw = ctx.Builder->CreateSwitch(suspendResult, ctx.Blocks[suspendTarget], 2);
+    sw->addCase(llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), 0), ctx.Blocks[resumeTarget]);
+    sw->addCase(llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), 1), trampolineBB);
+
+    // Populate the Trampoline
+    ctx.Builder->SetInsertPoint(trampolineBB);
+    llvm::Function *coroFreeFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_free);
+
+    llvm::Value *cId = ctx.resolveSymbol(rt::CORO_ID);
+    llvm::Value *cHdl = ctx.resolveSymbol(rt::CORO_HDL);
+    if (cId && cHdl) {
+      ctx.Builder->CreateCall(coroFreeFn, {cId, cHdl});
+    }
+
+    // Jump to the MIR's explicitly defined cleanup path
+    ctx.Builder->CreateBr(ctx.Blocks[cleanupTarget]);
+    return;
+  }
+
+  // --- UNREACHABLE ---
+  if (nodeType == "UnreachableTerminator") {
+    ctx.Builder->CreateUnreachable();
+    return;
+  }
+
+  ctx.Error.fatal("Unsupported MIR Terminator encountered: " + std::string(nodeType), term);
 }
 
 }  // namespace maml

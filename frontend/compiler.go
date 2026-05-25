@@ -5,14 +5,19 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mattcarp12/maml/frontend/alloc"
+	"github.com/mattcarp12/maml/frontend/arc"
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/cfg"
 	"github.com/mattcarp12/maml/frontend/escape"
+	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/lexer"
-	"github.com/mattcarp12/maml/frontend/lower"
+	"github.com/mattcarp12/maml/frontend/liveness"
+	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/ownership"
 	"github.com/mattcarp12/maml/frontend/parser"
+	"github.com/mattcarp12/maml/frontend/prune"
 	"github.com/mattcarp12/maml/frontend/sema"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 type Compiler struct{}
@@ -23,92 +28,102 @@ func New() *Compiler {
 
 // FrontendResult contains all semantic information produced by the frontend.
 type FrontendResult struct {
-	Program     *ast.Program
-	TypeMap     map[ast.Node]sema.Type
-	EscapeMap   map[ast.Node]escape.EscapeState
-	CFG         map[*ast.FnDecl]*cfg.CFG
-	CFGAnalysis map[*ast.FnDecl]*cfg.Result
+	AST  *ast.Program
+	TAST *tast.Program
+	HIR  *hir.Program
+	MIR  *mir.Program
 }
 
 // Frontend executes the canonical frontend pipeline.
-//
-// ALL frontend compilation flows should go through this function.
 func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
-	// 1. Parse
+	// -------------------------------------------------------------------------
+	// Phase 1: Syntax Analysis -> AST
+	// -------------------------------------------------------------------------
 	l := lexer.New(src)
 	p := parser.New(l)
-	program := p.ParseProgram()
+	astProgram := p.ParseProgram()
 	if len(p.Errors()) > 0 {
 		return nil, fmt.Errorf("parser syntax errors:\n%s", strings.Join(p.Errors(), "\n"))
 	}
 
-	// 2. Pre-Sema Lowering (Inliner Pass)
-	inlinePass := lower.NewInlinePass(program)
-	program = ast.Rewrite(inlinePass, program).(*ast.Program)
-
-	// 3. Semantic Analysis
+	// -------------------------------------------------------------------------
+	// Phase 2: Semantic Analysis -> TAST
+	// -------------------------------------------------------------------------
 	semaAnalyzer := sema.New()
-	typeMap, semaErrors := semaAnalyzer.Analyze(program)
-	if len(semaErrors) > 0 {
-		return nil, formatErrors("Semantic", semaErrors)
+	tastProgram, errs := semaAnalyzer.Analyze(astProgram)
+	if len(errs) > 0 {
+		return nil, formatErrors("Semantic", errs)
 	}
 
-	// 4. Post-Sema Lowering Passes (Control Flow, Aggregates, Async)
-	loweringPass := lower.NewPass(typeMap)
-	program = ast.Rewrite(loweringPass, program).(*ast.Program)
+	// -------------------------------------------------------------------------
+	// Phase 3 & 4: HIR Translation & MIR Construction (Allocation Agnostic)
+	// -------------------------------------------------------------------------
+	hirProgram := hir.Translate(tastProgram)
 
-	aggPass := lower.NewAggregatePass(typeMap)
-	program = ast.Rewrite(aggPass, program).(*ast.Program)
-
-	asyncPass := lower.NewAsyncPass(typeMap)
-	program = ast.Rewrite(asyncPass, program).(*ast.Program)
-
-	// 5. CFG Analysis
-	cfgAnalyzer := cfg.NewAnalyzer(typeMap)
-	cfgGraphs, cfgResults, cfgErrors := cfgAnalyzer.Analyze(program)
-	if len(cfgErrors) > 0 {
-		return nil, formatErrors("Control Flow", cfgErrors)
+	mirProgram := &mir.Program{
+		TypeDecls: make([]*hir.TypeDecl, 0),
+		Functions: make([]mir.Function, 0),
 	}
 
-	// 6. Escape Analysis
-	escapeAnalyzer := escape.New(typeMap)
-	escapeMap := escapeAnalyzer.Analyze(program)
+	var ownErrs []ast.CompileError
 
-	// 7. Allocation Lowering Pass
-	allocPass := lower.NewAllocPass(escapeMap)
-	program = ast.Rewrite(allocPass, program).(*ast.Program)
+	// Sort declarations and execute the Micro-Package pipeline
+	for _, decl := range hirProgram.Decls {
+		switch d := decl.(type) {
+		case *hir.TypeDecl:
+			mirProgram.TypeDecls = append(mirProgram.TypeDecls, d)
 
-	// 8. Ownership Analysis
-	ownershipAnalyzer := ownership.New(typeMap)
-	ownershipErrors := ownershipAnalyzer.Analyze(program)
-	if len(ownershipErrors) > 0 {
-		return nil, formatErrors("Ownership", ownershipErrors)
+		case *hir.FnDecl:
+			// Phase 4: Construct CFG
+			g := mir.Build(d)
+
+			// Dead Code Elimination
+			prune.Graph(g)
+
+			// Phase 5: Dataflow Analysis
+			escapes := escape.AnalyzeEscape(g)
+			liveVars := liveness.AnalyzeLiveness(g)
+
+			// Phase 6 & 7: Transformation
+			alloc.LowerAllocations(g, escapes)
+			arc.InjectARC(g, liveVars)
+
+			// Phase 5 Validation: Borrow Checker
+			ownAnalyzer := ownership.New()
+			ownErrs = append(ownErrs, ownAnalyzer.Analyze(g)...)
+
+			mirProgram.Functions = append(mirProgram.Functions, mir.Function{
+				Name:       d.Name,
+				Params:     d.Params,
+				ReturnType: d.ReturnType,
+				IsAsync:    d.IsAsync,
+				Graph:      g,
+			})
+		}
 	}
 
-	// 9. ARC Lowering Pass
-	arcPass := lower.NewARCPass(typeMap)
-	program = ast.Rewrite(arcPass, program).(*ast.Program)
+	if len(ownErrs) > 0 {
+		return nil, formatErrors("Ownership", ownErrs)
+	}
 
 	return &FrontendResult{
-		Program:     program,
-		TypeMap:     typeMap,
-		EscapeMap:   escapeMap,
-		CFG:         cfgGraphs,
-		CFGAnalysis: cfgResults,
+		AST:  astProgram,
+		TAST: tastProgram,
+		HIR:  hirProgram,
+		MIR:  mirProgram,
 	}, nil
 }
 
-// CompileFile only executes the frontend pipeline.
+// CompileFile executes the frontend pipeline on a source file.
 func (c *Compiler) CompileFile(path string) (*FrontendResult, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open source target %s: %w", path, err)
 	}
-
 	return c.Frontend(string(content))
 }
 
-// formatErrors is a helper to aggregate a slice of ast.CompileError into a single formatted error.
+// formatErrors aggregates compiler errors into a single string.
 func formatErrors(stage string, errs []ast.CompileError) error {
 	var msgs []string
 	for _, e := range errs {

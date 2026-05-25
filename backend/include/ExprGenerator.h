@@ -20,9 +20,6 @@ llvm::Value *compileLogicalAnd(CodegenContext &ctx, const nlohmann::json &expr, 
 llvm::Value *compileLogicalOr(CodegenContext &ctx, const nlohmann::json &expr, llvm::Value *leftVal);
 
 // --- ExprControlFlow ---
-llvm::Value *compileIfExpr(CodegenContext &ctx, const nlohmann::json &e);
-llvm::Value *compileBlockExpr(CodegenContext &ctx, const nlohmann::json &expr);
-llvm::Value *compileAwaitExpression(CodegenContext &ctx, const nlohmann::json &e);
 llvm::Value *compileAsyncPrologueExpr(CodegenContext &ctx, const nlohmann::json &expr);
 
 // --- ExprContainers ---

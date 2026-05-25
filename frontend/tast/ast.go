@@ -1,26 +1,29 @@
-package ast
+package tast
 
-import "fmt"
+import "github.com/mattcarp12/maml/frontend/ast"
 
 // =============================================================================
 // Source Positions
 // =============================================================================
 
-// Position tracks a location within a source file.
-type Position struct {
-	Line int
-	Col  int
-}
+// Position tracks a location within a source file exactly as it was written.
+// type Position struct {
+// 	Line int
+// 	Col  int
+// }
 
-func (p Position) String() string {
-	return fmt.Sprintf("%d:%d", p.Line, p.Col)
-}
+// func (p Position) String() string {
+// 	return fmt.Sprintf("%d:%d", p.Line, p.Col)
+// }
+
+type Position = ast.Position
 
 // =============================================================================
 // Core Node Interfaces
 // =============================================================================
 
-// Node is the base contract implemented by every AST node.
+// Node is the base contract implemented by every TAST node.
+// Architectural Invariant: TAST nodes are strictly read-only.
 type Node interface {
 	Pos() Position
 	End() Position

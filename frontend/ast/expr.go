@@ -393,16 +393,3 @@ func (ie *IfExpr) String() string {
 
 func (ie *IfExpr) exprNode() {}
 
-func (s *StackAllocExpr) Pos() Position { return s.Pos_ }
-func (s *StackAllocExpr) End() Position { return s.Value.End() }
-func (s *StackAllocExpr) exprNode()     {}
-func (s *StackAllocExpr) String() string {
-	return fmt.Sprintf("stack_alloc(%s)", s.Value.String())
-}
-
-func (h *HeapAllocExpr) Pos() Position { return h.Pos_ }
-func (h *HeapAllocExpr) End() Position { return h.Value.End() }
-func (h *HeapAllocExpr) exprNode()     {}
-func (h *HeapAllocExpr) String() string {
-	return fmt.Sprintf("heap_alloc(%s)", h.Value.String())
-}

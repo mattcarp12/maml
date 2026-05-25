@@ -420,10 +420,3 @@ func (g *GenericType) String() string {
 }
 func (g *GenericType) typeNode() {}
 func (g *GenericType) exprNode() {}
-func (g *GenericType) Clone() Node {
-	params := make([]TypeExpr, len(g.Params))
-	for i, p := range g.Params {
-		params[i] = cloneTypeExpr(p)
-	}
-	return &GenericType{Pos_: g.Pos_, Name: g.Name, Params: params}
-}
