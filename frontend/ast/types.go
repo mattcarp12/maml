@@ -79,6 +79,19 @@ type MapTypeExpr struct {
 	Value TypeExpr `json:"value"`
 }
 
+type ResultTypeExpr struct {
+	Pos_ Position
+	End_ Position
+	Ok   TypeExpr
+	Err  TypeExpr
+}
+
+type OptionTypeExpr struct {
+	Pos_ Position
+	End_ Position
+	Base TypeExpr
+}
+
 // TaskTypeExpr represents an async task/future type.
 //
 // Example:
@@ -132,18 +145,16 @@ type VariantTypeExpr struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 
-	Name   string            `json:"name"`
-	Fields []StructTypeField `json:"fields,omitempty"`
+	Name        string            `json:"name"`
+	TupleFields []TypeExpr        `json:"tupleFields,omitempty"`
+	Fields      []StructTypeField `json:"structFields,omitempty"`
 }
 
 // SumTypeExpr represents an algebraic sum type.
 //
 // Example:
 //
-//	sum Option<T> {
-//	    Some(value: T),
-//	    None,
-//	}
+//	Some(int) | None
 type SumTypeExpr struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
@@ -151,23 +162,6 @@ type SumTypeExpr struct {
 	Name     string            `json:"name"`
 	TypeArgs []TypeExpr        `json:"type_args,omitempty"`
 	Variants []VariantTypeExpr `json:"variants"`
-}
-
-// =============================================================================
-// Function Types
-// =============================================================================
-
-// FunctionTypeExpr represents a function signature type.
-//
-// Example:
-//
-//	fn(int, int) -> int
-type FunctionTypeExpr struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Params []TypeExpr `json:"params"`
-	Return TypeExpr   `json:"return"`
 }
 
 // =============================================================================
@@ -225,32 +219,48 @@ func (s *SliceTypeExpr) typeNode() {}
 // -----------------------------------------------------------------------------
 
 func (v *VectorTypeExpr) Pos() Position { return v.Pos_ }
-
 func (v *VectorTypeExpr) End() Position { return v.End_ }
-
+func (v *VectorTypeExpr) typeNode()     {}
+func (v *VectorTypeExpr) exprNode()     {} // Allows it to be used in literals
 func (v *VectorTypeExpr) String() string {
-	return fmt.Sprintf("vector<%s>", v.Base.String())
+	return fmt.Sprintf("Vec<%s>", v.Base.String())
 }
-
-func (v *VectorTypeExpr) typeNode() {}
 
 // -----------------------------------------------------------------------------
 // MapTypeExpr
 // -----------------------------------------------------------------------------
 
 func (m *MapTypeExpr) Pos() Position { return m.Pos_ }
-
 func (m *MapTypeExpr) End() Position { return m.End_ }
-
+func (m *MapTypeExpr) typeNode()     {}
+func (m *MapTypeExpr) exprNode()     {} // Allows it to be used in literals
 func (m *MapTypeExpr) String() string {
-	return fmt.Sprintf(
-		"map<%s, %s>",
-		m.Key.String(),
-		m.Value.String(),
-	)
+	return fmt.Sprintf("Map<%s, %s>", m.Key.String(), m.Value.String())
 }
 
-func (m *MapTypeExpr) typeNode() {}
+// -----------------------------------------------------------------------------
+// ResultTypeExpr
+// -----------------------------------------------------------------------------
+
+func (r *ResultTypeExpr) Pos() Position { return r.Pos_ }
+func (r *ResultTypeExpr) End() Position { return r.End_ }
+func (r *ResultTypeExpr) typeNode()     {}
+func (r *ResultTypeExpr) exprNode()     {} // Included for consistency
+func (r *ResultTypeExpr) String() string {
+	return fmt.Sprintf("Result<%s, %s>", r.Ok.String(), r.Err.String())
+}
+
+// -----------------------------------------------------------------------------
+// OptionTypeExpr
+// -----------------------------------------------------------------------------
+
+func (o *OptionTypeExpr) Pos() Position { return o.Pos_ }
+func (o *OptionTypeExpr) End() Position { return o.End_ }
+func (o *OptionTypeExpr) typeNode()     {}
+func (o *OptionTypeExpr) exprNode()     {} // Included for consistency
+func (o *OptionTypeExpr) String() string {
+	return fmt.Sprintf("Option<%s>", o.Base.String())
+}
 
 // -----------------------------------------------------------------------------
 // TaskTypeExpr
@@ -371,52 +381,3 @@ func (v *VariantTypeExpr) String() string {
 
 	return out.String()
 }
-
-// -----------------------------------------------------------------------------
-// FunctionTypeExpr
-// -----------------------------------------------------------------------------
-
-func (f *FunctionTypeExpr) Pos() Position { return f.Pos_ }
-
-func (f *FunctionTypeExpr) End() Position { return f.End_ }
-
-func (f *FunctionTypeExpr) String() string {
-	var params []string
-
-	for _, p := range f.Params {
-		params = append(params, p.String())
-	}
-
-	return fmt.Sprintf(
-		"fn(%s) -> %s",
-		strings.Join(params, ", "),
-		f.Return.String(),
-	)
-}
-
-func (f *FunctionTypeExpr) typeNode() {}
-
-// GenericType represents a parameterized type used as either a type expression
-// or a value-level constructor expression (e.g. Vec<int>, Map<string, int>).
-type GenericType struct {
-	Pos_   Position   `json:"-"`
-	Name   string     `json:"name"`
-	Params []TypeExpr `json:"params"`
-}
-
-func (g *GenericType) Pos() Position { return g.Pos_ }
-func (g *GenericType) End() Position { return g.Pos_ } // good enough
-func (g *GenericType) String() string {
-	if len(g.Params) == 0 {
-		return g.Name
-	}
-
-	var params []string
-	for _, p := range g.Params {
-		params = append(params, p.String())
-	}
-
-	return fmt.Sprintf("%s<%s>", g.Name, strings.Join(params, ", "))
-}
-func (g *GenericType) typeNode() {}
-func (g *GenericType) exprNode() {}

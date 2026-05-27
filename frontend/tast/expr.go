@@ -13,27 +13,27 @@ import (
 // =============================================================================
 
 type Identifier struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Value  string
 	Type   types.Type    // Permanently bound type
 	Symbol *types.Symbol // Permanently bound semantic identity/scope
 }
 
 type IntLiteral struct {
-	Pos_  Position
-	End_  Position
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
 	Value int64
 	Type  types.Type // Will always be types.IntType
 }
 
 type BoolLiteral struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value bool
 	Type  types.Type // Will always be types.BoolType
 }
 
 type StringLiteral struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value string
 	Type  types.Type // Will always be types.StringType
 }
@@ -43,14 +43,14 @@ type StringLiteral struct {
 // =============================================================================
 
 type PrefixExpr struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Operator string
 	Right    Expr
 	Type     types.Type // The resulting type of the operation
 }
 
 type InfixExpr struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Left     Expr
 	Operator string
 	Right    Expr
@@ -119,22 +119,22 @@ func (ie *InfixExpr) exprNode() {}
 // =============================================================================
 
 type StructField struct {
-	Pos_  Position
-	End_  Position
-	Name  *Identifier
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Key   Expr
 	Value Expr
 }
 
 type StructLiteral struct {
-	Pos_   Position
-	End_   Position
+	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
 	Fields []StructField
 	Type   types.Type // Permanently bound semantic type
 }
 
 type ArrayLiteral struct {
-	Pos_     Position
-	End_     Position
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
 	Elements []Expr
 	Type     types.Type // Permanently bound semantic type
 }
@@ -144,35 +144,43 @@ type ArrayLiteral struct {
 // =============================================================================
 
 type CallArg struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Argument Expr
 	Mut      bool
 	Own      bool
 }
 
 type CallExpr struct {
-	Pos_      Position
+	Pos_      Position `json:"-"`
 	Function  Expr
 	Arguments []CallArg
 	Type      types.Type // Resulting type of the function call
 }
 
+type MethodCallExpr struct {
+	Pos_      Position `json:"-"`
+	Object    Expr
+	Method    *Identifier
+	Arguments []CallArg
+	Type      types.Type // Resulting type of the method call
+}
+
 type FieldAccess struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Object Expr
 	Field  *Identifier
 	Type   types.Type // The type of the accessed field
 }
 
 type IndexExpr struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Left  Expr
 	Index Expr
 	Type  types.Type // The type of the array/slice element
 }
 
 type SliceExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 	Left Expr
 	Low  Expr
 	High Expr
@@ -184,7 +192,7 @@ type SliceExpr struct {
 // =============================================================================
 
 type IfExpr struct {
-	Pos_        Position
+	Pos_        Position `json:"-"`
 	Condition   Expr
 	Consequence *BlockStmt
 	Alternative *BlockStmt
@@ -192,7 +200,7 @@ type IfExpr struct {
 }
 
 type AwaitExpr struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 	Type  types.Type // The resolved inner type of the Task
 }
@@ -206,7 +214,13 @@ func (sl *StructLiteral) End() Position { return sl.End_ }
 func (sl *StructLiteral) String() string {
 	var fields []string
 	for _, f := range sl.Fields {
-		fields = append(fields, fmt.Sprintf("%s: %s", f.Name.String(), f.Value.String()))
+		if f.Key != nil {
+			// Keyed field (e.g., Structs or Maps: `x: 10` or `"hello": 20`)
+			fields = append(fields, fmt.Sprintf("%s: %s", f.Key.String(), f.Value.String()))
+		} else {
+			// Unkeyed field (e.g., Vectors: `1`)
+			fields = append(fields, f.Value.String())
+		}
 	}
 	return fmt.Sprintf("%s{%s}", sl.Type.String(), strings.Join(fields, ", "))
 }
@@ -249,6 +263,22 @@ func (ce *CallExpr) String() string {
 	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
 }
 func (ce *CallExpr) exprNode() {}
+
+func (m *MethodCallExpr) Pos() Position { return m.Pos_ }
+func (m *MethodCallExpr) End() Position {
+	if len(m.Arguments) == 0 {
+		return m.Method.End()
+	}
+	return m.Arguments[len(m.Arguments)-1].Argument.End()
+}
+func (m *MethodCallExpr) String() string {
+	var args []string
+	for _, a := range m.Arguments {
+		args = append(args, a.Argument.String())
+	}
+	return fmt.Sprintf("%s.%s(%s)", m.Object.String(), m.Method.String(), strings.Join(args, ", "))
+}
+func (m *MethodCallExpr) exprNode() {}
 
 func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
 func (fa *FieldAccess) End() Position { return fa.Field.End() }

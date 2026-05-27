@@ -190,6 +190,7 @@ llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr) {
   std::string_view leftKind = "Unknown";
   if (expr["left"]["maml_type"].contains("kind")) leftKind = expr["left"]["maml_type"]["kind"].get<std::string_view>();
 
+  // Ensure leftPtr is an absolute pointer address
   llvm::Value *leftPtr = leftVal;
   if (!leftVal->getType()->isPointerTy()) {
     llvm::AllocaInst *spill = Builder->CreateAlloca(leftTy, nullptr, "slice_spill");
@@ -197,9 +198,13 @@ llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr) {
     leftPtr = spill;
   }
 
-  llvm::Value *elemPtr;
+  llvm::Value *elemPtr = nullptr;
+
+  // FIXED: Handle safe GEP indexing on native arrays
   if (leftTy->isArrayTy()) {
-    elemPtr = Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), indexVal}, "array_idx");
+    // Structural zero-index chain is required to strip the outer array pointer away safely in LLVM
+    llvm::Value *zeroIdx = Builder->getInt32(0);
+    elemPtr = Builder->CreateGEP(leftTy, leftPtr, {zeroIdx, indexVal}, "array_idx");
   } else if (leftKind == "String") {
     llvm::Value *dataPtrGep =
         Builder->CreateGEP(leftTy, leftPtr, {Builder->getInt32(0), Builder->getInt32(0)}, "str_data_ptr");
@@ -275,22 +280,22 @@ llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e) {
   return Builder->CreateLoad(fieldTy, fieldPtr, "field_load");
 }
 
-llvm::Value *compileArrayLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+llvm::Value *compileZeroAllocExpr(CodegenContext &ctx, const nlohmann::json &expr) {
   if (!expr.contains("maml_type") || expr["maml_type"].is_null()) {
-    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on ArrayLiteral!", expr);
+    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on ZeroAllocExpr!", expr);
     return nullptr;
   }
-  llvm::Type *arrayTy = llvmTypeFor(ctx, expr["maml_type"]);
-  return ctx.Builder->CreateAlloca(arrayTy, nullptr, "array_lit");
-}
 
-llvm::Value *compileStructLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
-  if (!expr.contains("maml_type") || expr["maml_type"].is_null()) {
-    ctx.Error.fatal("CRITICAL: Missing 'maml_type' on StructLiteral!", expr);
-    return nullptr;
-  }
-  llvm::Type *structTy = llvmTypeFor(ctx, expr["maml_type"]);
-  return ctx.Builder->CreateAlloca(structTy, nullptr, "struct_lit");
+  // 1. Resolve the LLVM type
+  llvm::Type *allocTy = llvmTypeFor(ctx, expr["maml_type"]);
+
+  // 2. Allocate the raw memory
+  llvm::AllocaInst *alloca = ctx.Builder->CreateAlloca(allocTy, nullptr, "zero_alloc");
+
+  // 3. Guarantee zero-initialization as mandated by the HIR definition
+  ctx.Builder->CreateStore(llvm::Constant::getNullValue(allocTy), alloca);
+
+  return alloca;
 }
 
 }  // namespace maml

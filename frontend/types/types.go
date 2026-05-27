@@ -211,8 +211,9 @@ func NewResultType(value Type, err Type) *SumType {
 // SumVariant is one variant of a user-defined sum type.
 type SumVariant struct {
 	Name         string
-	Fields       []StructField // empty for unit variants
-	Discriminant int           // position in the variant list (0-based)
+	Fields       []StructField // empty for unit/tuple variants
+	TupleTypes   []Type        // NEW: stores the types for tuple variants
+	Discriminant int
 }
 
 func (v SumVariant) IsUnit() bool { return len(v.Fields) == 0 }
@@ -220,12 +221,17 @@ func (v SumVariant) IsUnit() bool { return len(v.Fields) == 0 }
 // PayloadSize returns the byte size of this variant's payload struct.
 func (v SumVariant) PayloadSize() int {
 	size := 0
+	// 1. Calculate Struct Payload
 	for _, f := range v.Fields {
 		align := f.Type.Alignment()
-		if size%align != 0 {
-			size += align - (size % align)
-		}
+		if size%align != 0 { size += align - (size % align) }
 		size += f.Type.SizeInBytes()
+	}
+	// 2. Calculate Tuple Payload
+	for _, t := range v.TupleTypes {
+		align := t.Alignment()
+		if size%align != 0 { size += align - (size % align) }
+		size += t.SizeInBytes()
 	}
 	return size
 }
@@ -295,8 +301,25 @@ type TaskType struct {
 
 func (t TaskType) String() string { return "Task<" + t.Base.String() + ">" }
 func (t TaskType) Equals(other Type) bool {
+	// If the entire other type is 'any', allow it
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+
 	o, ok := other.(TaskType)
-	return ok && t.Base.Equals(o.Base)
+	if !ok {
+		return false
+	}
+
+	// If either task is a Task<any>, consider them equal
+	if _, isAny := t.Base.(AnyType); isAny {
+		return true
+	}
+	if _, isAny := o.Base.(AnyType); isAny {
+		return true
+	}
+
+	return t.Base.Equals(o.Base)
 }
 func (t TaskType) IsReferenceType() bool { return true } // Tasks are heap-allocated state machines
 func (t TaskType) SizeInBytes() int      { return 8 }    // Pointer to the heap task
@@ -346,3 +369,14 @@ func IsUnknown(other Type) bool {
 	_, ok := other.(UnknownType)
 	return ok
 }
+
+// --- ANY ---
+type AnyType struct{}
+
+func (t AnyType) String() string { return "any" }
+
+// AnyType conceptually satisfies equality with any other type at the boundary
+func (t AnyType) Equals(other Type) bool { return true }
+func (t AnyType) IsReferenceType() bool  { return true } // It represents an opaque pointer
+func (t AnyType) SizeInBytes() int       { return 8 }
+func (t AnyType) Alignment() int         { return 8 }

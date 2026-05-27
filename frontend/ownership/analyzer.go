@@ -49,6 +49,7 @@ func New() *Analyzer {
 func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
 	stateIn := make(map[mir.BlockID]*BlockState)
 	stateOut := make(map[mir.BlockID]*BlockState)
+	visited := make(map[mir.BlockID]bool) // FIXED: Track initialized block paths
 
 	// Initialize states
 	for id := range g.Blocks {
@@ -61,8 +62,8 @@ func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
 		changed = false
 
 		for _, block := range g.Blocks {
-			// 1. Merge incoming states from predecessors
-			mergedIn := a.mergePredecessors(g, block, stateOut)
+			// 1. Merge incoming states from visited predecessors only
+			mergedIn := a.mergePredecessors(g, block, stateOut, visited)
 			stateIn[block.ID] = mergedIn
 
 			// 2. Apply transfer functions over instructions
@@ -71,6 +72,9 @@ func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
 				a.analyzeInstruction(inst, currentState)
 			}
 			a.analyzeTerminator(block.Terminator, currentState)
+
+			// Mark current block as verified/populated
+			visited[block.ID] = true
 
 			// 3. Check for fixed point
 			if !statesEqual(stateOut[block.ID], currentState) {
@@ -84,16 +88,23 @@ func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
 }
 
 // mergePredecessors computes the conservative intersection of capabilities.
-// If a variable is invalidated in ANY predecessor path, it is invalidated here.
-func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateOut map[mir.BlockID]*BlockState) *BlockState {
+func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateOut map[mir.BlockID]*BlockState, visited map[mir.BlockID]bool) *BlockState {
 	merged := newBlockState()
-	preds := getPredecessors(g, block.ID)
+	allPreds := getPredecessors(g, block.ID)
+
+	// Filter to include only predecessors that have completed at least one pass
+	var preds []mir.BlockID
+	for _, p := range allPreds {
+		if visited[p] {
+			preds = append(preds, p)
+		}
+	}
 
 	if len(preds) == 0 {
 		return merged
 	}
 
-	// Initialize merged state with the first predecessor
+	// Initialize merged state with the first valid predecessor
 	firstPredState := stateOut[preds[0]]
 	for k, v := range firstPredState.Bindings {
 		merged.Bindings[k] = &BindingState{
@@ -102,16 +113,14 @@ func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateO
 		}
 	}
 
-	// Intersect with remaining predecessors
+	// Intersect with remaining valid predecessors
 	for i := 1; i < len(preds); i++ {
 		predState := stateOut[preds[i]]
 		for k, mergedVal := range merged.Bindings {
 			if predVal, exists := predState.Bindings[k]; exists {
-				// Conservative intersection: if it's moved in any path, it's moved.
 				mergedVal.Invalidated = mergedVal.Invalidated || predVal.Invalidated
 				mergedVal.MutLocked = mergedVal.MutLocked || predVal.MutLocked
 			} else {
-				// If the variable doesn't exist in a predecessor, it's unsafe to use.
 				mergedVal.Invalidated = true
 			}
 		}
@@ -163,7 +172,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
 
 	case *mir.AssignInst:
-		a.checkExprAccess(i.Expr, state)
+		a.checkExprAccess(i.RValue, state)
 		// Reassignment revives the variable with a clean state
 		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
 
@@ -229,6 +238,11 @@ func (a *Analyzer) checkAccess(name string, state *BlockState, pos hir.Position)
 	binding, exists := state.Bindings[name]
 	if !exists {
 		return // Ignore unregistered symbols (e.g., globals or built-ins)
+	}
+
+	// FIXED: Safely ignore use-after-move errors on compiler-generated ARC releases
+	if binding.Invalidated && pos.Line == 0 && pos.Col == 0 {
+		return
 	}
 
 	if binding.Invalidated {

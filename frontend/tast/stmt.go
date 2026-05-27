@@ -12,8 +12,8 @@ import (
 // =============================================================================
 
 type BlockStmt struct {
-	Pos_       Position
-	End_       Position
+	Pos_       Position `json:"-"`
+	End_       Position `json:"-"`
 	Statements []Stmt
 }
 
@@ -22,13 +22,13 @@ type BlockStmt struct {
 // =============================================================================
 
 type DeclareStmt struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Symbol *types.Symbol
 	Value  Expr
 }
 
 type AssignStmt struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	LValue Expr
 	RValue Expr
 }
@@ -38,22 +38,22 @@ type AssignStmt struct {
 // =============================================================================
 
 type ReturnStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
 type YieldStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
 type ExprStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
 type ForStmt struct {
-	Pos_      Position
+	Pos_      Position `json:"-"`
 	Init      Stmt
 	Condition Expr
 	Post      Stmt
@@ -65,19 +65,13 @@ type ForStmt struct {
 // =============================================================================
 
 type BreakStmt struct {
-	Pos_ Position
-	End_ Position
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 }
 
 type ContinueStmt struct {
-	Pos_ Position
-	End_ Position
-}
-
-type LoopStmt struct {
-	Pos_ Position
-	End_ Position
-	Body *BlockStmt
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
 }
 
 // =============================================================================
@@ -171,8 +165,3 @@ func (s *ContinueStmt) Pos() Position  { return s.Pos_ }
 func (s *ContinueStmt) End() Position  { return s.End_ }
 func (s *ContinueStmt) String() string { return "continue" }
 func (s *ContinueStmt) stmtNode()      {}
-
-func (l *LoopStmt) Pos() Position  { return l.Pos_ }
-func (l *LoopStmt) End() Position  { return l.End_ }
-func (l *LoopStmt) String() string { return fmt.Sprintf("loop %s", l.Body.String()) }
-func (l *LoopStmt) stmtNode()      {}

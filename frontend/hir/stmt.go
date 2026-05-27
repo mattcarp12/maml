@@ -12,7 +12,7 @@ import (
 // =============================================================================
 
 type BlockStmt struct {
-	Pos_       Position
+	Pos_       Position `json:"-"`
 	Statements []Stmt
 }
 
@@ -21,13 +21,13 @@ type BlockStmt struct {
 // =============================================================================
 
 type DeclareStmt struct {
-	Pos_   Position
+	Pos_   Position      `json:"-"`
 	Symbol *types.Symbol // Permanently bound semantic identity
 	Value  Expr
 }
 
 type AssignStmt struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	LValue Expr
 	RValue Expr
 }
@@ -37,17 +37,17 @@ type AssignStmt struct {
 // =============================================================================
 
 type ReturnStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
 type YieldStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
 type ExprStmt struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 }
 
@@ -58,16 +58,16 @@ type ExprStmt struct {
 // LoopStmt is the ONLY looping construct allowed in the HIR.
 // TAST ForStmts must be lowered into this.
 type LoopStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 	Body *BlockStmt
 }
 
 type BreakStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 }
 
 type ContinueStmt struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 }
 
 // =============================================================================

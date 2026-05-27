@@ -131,3 +131,35 @@ func formatErrors(stage string, errs []ast.CompileError) error {
 	}
 	return fmt.Errorf("%s errors:\n%s", stage, strings.Join(msgs, "\n"))
 }
+
+// CompileAST executes only Phase 1 (Syntax Analysis) and returns the raw AST.
+func (c *Compiler) CompileAST(src string) (*ast.Program, error) {
+	l := lexer.New(src)
+	p := parser.New(l)
+	astProgram := p.ParseProgram()
+
+	if len(p.Errors()) > 0 {
+		return nil, fmt.Errorf("[PARSER] errors:\n%s", strings.Join(p.Errors(), "\n"))
+	}
+
+	return astProgram, nil
+}
+
+// CompileAST executes Phase 1 (Syntax Analysis) and Phase 2 (Semantic Analysis)
+// and returns the typed AST.
+func (c *Compiler) CompileTAST(src string) (*tast.Program, error) {
+	l := lexer.New(src)
+	p := parser.New(l)
+	astProgram := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		return nil, fmt.Errorf("[PARSER] errors:\n%s", strings.Join(p.Errors(), "\n"))
+	}
+
+	semaChecker := sema.New()
+	tastProgram, semaErrors := semaChecker.Analyze(astProgram)
+	if len(semaErrors) > 0 {
+		return nil, formatErrors("[SEMANTIC]", semaErrors)
+	}
+
+	return tastProgram, nil
+}

@@ -21,16 +21,16 @@ type Program struct {
 // =============================================================================
 
 type Param struct {
-	Pos_   Position
-	End_   Position
+	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
 	Name   string
 	Type   types.Type    // Permanently bound semantic type
 	Symbol *types.Symbol // Permanently bound semantic scope and ParamMode
 }
 
 type FnDecl struct {
-	Pos_       Position
-	End_       Position
+	Pos_       Position `json:"-"`
+	End_       Position `json:"-"`
 	Name       string
 	Params     []*Param
 	ReturnType types.Type // Permanently bound semantic return type
@@ -44,8 +44,8 @@ type FnDecl struct {
 // =============================================================================
 
 type TypeDecl struct {
-	Pos_   Position
-	End_   Position
+	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
 	Name   *Identifier
 	Type   types.Type    // The fully resolved types.Type (replaces unresolved TypeExpr)
 	Symbol *types.Symbol // Permanently bound semantic type symbol

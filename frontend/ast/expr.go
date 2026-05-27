@@ -44,8 +44,8 @@ type StructField struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 
-	Name  *Identifier `json:"name"`
-	Value Expr        `json:"value"`
+	Key   Expr `json:"key"`
+	Value Expr `json:"value"`
 }
 
 // StructLiteral represents a struct literal.
@@ -57,7 +57,7 @@ type StructLiteral struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 
-	Type   *Identifier   `json:"struct_type"`
+	Type   Expr          `json:"struct_type"`
 	Fields []StructField `json:"fields"`
 }
 
@@ -78,6 +78,13 @@ type CallExpr struct {
 
 	Function  Expr      `json:"function"`
 	Arguments []CallArg `json:"arguments"`
+}
+
+type MethodCallExpr struct {
+	Object    Expr        // e.g., `a.b` in `a.b.foo()`
+	Method    *Identifier // e.g., `foo`
+	Arguments []CallArg
+	Pos_      Position
 }
 
 type CallArg struct {
@@ -141,20 +148,6 @@ type IfExpr struct {
 }
 
 // =============================================================================
-// Explicit Allocation Expressions
-// =============================================================================
-
-type StackAllocExpr struct {
-	Pos_  Position `json:"-"`
-	Value Expr     `json:"value"`
-}
-
-type HeapAllocExpr struct {
-	Pos_  Position `json:"-"`
-	Value Expr     `json:"value"`
-}
-
-// =============================================================================
 // Interface Implementations
 // =============================================================================
 
@@ -212,20 +205,20 @@ func (sl *StructLiteral) End() Position { return sl.End_ }
 
 func (sl *StructLiteral) String() string {
 	var fields []string
-
 	for _, f := range sl.Fields {
-		fields = append(fields,
-			fmt.Sprintf("%s: %s", f.Name.String(), f.Value.String()))
+		if f.Key != nil {
+			// Keyed field (e.g., Structs or Maps: `x: 10` or `"hello": 20`)
+			fields = append(fields, fmt.Sprintf("%s: %s", f.Key.String(), f.Value.String()))
+		} else {
+			// Unkeyed field (e.g., Vectors: `1`)
+			fields = append(fields, f.Value.String())
+		}
 	}
-
-	return fmt.Sprintf(
-		"%s{%s}",
-		sl.Type.String(),
-		strings.Join(fields, ", "),
-	)
+	return fmt.Sprintf("%s{%s}", sl.Type.String(), strings.Join(fields, ", "))
 }
 
-func (sl *StructLiteral) exprNode() {}
+func (sl *StructLiteral) exprNode()   {}
+func (sf *StructField) Pos() Position { return sf.Pos_ }
 
 func (al *ArrayLiteral) Pos() Position { return al.Pos_ }
 
@@ -277,6 +270,29 @@ func (ce *CallExpr) String() string {
 }
 
 func (ce *CallExpr) exprNode() {}
+
+func (mce *MethodCallExpr) Pos() Position { return mce.Pos_ }
+func (mce *MethodCallExpr) End() Position {
+	if len(mce.Arguments) == 0 {
+		return mce.Method.End()
+	}
+
+	return mce.Arguments[len(mce.Arguments)-1].End()
+}
+func (mce *MethodCallExpr) String() string {
+	var args []string
+	for _, a := range mce.Arguments {
+		prefix := ""
+		if a.Mut {
+			prefix = "mut "
+		} else if a.Own {
+			prefix = "own "
+		}
+		args = append(args, prefix+a.Argument.String())
+	}
+	return fmt.Sprintf("%s.%s(%s)", mce.Object.String(), mce.Method, strings.Join(args, ", "))
+}
+func (mce *MethodCallExpr) exprNode() {}
 
 func (ca *CallArg) Pos() Position { return ca.Pos_ }
 
@@ -392,4 +408,3 @@ func (ie *IfExpr) String() string {
 }
 
 func (ie *IfExpr) exprNode() {}
-

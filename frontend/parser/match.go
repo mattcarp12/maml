@@ -43,9 +43,6 @@ func (p *Parser) parseMatchExpression() ast.Expr {
 			continue
 		}
 		arms = append(arms, *arm)
-		// Advance past the arm body's closing '}' to reach next 'case' or match '}'
-		p.nextToken()
-		p.skipNewlines()
 	}
 
 	end := p.curPos()
@@ -75,15 +72,40 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 		return nil
 	}
 
-	// Skip any newlines between the pattern and the arm's '{'
+	if !p.expectPeek(token.COLON) {
+		return nil
+	}
+
 	for p.peekToken.Type == token.NEWLINE {
 		p.nextToken()
 	}
 
-	if !p.expectPeek(token.LBRACE) {
+	var body *ast.BlockStmt
+
+	if p.peekToken.Type == token.YIELD {
+		p.nextToken() // step onto '=>'
+		yieldPos := p.curPos()
+		p.nextToken() // step onto expression
+
+		expr := p.parseExpression(LOWEST)
+		if expr == nil {
+			return nil
+		}
+		p.expectStatementEnd()
+
+		body = &ast.BlockStmt{
+			Statements: []ast.Stmt{&ast.YieldStmt{Value: expr, Pos_: yieldPos}},
+			Pos_:       yieldPos,
+			End_:       p.curPos(),
+		}
+
+	} else if p.expectPeek(token.LBRACE) {
+		body = p.parseBlockStmt()
+		p.nextToken() // NEW: Step past the block's closing '}' so we sit correctly for skipNewlines!
+	} else {
+		p.addError(fmt.Sprintf("expected '{' or '=>' after match arm colon, got %s", p.peekToken.Type))
 		return nil
 	}
-	body := p.parseBlockStmt()
 
 	p.skipNewlines()
 
@@ -105,19 +127,36 @@ func (p *Parser) parsePattern() ast.Pattern {
 			return &ast.WildcardPattern{Pos_: pos}
 		}
 
-		// case Circle(c) — single binding
+		// case Tuple(x, y) — tuple destructuring
 		if p.peekToken.Type == token.LPAREN {
 			p.nextToken() // onto '('
-			p.nextToken() // onto binding name
-			if p.curToken.Type != token.IDENT {
-				p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
-				return nil
+
+			var bindings []*ast.Identifier
+
+			// Parse comma-separated bindings if it's not empty ()
+			if p.peekToken.Type != token.RPAREN {
+				p.nextToken() // onto first binding
+				if p.curToken.Type != token.IDENT {
+					p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
+					return nil
+				}
+				bindings = append(bindings, &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()})
+
+				for p.peekToken.Type == token.COMMA {
+					p.nextToken() // onto ','
+					p.nextToken() // onto next binding name
+					if p.curToken.Type != token.IDENT {
+						p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
+						return nil
+					}
+					bindings = append(bindings, &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()})
+				}
 			}
-			binding := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+
 			if !p.expectPeek(token.RPAREN) {
 				return nil
 			}
-			return &ast.VariantPattern{Name: name, Binding: binding, Pos_: pos}
+			return &ast.VariantPattern{Name: name, TupleBindings: bindings, Pos_: pos}
 		}
 
 		// case Circle{radius: r} — field destructuring.
@@ -130,7 +169,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 
 			if p.peekToken.Type == token.COLON {
 				// Confirmed field destructuring — parse all field bindings
-				var fieldBindings []ast.VariantPatternField
+				fieldBindings := []ast.VariantPatternField{}
 				for {
 					if p.curToken.Type != token.IDENT {
 						p.addError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
@@ -163,7 +202,7 @@ func (p *Parser) parsePattern() ast.Pattern {
 		}
 
 		// Unit variant: case Point
-		return &ast.VariantPattern{Name: name, Binding: nil, Pos_: pos}
+		return &ast.VariantPattern{Name: name, TupleBindings: nil, Pos_: pos}
 	case token.INT:
 		intVal, _ := strconv.ParseInt(p.curToken.Literal, 10, 64)
 		lit := &ast.IntLiteral{Value: intVal, Pos_: pos}

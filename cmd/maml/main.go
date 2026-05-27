@@ -22,6 +22,10 @@ func main() {
 		runCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
+	case "dump-ast":
+		dumpAstCmd(os.Args[2:])
+	case "dump-tast":
+		dumpTastCmd(os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -33,9 +37,10 @@ func printUsage() {
 	fmt.Println("MAML Compiler")
 	fmt.Println("Usage: maml <command> [options] <file>")
 	fmt.Println("\nCommands:")
-	fmt.Println("  build   Compile a .maml file into a native executable")
-	fmt.Println("  run     Compile and immediately run a .maml file")
-	fmt.Println("  check   Run syntax and semantic checks")
+	fmt.Println("  build      Compile a .maml file into a native executable")
+	fmt.Println("  run        Compile and immediately run a .maml file")
+	fmt.Println("  check      Run syntax and semantic checks")
+	fmt.Println("  dump-ast   Parse file and output JSON serialized AST to stdout") // NEW
 }
 
 func buildCmd(args []string) {
@@ -93,4 +98,38 @@ func checkCmd(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("✅ All checks passed.")
+}
+
+func dumpAstCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: maml dump-ast <file.maml>")
+		os.Exit(1)
+	}
+
+	pipeline := driver.New(driver.Config{})
+	jsonBytes, err := pipeline.DumpAST(args[0])
+	if err != nil {
+		fmt.Printf("❌ AST Generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print directly to standard output so users can redirect it to a file
+	fmt.Println(string(jsonBytes))
+}
+
+func dumpTastCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: maml dump-tast <file.maml>")
+		os.Exit(1)
+	}
+
+	pipeline := driver.New(driver.Config{})
+	jsonBytes, err := pipeline.DumpTAST(args[0])
+	if err != nil {
+		fmt.Printf("❌ TAST Generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print directly to standard output so users can redirect it to a file
+	fmt.Println(string(jsonBytes))
 }

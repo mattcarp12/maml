@@ -102,7 +102,7 @@ func (e *Emitter) marshalInstruction(inst Instruction) map[string]interface{} {
 	case *TempDeclInst:
 		return map[string]interface{}{"node_type": "TempDeclInst", "name": i.Name, "maml_type": e.marshalType(i.Type)}
 	case *AssignInst:
-		return map[string]interface{}{"node_type": "AssignInst", "dst": i.Dst, "expr": e.marshalExpr(i.Expr)}
+		return map[string]interface{}{"node_type": "AssignInst", "dst": i.Dst, "expr": e.marshalExpr(i.RValue)}
 	case *CopyInst:
 		return map[string]interface{}{"node_type": "CopyInst", "dst": i.Dst, "src": i.Src}
 	case *MoveInst:
@@ -117,6 +117,13 @@ func (e *Emitter) marshalInstruction(inst Instruction) map[string]interface{} {
 		return map[string]interface{}{"node_type": "MutBorrowInst", "src": i.Src}
 	case *CoroPrologueInst:
 		return map[string]interface{}{"node_type": "CoroPrologueInst"}
+	case *IndexAssignInst:
+		return map[string]interface{}{
+			"node_type": "IndexAssignInst",
+			"target":    i.Target,
+			"index":     e.marshalExpr(i.Index),
+			"value":     e.marshalExpr(i.Value),
+		}
 	}
 	return nil
 }

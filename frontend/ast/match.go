@@ -92,9 +92,9 @@ type VariantPattern struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 
-	Name    string                `json:"name"`
-	Binding *Identifier           `json:"binding,omitempty"`
-	Fields  []VariantPatternField `json:"fields,omitempty"`
+	Name          string                `json:"name"`
+	TupleBindings []*Identifier         `json:"binding,omitempty"`
+	Fields        []VariantPatternField `json:"fields,omitempty"`
 }
 
 // =============================================================================
@@ -106,27 +106,20 @@ type VariantPattern struct {
 // -----------------------------------------------------------------------------
 
 func (m *MatchExpr) Pos() Position { return m.Pos_ }
-
 func (m *MatchExpr) End() Position { return m.End_ }
-
 func (m *MatchExpr) String() string {
 	var out bytes.Buffer
-
 	out.WriteString("match ")
 	out.WriteString(m.Subject.String())
 	out.WriteString(" {\n")
-
 	for _, arm := range m.Arms {
 		out.WriteString("\t")
 		out.WriteString(arm.String())
 		out.WriteString("\n")
 	}
-
 	out.WriteString("}")
-
 	return out.String()
 }
-
 func (m *MatchExpr) exprNode() {}
 
 // -----------------------------------------------------------------------------
@@ -187,10 +180,16 @@ func (v *VariantPattern) String() string {
 
 	out.WriteString(v.Name)
 
-	if v.Binding != nil {
-		out.WriteString("(")
-		out.WriteString(v.Binding.String())
-		out.WriteString(")")
+	if len(v.TupleBindings) > 0 {
+		var bindings []string
+
+		for _, f := range v.TupleBindings {
+			bindings = append(bindings, f.String())
+		}
+
+		out.WriteString(" ( ")
+		out.WriteString(strings.Join(bindings, ", "))
+		out.WriteString(" )")
 	}
 
 	if len(v.Fields) > 0 {

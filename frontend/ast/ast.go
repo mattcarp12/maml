@@ -56,3 +56,17 @@ type Pattern interface {
 	Node
 	patternNode()
 }
+
+// =============================================================================
+// Error Handling
+// =============================================================================
+
+type CompileError struct {
+	Stage string // "Lexer", "Parser", "Sema", or "Codegen"
+	Pos   Position
+	Msg   string
+}
+
+func (e CompileError) Error() string {
+	return fmt.Sprintf("[%s Error] at %d:%d: %s", e.Stage, e.Pos.Line, e.Pos.Col, e.Msg)
+}

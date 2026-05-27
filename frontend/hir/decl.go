@@ -8,14 +8,14 @@ import (
 )
 
 type Param struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Name   string
 	Type   types.Type
 	Symbol *types.Symbol
 }
 
 type FnDecl struct {
-	Pos_       Position
+	Pos_       Position `json:"-"`
 	Name       string
 	Params     []*Param
 	ReturnType types.Type
@@ -25,7 +25,7 @@ type FnDecl struct {
 }
 
 type TypeDecl struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Name   *Identifier
 	Type   types.Type
 	Symbol *types.Symbol

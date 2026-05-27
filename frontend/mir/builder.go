@@ -2,6 +2,7 @@ package mir
 
 import (
 	"github.com/mattcarp12/maml/frontend/hir"
+
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -33,13 +34,19 @@ func Build(fn *hir.FnDecl) *Graph {
 	// =========================================================================
 	// Coroutine Initialization
 	// =========================================================================
-	// If the function is async, the absolute first instruction of the entry
-	// block must be the coroutine frame allocation.
 	if fn.IsAsync {
 		entry.Statements = append(entry.Statements, &CoroPrologueInst{})
 	}
 
-	b.buildBlockStmt(fn.Body, entry)
+	// Traverse the AST function body
+	finalBlock := b.buildBlockStmt(fn.Body, entry)
+
+	// FIXED: If the trailing basic block was left completely open/unterminated,
+	// inject an implicit ReturnTerminator to seal the block control-flow sequence cleanly.
+	if finalBlock != nil && finalBlock.Terminator == nil {
+		finalBlock.Terminator = &ReturnTerminator{}
+	}
+
 	return b.graph
 }
 
@@ -115,7 +122,7 @@ func (b *Builder) buildReturnStmt(stmt *hir.ReturnStmt, current *BasicBlock) *Ba
 		var flatRet hir.Expr
 		flatRet, current = b.flattenExpr(stmt.Value, current)
 		// Store the evaluated return value in an explicit return register
-		current.Statements = append(current.Statements, &AssignInst{Dst: "_ret", Expr: flatRet})
+		current.Statements = append(current.Statements, &AssignInst{Dst: "_ret", RValue: flatRet})
 	}
 
 	current.Terminator = &ReturnTerminator{}
@@ -157,19 +164,70 @@ func (b *Builder) buildDeclareStmt(stmt *hir.DeclareStmt, current *BasicBlock) *
 	return current
 }
 
-// buildAssignStmt translates a reassignment into explicit memory ops.
+// buildAssignStmt translates a reassignment into explicit memory ops without re-allocating.
 func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *BasicBlock {
+	// Guard against uninitialized or partially empty statements
+	if stmt == nil || stmt.LValue == nil || stmt.RValue == nil {
+		return current
+	}
+
+	// Intercept array/slice index mutations before they are flattened into read evaluations
+	if idx, ok := stmt.LValue.(*hir.IndexExpr); ok {
+		flatTarget, current := b.flattenExpr(idx.Left, current)
+		flatIdx, current := b.flattenExpr(idx.Index, current)
+		flatRHS, current := b.flattenExpr(stmt.RValue, current)
+
+		targetName := ""
+		if id, isId := flatTarget.(*hir.Identifier); isId {
+			targetName = id.Value
+		} else {
+			targetName = flatTarget.String()
+		}
+
+		current.Statements = append(current.Statements, &IndexAssignInst{
+			Target: targetName,
+			Index:  flatIdx,
+			Value:  flatRHS,
+		})
+		return current
+	}
+
 	flatLHS, current := b.flattenExpr(stmt.LValue, current)
 	flatRHS, current := b.flattenExpr(stmt.RValue, current)
 
 	dstName := ""
-	if id, ok := flatLHS.(*hir.Identifier); ok {
-		dstName = id.Value
-	} else {
-		dstName = flatLHS.String() // Fallback for complex lowered pointers
+	var dstType types.Type = types.UnknownType{}
+
+	// 1. Extract the true variable name and its type safely
+	if flatLHS != nil {
+		if id, ok := flatLHS.(*hir.Identifier); ok && id != nil {
+			dstName = id.Value
+			dstType = id.Type // Preserves exact structural type (Struct, SumType, etc.)
+		} else {
+			dstName = flatLHS.String() // Fallback for complex lowered pointers or stringified symbols
+			dstType = types.UnknownType{}
+		}
 	}
 
-	b.emitMemoryTransfer(dstName, flatRHS, nil, current)
+	// Failsafe guard if destination evaluation completely dropped out
+	if dstName == "" {
+		return current
+	}
+
+	// 2. ABI Routing: Perform direct transfers instead of wrapping in a TempDeclInst
+	if ident, isIdent := flatRHS.(*hir.Identifier); isIdent && ident != nil {
+		if dstType != nil && dstType.IsReferenceType() {
+			// Affine transfer of ownership
+			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: ident.Value})
+		} else {
+			// Primitive duplication
+			current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: ident.Value})
+		}
+	} else if flatRHS != nil {
+		// Pure flat expression evaluation assignment
+		current.Statements = append(current.Statements, &AssignInst{Dst: dstName, RValue: flatRHS})
+	}
+
 	return current
 }
 
@@ -192,6 +250,6 @@ func (b *Builder) emitMemoryTransfer(dst string, flatRHS hir.Expr, dstSym *types
 			current.Statements = append(current.Statements, &CopyInst{Dst: dst, Src: ident.Value})
 		}
 	} else {
-		current.Statements = append(current.Statements, &AssignInst{Dst: dst, Expr: flatRHS})
+		current.Statements = append(current.Statements, &AssignInst{Dst: dst, RValue: flatRHS})
 	}
 }

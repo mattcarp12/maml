@@ -28,12 +28,23 @@ func (i *TempDeclInst) String() string { return fmt.Sprintf("let %s: %s", i.Name
 
 // AssignInst assigns an evaluated, flattened expression to a destination.
 type AssignInst struct {
-	Dst  string
-	Expr hir.Expr // Flattened right-hand side (e.g., CallExpr, InfixExpr with temp args)
+	Dst    string
+	RValue hir.Expr
 }
 
-func (AssignInst) isInstruction()    {}
-func (i *AssignInst) String() string { return fmt.Sprintf("%s = %s", i.Dst, i.Expr.String()) }
+func (AssignInst) isInstruction() {}
+func (i *AssignInst) String() string {
+	return fmt.Sprintf("%s = %s", i.RValue.String(), i.RValue.String())
+}
+
+type IndexAssignInst struct {
+	Target string
+	Index  hir.Expr
+	Value  hir.Expr
+}
+
+func (i *IndexAssignInst) isInstruction() {}
+func (i *IndexAssignInst) String() string { return "index_set " + i.Target }
 
 // =============================================================================
 // Explicit Memory Instructions (The 3-Layer Model)

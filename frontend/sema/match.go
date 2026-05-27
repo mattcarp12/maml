@@ -92,31 +92,30 @@ func (a *Analyzer) buildPattern(pat ast.Pattern, subjectType types.Type) tast.Pa
 }
 
 func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.Type) *tast.VariantPattern {
+	if p == nil {
+		return nil
+	}
+
+	// 1. FIX THE BUG: Look up the variant using the PATTERN NAME, not the variable binding!
+	variantName := p.Name
+	variantIdent := &tast.Identifier{Pos_: p.Pos_, Value: variantName}
+
 	sumType, ok := subjectType.(*types.SumType)
 	if !ok {
 		if !types.IsUnknown(subjectType) {
-			a.errorf(p.Pos(), "cannot match variant pattern on non-sum type '%s'", subjectType.String())
+			a.errorf(p.Pos_, "cannot match variant pattern on non-sum type '%s'", subjectType.String())
 		}
-		return &tast.VariantPattern{
-			Pos_:    p.Pos_,
-			End_:    p.End_,
-			Variant: &tast.Identifier{Pos_: p.Pos_, Value: p.Binding.Value},
-			Type:    types.UnknownType{},
-		}
+		variantIdent.Type = types.UnknownType{}
+		return &tast.VariantPattern{Pos_: p.Pos_, End_: p.End_, Variant: variantIdent, Type: types.UnknownType{}}
 	}
 
-	variant := sumType.GetVariant(p.Binding.Value)
+	variant := sumType.GetVariant(variantName)
 	if variant == nil {
-		a.errorf(p.Pos(), "variant '%s' does not exist on sum type '%s'", p.Binding.Value, sumType.BaseName)
-		return &tast.VariantPattern{
-			Pos_:    p.Pos_,
-			End_:    p.End_,
-			Variant: &tast.Identifier{Pos_: p.Pos_, Value: p.Binding.Value},
-			Type:    sumType,
-		}
+		a.errorf(p.Pos_, "variant '%s' does not exist on sum type '%s'", variantName, sumType.BaseName)
+		variantIdent.Type = sumType
+		return &tast.VariantPattern{Pos_: p.Pos_, End_: p.End_, Variant: variantIdent, Type: sumType}
 	}
 
-	// This symbol is permanently bound to the pattern for the backend
 	sym := &types.Symbol{
 		Kind:    types.VariantSymbol,
 		Name:    variant.Name,
@@ -124,7 +123,45 @@ func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.
 		SumType: sumType,
 		Variant: variant,
 	}
+	variantIdent.Symbol = sym
+	variantIdent.Type = sumType
 
+	// 2. Handle Tuple Destructuring (NEW!)
+	var tastTupleBindings []*tast.Identifier
+	if len(p.TupleBindings) > 0 {
+		// Arity Check: Did they provide the right number of variables?
+		if len(p.TupleBindings) != len(variant.TupleTypes) {
+			a.errorf(p.Pos_, "wrong number of bindings for tuple variant '%s': expected %d, got %d",
+				variantName, len(variant.TupleTypes), len(p.TupleBindings))
+		}
+
+		for i, bindingAST := range p.TupleBindings {
+			bindingName := bindingAST.Value
+			var fieldType types.Type = types.UnknownType{}
+
+			if i < len(variant.TupleTypes) {
+				fieldType = variant.TupleTypes[i]
+			}
+
+			// Register the destructured variable into the local scope so the match body can use it!
+			bindingSym := &types.Symbol{
+				Kind:    types.VarSymbol,
+				Name:    bindingName,
+				Type:    fieldType,
+				Mutable: false, // Pattern bindings are immutable by default in Rust/MAML
+			}
+			a.scope.symbols[bindingName] = bindingSym
+
+			tastTupleBindings = append(tastTupleBindings, &tast.Identifier{
+				Pos_:   bindingAST.Pos(),
+				Value:  bindingName,
+				Type:   fieldType,
+				Symbol: bindingSym,
+			})
+		}
+	}
+
+	// 3. Handle Struct Destructuring (Existing code, updated slightly)
 	var tastFields []tast.VariantPatternField
 	for _, f := range p.Fields {
 		var fieldType types.Type = types.UnknownType{}
@@ -136,36 +173,41 @@ func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.
 		}
 
 		if types.IsUnknown(fieldType) {
-			a.errorf(p.Pos(), "field '%s' does not exist on variant '%s'", f.Field, variant.Name)
+			a.errorf(p.Pos_, "field '%s' does not exist on variant '%s'", f.Field, variant.Name)
 		}
 
-		// CREATE THE BINDING AND INJECT IT DIRECTLY INTO THE LOCAL SCOPE
-		bindingSym := &types.Symbol{
-			Kind:    types.VarSymbol,
-			Name:    f.Binding.Value,
-			Type:    fieldType,
-			Mutable: false, // Extracted pattern bindings are immutable
-		}
-		a.scope.symbols[f.Binding.Value] = bindingSym
-
-		tastFields = append(tastFields, tast.VariantPatternField{
-			Field: f.Field,
-			Binding: &tast.Identifier{
+		var fieldBindingIdent *tast.Identifier
+		if f.Binding != nil {
+			bindingName := f.Binding.Value
+			bindingSym := &types.Symbol{
+				Kind:    types.VarSymbol,
+				Name:    bindingName,
+				Type:    fieldType,
+				Mutable: false,
+			}
+			a.scope.symbols[bindingName] = bindingSym
+			fieldBindingIdent = &tast.Identifier{
 				Pos_:   f.Binding.Pos_,
-				Value:  f.Binding.Value,
+				Value:  bindingName,
 				Type:   fieldType,
 				Symbol: bindingSym,
-			},
+			}
+		}
+
+		tastFields = append(tastFields, tast.VariantPatternField{
+			Field:   f.Field,
+			Binding: fieldBindingIdent,
 		})
 	}
 
 	return &tast.VariantPattern{
-		Pos_:    p.Pos_,
-		End_:    p.End_,
-		Variant: &tast.Identifier{Pos_: p.Pos_, Value: p.Binding.Value, Type: sumType, Symbol: sym},
-		Fields:  tastFields,
-		Type:    sumType,
-		Symbol:  sym,
+		Pos_:          p.Pos_,
+		End_:          p.End_,
+		Variant:       variantIdent,
+		TupleBindings: tastTupleBindings, // Attached to TAST!
+		Fields:        tastFields,
+		Type:          sumType,
+		Symbol:        sym,
 	}
 }
 
@@ -191,8 +233,10 @@ func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType types.
 
 	seen := make(map[string]bool)
 	for _, arm := range e.Arms {
-		if vp, ok := arm.Pattern.(*ast.VariantPattern); ok {
-			seen[vp.Binding.Value] = true
+		if vp, ok := arm.Pattern.(*ast.VariantPattern); ok && vp != nil {
+			if vp.Name != "" {
+				seen[vp.Name] = true
+			}
 		}
 	}
 

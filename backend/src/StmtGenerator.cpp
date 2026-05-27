@@ -25,25 +25,108 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     llvm::Type *ty = llvmTypeFor(ctx, stmt["maml_type"]);
     std::string name = stmt["name"].get<std::string>();
 
-    // Allocate the temporary register on the stack
-    llvm::AllocaInst *alloca = ctx.Builder->CreateAlloca(ty, nullptr, name);
+    // 1. Get the current function and its entry block
+    llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+    llvm::BasicBlock &entryBlock = parentFn->getEntryBlock();
 
-    // Bind it to the flat function-level scope
+    // 2. Create a temporary builder pointing to the top of the entry block
+    llvm::IRBuilder<> TmpBuilder(&entryBlock, entryBlock.begin());
+
+    // 3. Emit the AllocaInst safely at the entry block
+    llvm::AllocaInst *alloca = TmpBuilder.CreateAlloca(ty, nullptr, name);
+
+    // 4. Bind it to the flat function-level scope
     ctx.SymbolEnv.back()[name] = alloca;
     return;
   }
 
   if (nodeType == "AssignInst") {
     std::string dst = stmt["dst"].get<std::string>();
-    llvm::Value *targetPtr = ctx.resolveSymbol(dst);
+    llvm::Value *targetPtr = ctx.resolveSymbol(dst);  // This is an AllocaInst* (pointer)
 
     // Evaluate the flat, non-nested Right-Hand Side expression
     llvm::Value *rhsVal = evaluateExpression(ctx, stmt["expr"]);
 
     if (targetPtr && rhsVal) {
-      ctx.Builder->CreateStore(rhsVal, targetPtr);
+      llvm::Type *targetTy = nullptr;
+
+      // Attempt to extract the type from the stack allocation
+      if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetPtr)) {
+        targetTy = alloca->getAllocatedType();
+      }
+      // FIXED: Fallback for heap-allocated opaque pointers (RefAllocInst)
+      else if (stmt.contains("expr") && stmt["expr"].contains("maml_type") && !stmt["expr"]["maml_type"].is_null()) {
+        targetTy = llvmTypeFor(ctx, stmt["expr"]["maml_type"]);
+      }
+
+      // Check if the target is an aggregate type (Struct, String, or Array)
+      if (targetTy && (targetTy->isStructTy() || targetTy->isArrayTy())) {
+        // CASE 1: RHS is an aggregate pointer (like a variable reference). We must memcpy.
+        if (rhsVal->getType()->isPointerTy()) {
+          llvm::DataLayout DL(ctx.Module.get());
+          uint64_t sizeBytes = DL.getTypeAllocSize(targetTy);
+
+          ctx.Builder->CreateMemCpy(targetPtr, llvm::MaybeAlign(), rhsVal, llvm::MaybeAlign(), sizeBytes);
+        }
+        // CASE 2: RHS is a first-class aggregate value (like a ConstantStruct literal). Store directly!
+        else {
+          ctx.Builder->CreateStore(rhsVal, targetPtr);
+        }
+      } else {
+        // Standard primitive path
+        ctx.Builder->CreateStore(rhsVal, targetPtr);
+      }
+    }
+    return;
+  }
+
+  if (nodeType == "IndexAssignInst") {
+    std::string target = stmt["target"].get<std::string>();
+    llvm::Value *targetPtr = ctx.resolveSymbol(target);
+    llvm::Value *indexVal = evaluateExpression(ctx, stmt["index"]);
+    llvm::Value *rhsVal = evaluateExpression(ctx, stmt["value"]);
+
+    if (!targetPtr) return;
+
+    // Resolve the actual element type from the JSON expression
+    llvm::Type *elemTy = nullptr;
+    if (stmt.contains("value") && stmt["value"].contains("maml_type")) {
+      elemTy = llvmTypeFor(ctx, stmt["value"]["maml_type"]);
+    } else if (!rhsVal->getType()->isPointerTy()) {
+      elemTy = rhsVal->getType();
     } else {
-      ctx.Error.fatal("AssignInst failed: target pointer or rhs value is null", stmt);
+      ctx.Error.fatal("IndexSetInst requires type metadata for opaque pointers", stmt);
+      return;
+    }
+
+    llvm::Type *targetTy = nullptr;
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetPtr)) {
+      targetTy = alloca->getAllocatedType();
+    }
+
+    llvm::Value *elemPtr = nullptr;
+    if (targetTy && targetTy->isArrayTy()) {
+      elemPtr = ctx.Builder->CreateGEP(targetTy, targetPtr, {ctx.Builder->getInt32(0), indexVal}, "array_idx_set");
+    } else if (targetTy) {
+      // It is a slice. Load the heap data pointer from index 1.
+      llvm::Value *dataPtr =
+          ctx.Builder->CreateGEP(targetTy, targetPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)});
+      llvm::Value *data = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtr);
+      // GEP using the explicit element type
+      elemPtr = ctx.Builder->CreateGEP(elemTy, data, indexVal, "slice_idx_set");
+    }
+
+    // Safely route memory copying based on whether RHS is a pointer or a direct value
+    if (elemTy && (elemTy->isStructTy() || elemTy->isArrayTy())) {
+      if (rhsVal->getType()->isPointerTy()) {
+        llvm::DataLayout DL(ctx.Module.get());
+        uint64_t sizeBytes = DL.getTypeAllocSize(elemTy);
+        ctx.Builder->CreateMemCpy(elemPtr, llvm::MaybeAlign(), rhsVal, llvm::MaybeAlign(), sizeBytes);
+      } else {
+        ctx.Builder->CreateStore(rhsVal, elemPtr);
+      }
+    } else {
+      ctx.Builder->CreateStore(rhsVal, elemPtr);
     }
     return;
   }
@@ -142,43 +225,75 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
-  if (nodeType == "RefAllocInst") {
-    std::string dst = stmt["dst"].get<std::string>();
-    llvm::Type *valTy = llvmTypeFor(ctx, stmt["maml_type"]);
-    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+  // ===========================================================================
+  // Unified ARC Handlers
+  // ===========================================================================
+  if (nodeType == "RefIncInst" || nodeType == "RefDecInst") {
+    std::string src = stmt["src"].get<std::string>();
+    llvm::Value *targetPtr = ctx.resolveSymbol(src);
+    if (!targetPtr) return;
 
-    if (!dstPtr) return;
+    llvm::Value *opPtr = nullptr;
 
-    // Calculate exact byte size needed for the struct/array
-    llvm::DataLayout DL(ctx.Module.get());
-    uint64_t allocSize = DL.getTypeAllocSize(valTy);
+    // 1. Handle Escaped Heap Variables (RefAllocInst)
+    if (llvm::isa<llvm::CallInst>(targetPtr)) {
+      // The variable itself was dynamically allocated.
+      // We directly manage its root heap block pointer.
+      opPtr = targetPtr;
+    }
+    // 2. Handle Local Stack Variables (TempDeclInst)
+    else if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetPtr)) {
+      llvm::Type *allocTy = alloca->getAllocatedType();
 
-    // Invoke maml_alloc(size)
-    llvm::FunctionCallee mamlAlloc = ctx.Module->getOrInsertFunction(
-        rt::ALLOC, llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context),
-                                           {llvm::Type::getInt64Ty(ctx.Context)}, false));
+      // Unpack the heap reference pointer from slice/string/array aggregates
+      if (allocTy->isStructTy() || allocTy->isArrayTy()) {
+        llvm::Value *gep = ctx.Builder->CreateGEP(allocTy, targetPtr,
+                                                  {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}, "heap_ptr_gep");
+        opPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), gep, "heap_ptr_load");
+      } else {
+        opPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), targetPtr, "ptr_load");
+      }
+    }
+    // 3. Fallback for Opaque Pointers and Function Arguments
+    else {
+      opPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), targetPtr, "ptr_load");
+    }
 
-    llvm::Value *heapPtr = ctx.Builder->CreateCall(
-        mamlAlloc, {llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), allocSize)}, "heap_alloc");
+    // Route to the appropriate Zig runtime hook
+    llvm::Function *arcFn = ctx.Module->getFunction(nodeType == "RefIncInst" ? maml::rt::RETAIN : maml::rt::RELEASE);
 
-    ctx.Builder->CreateStore(heapPtr, dstPtr);
+    if (arcFn) {
+      ctx.Builder->CreateCall(arcFn, {opPtr});
+    }
     return;
   }
 
-  if (nodeType == "RefIncInst" || nodeType == "RefDecInst") {
-    std::string src = stmt["src"].get<std::string>();
-    llvm::Value *srcPtr = ctx.resolveSymbol(src);
-    if (!srcPtr) return;
+  if (nodeType == "RefAllocInst") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Type *valTy = llvmTypeFor(ctx, stmt["maml_type"]);
 
-    // The local variable holds a heap pointer; we must load that pointer to pass it to the runtime
-    llvm::Type *ptrTy = llvm::PointerType::getUnqual(ctx.Context);
-    llvm::Value *heapPtr = ctx.Builder->CreateLoad(ptrTy, srcPtr, src + "_load");
+    // 1. Create the local stack variable to hold the reference
+    llvm::AllocaInst *dstAlloca = ctx.Builder->CreateAlloca(valTy, nullptr, dst);
 
-    const char *hook = (nodeType == "RefIncInst") ? rt::RETAIN : rt::RELEASE;
-    llvm::FunctionCallee refFn = ctx.Module->getOrInsertFunction(
-        hook, llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {ptrTy}, false));
+    // 2. Register the local variable in the current scope
+    ctx.SymbolEnv.back()[dst] = dstAlloca;
 
-    ctx.Builder->CreateCall(refFn, {heapPtr});
+    // 3. Calculate the required heap allocation size in bytes
+    llvm::DataLayout DL(ctx.Module.get());
+    uint64_t size = DL.getTypeAllocSize(valTy);
+    llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), size);
+
+    // 4. Safely get or insert the declaration for maml_alloc
+    llvm::FunctionCallee allocFn = ctx.Module->getOrInsertFunction(
+        rt::ALLOC, llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context),
+                                           {llvm::Type::getInt64Ty(ctx.Context)}, false));
+
+    // 5. Emit the heap allocation call
+    llvm::Value *heapPtr = ctx.Builder->CreateCall(allocFn, {sizeVal}, dst + "_heap_alloc");
+
+    // 6. Store the heap pointer into the local stack variable
+    ctx.Builder->CreateStore(heapPtr, dstAlloca);
+
     return;
   }
 

@@ -35,13 +35,19 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		flatRight, current := b.flattenExpr(e.Right, current)
 
 		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
-		flatOp := &hir.InfixExpr{Pos_: e.Pos_, Left: flatLeft, Operator: e.Operator, Right: flatRight, Type: e.Type}
-		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, Expr: flatOp})
+		// GUARD: Ensure type is never raw nil
+		allocType := e.Type
+		if allocType == nil {
+			allocType = types.UnknownType{}
+		}
 
-		return &hir.Identifier{Value: tmp, Type: e.Type}, current
+		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: allocType})
 
+		flatOp := &hir.InfixExpr{Pos_: e.Pos_, Left: flatLeft, Operator: e.Operator, Right: flatRight, Type: allocType}
+		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatOp})
+
+		return &hir.Identifier{Value: tmp, Type: allocType}, current
 	case *hir.PrefixExpr:
 		flatRight, current := b.flattenExpr(e.Right, current)
 
@@ -49,7 +55,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
 		flatOp := &hir.PrefixExpr{Pos_: e.Pos_, Operator: e.Operator, Right: flatRight, Type: e.Type}
-		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, Expr: flatOp})
+		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatOp})
 
 		return &hir.Identifier{Value: tmp, Type: e.Type}, current
 
@@ -83,7 +89,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		resumeBlock.Statements = append(resumeBlock.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
 		// Map the resolved value into the temporary register
-		resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{Dst: tmp, Expr: flatTask})
+		resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{Dst: tmp, RValue: flatTask})
 
 		// 6. Execution continues exclusively in the resume block!
 		return &hir.Identifier{Value: tmp, Type: e.Type}, resumeBlock
@@ -95,7 +101,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
 		flatAccess := &hir.FieldAccess{Pos_: e.Pos_, Object: flatObj, Field: e.Field, Type: e.Type}
-		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, Expr: flatAccess})
+		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatAccess})
 
 		return &hir.Identifier{Value: tmp, Type: e.Type}, current
 
@@ -107,7 +113,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
 		flatIndexExpr := &hir.IndexExpr{Pos_: e.Pos_, Left: flatLeft, Index: flatIndex, Type: e.Type}
-		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, Expr: flatIndexExpr})
+		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatIndexExpr})
 
 		return &hir.Identifier{Value: tmp, Type: e.Type}, current
 
@@ -146,24 +152,55 @@ func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (hir.Expr
 		FalseTarget: elseBlock.ID,
 	}
 
-	// 5. Build the 'Then' branch and assign its result to the temporary
-	thenEnd := b.buildBlockStmt(expr.Consequence, thenBlock)
-	if thenEnd != nil {
-		// Find the yield/result of the block (simplified for MIR)
-		// In a full implementation, you extract the block's final evaluated expression here
-		// thenEnd.Statements = append(thenEnd.Statements, &AssignInst{Dst: resultTemp, Expr: thenValue})
+	// Helper inline function to lower a block and bind its final yielded expression to the destination register
+	buildBlockWithYield := func(body *hir.BlockStmt, startBlock *BasicBlock) *BasicBlock {
+		if body == nil {
+			return startBlock
+		}
+		curr := startBlock
+		for i, stmt := range body.Statements {
+			if curr == nil {
+				break
+			}
+			// If this is the final statement in the block, check if it yields an expression value
+			if i == len(body.Statements)-1 {
+				// 1. Handle standard expression statement yields
+				if exprStmt, ok := stmt.(*hir.ExprStmt); ok {
+					var flatVal hir.Expr
+					flatVal, curr = b.flattenExpr(exprStmt.Value, curr)
+					if curr != nil {
+						curr.Statements = append(curr.Statements, &AssignInst{Dst: resultTemp, RValue: flatVal})
+					}
+					continue
+				}
 
+				// 2. FIXED: Handle explicit block values produced by desugared aggregates and match expressions
+				if yieldStmt, ok := stmt.(*hir.YieldStmt); ok {
+					var flatVal hir.Expr
+					flatVal, curr = b.flattenExpr(yieldStmt.Value, curr)
+					if curr != nil {
+						curr.Statements = append(curr.Statements, &AssignInst{Dst: resultTemp, RValue: flatVal})
+					}
+					continue
+				}
+			}
+			curr = b.buildStmt(stmt, curr)
+		}
+		return curr
+	}
+
+	// 5. Build the 'Then' branch with expression evaluation tracking
+	thenEnd := buildBlockWithYield(expr.Consequence, thenBlock)
+	if thenEnd != nil {
 		if thenEnd.Terminator == nil {
 			thenEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 		}
 	}
 
-	// 6. Build the 'Else' branch and assign its result
+	// 6. Build the 'Else' branch with expression evaluation tracking
 	if expr.Alternative != nil {
-		elseEnd := b.buildBlockStmt(expr.Alternative, elseBlock)
+		elseEnd := buildBlockWithYield(expr.Alternative, elseBlock)
 		if elseEnd != nil {
-			// elseEnd.Statements = append(elseEnd.Statements, &AssignInst{Dst: resultTemp, Expr: elseValue})
-
 			if elseEnd.Terminator == nil {
 				elseEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 			}
@@ -214,11 +251,20 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *
 		// 4. ABI Lowering & Capability Enforcement
 		if arg.Own {
 			// Permanent Ownership Transfer
-			current.Statements = append(current.Statements, &MoveInst{Dst: argTmp, Src: srcName})
+			current.Statements = append(current.Statements, &MoveInst{
+				Dst: argTmp,
+				Src: srcName,
+			})
 		} else if arg.Mut {
-			// Temporary Exclusivity Lock
-			current.Statements = append(current.Statements, &MutBorrowInst{Src: srcName})
-			current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, Expr: flatArg})
+			// 1. Emit the zero-cost exclusivity marker for the Frontend
+			current.Statements = append(current.Statements, &MutBorrowInst{
+				Src: srcName,
+			})
+			// 2. Emit the actual structural routing for the Backend
+			current.Statements = append(current.Statements, &AssignInst{
+				Dst:    argTmp,
+				RValue: &hir.Identifier{Value: srcName, Type: argType},
+			})
 		} else {
 			// Standard Borrow or Primitive Copy
 			isPrimitive := false
@@ -234,7 +280,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *
 			} else {
 				// Immutable borrow passes a reference pointer.
 				// No RefInc is needed because the call scope is strictly bound to the caller.
-				current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, Expr: flatArg})
+				current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, RValue: flatArg})
 			}
 		}
 
@@ -254,7 +300,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
 	flatCall := &hir.CallExpr{Pos_: e.Pos_, Function: flatFn, Arguments: flatArgs, Type: e.Type}
-	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, Expr: flatCall})
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatCall})
 
 	return &hir.Identifier{Value: tmp, Type: e.Type}, current
 }

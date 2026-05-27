@@ -14,6 +14,7 @@ func newGlobalScope() *Scope {
 		types:   make(map[string]types.Type),
 	}
 
+	// Standard Output
 	global.symbols["puts"] = &types.Symbol{
 		Kind:    types.FuncSymbol,
 		Name:    "puts",
@@ -21,6 +22,26 @@ func newGlobalScope() *Scope {
 		Type: &types.FunctionType{
 			Params:     []types.Type{types.StringType{}},
 			ParamModes: []types.ParamMode{types.ParamBorrow},
+			Return:     types.IntType{},
+		},
+	}
+
+	// FIXED: Register Async Runtime Hooks
+	global.symbols["spawn"] = &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "spawn",
+		Type: &types.FunctionType{
+			Params:     []types.Type{types.TaskType{Base: types.AnyType{}}},
+			ParamModes: []types.ParamMode{types.ParamBorrow},
+			Return:     types.UnitType{},
+		},
+	}
+	global.symbols["run_executor"] = &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "run_executor",
+		Type: &types.FunctionType{
+			Params:     []types.Type{},
+			ParamModes: []types.ParamMode{},
 			Return:     types.IntType{},
 		},
 	}

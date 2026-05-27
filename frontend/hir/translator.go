@@ -16,7 +16,6 @@ type Translator struct {
 	counter int // Used to generate unique temporary variables during aggregate desugaring
 }
 
-// Translate is the entry point for Phase 3.
 func Translate(prog *tast.Program) *Program {
 	t := &Translator{counter: 0}
 	return t.translateProgram(prog)
@@ -127,12 +126,6 @@ func (t *Translator) translateStmt(stmt tast.Stmt) Stmt {
 	case *tast.ContinueStmt:
 		return &ContinueStmt{Pos_: Position{Line: s.Pos_.Line, Col: s.Pos_.Col}}
 
-	case *tast.LoopStmt:
-		return &LoopStmt{
-			Pos_: Position{Line: s.Pos_.Line, Col: s.Pos_.Col},
-			Body: t.translateStmt(s.Body).(*BlockStmt),
-		}
-
 	// --- Syntactic Sugar Diverters ---
 	case *tast.ForStmt:
 		return t.desugarForStmt(s) // Handled in Step 4
@@ -197,84 +190,81 @@ func (t *Translator) translateExpr(expr tast.Expr) Expr {
 
 	// --- Syntactic Sugar Diverters ---
 	case *tast.MatchExpr:
-		return t.desugarMatchExpr(e) // Handled in Step 5
+		return t.desugarMatchExpr(e)
 
 	case *tast.ArrayLiteral, *tast.StructLiteral:
-		return t.desugarAggregate(e) // Handled in Step 6
+		return t.desugarAggregate(e)
 	}
 
 	return nil
 }
 
-
 func (t *Translator) desugarForStmt(s *tast.ForStmt) Stmt {
 	var outerStmts []Stmt
 	pos := Position{Line: s.Pos_.Line, Col: s.Pos_.Col}
 
-	// 1. Emplace the Initialization Statement before the loop
+	// 1. Desugar the Initialization (e.g., mut i := 0)
 	if s.Init != nil {
 		outerStmts = append(outerStmts, t.translateStmt(s.Init))
 	}
 
-	var loopStmts []Stmt
+	// 2. Prepare the Infinite Loop Body
+	loopBody := &BlockStmt{
+		Pos_:       pos,
+		Statements: []Stmt{},
+	}
 
-	// 2. Desugar the Condition: if (!Condition) { break }
+	// 3. Synthesize the Conditional Break: if (!Condition) { break }
 	if s.Condition != nil {
-		condPos := Position{Line: s.Condition.Pos().Line, Col: s.Condition.Pos().Col}
+		cond := t.translateExpr(s.Condition)
 
-		// Invert the condition
+		// Create the logical NOT operator
 		notCond := &PrefixExpr{
-			Pos_:     condPos,
+			Pos_:     pos,
 			Operator: "!",
-			Right:    t.translateExpr(s.Condition),
-			Type:     s.Condition.(*tast.IfExpr).Type, // Fallback safely, but inherently BoolType
-		}
-		// Fallback for type extraction if needed
-		if s.Condition != nil {
-			notCond.Type = types.BoolType{}
+			Right:    cond,
+			Type:     types.BoolType{}, // Condition inverted
 		}
 
 		breakBlock := &BlockStmt{
-			Pos_:       condPos,
-			Statements: []Stmt{&BreakStmt{Pos_: condPos}},
+			Pos_:       pos,
+			Statements: []Stmt{&BreakStmt{Pos_: pos}},
 		}
 
-		ifExpr := &IfExpr{
-			Pos_:        condPos,
-			Condition:   notCond,
-			Consequence: breakBlock,
-			Type:        types.UnitType{}, // Standalone if-blocks yield UnitType
+		// Wrap it in a synthesized IF expression
+		ifCheck := &ExprStmt{
+			Pos_: pos,
+			Value: &IfExpr{
+				Pos_:        pos,
+				Condition:   notCond,
+				Consequence: breakBlock,
+				Alternative: nil,
+				Type:        types.UnitType{},
+			},
 		}
-
-		// Wrap the IfExpr in an ExprStmt so it can live in the block
-		loopStmts = append(loopStmts, &ExprStmt{
-			Pos_:  condPos,
-			Value: ifExpr,
-		})
+		loopBody.Statements = append(loopBody.Statements, ifCheck)
 	}
 
-	// 3. Emplace the Loop Body
+	// 4. Append the actual Loop Body
 	if s.Body != nil {
-		translatedBody := t.translateStmt(s.Body).(*BlockStmt)
-		loopStmts = append(loopStmts, translatedBody.Statements...)
+		translatedBody, ok := t.translateStmt(s.Body).(*BlockStmt)
+		if ok {
+			loopBody.Statements = append(loopBody.Statements, translatedBody.Statements...)
+		}
 	}
 
-	// 4. Emplace the Post-Iteration Statement (e.g., i = i + 1)
+	// 5. Append the Post-Statement (e.g., i = i + 1)
 	if s.Post != nil {
-		loopStmts = append(loopStmts, t.translateStmt(s.Post))
+		loopBody.Statements = append(loopBody.Statements, t.translateStmt(s.Post))
 	}
 
-	// 5. Construct the fundamental infinite LoopStmt
+	// 6. Wrap everything into the final HIR structure
 	loopStmt := &LoopStmt{
 		Pos_: pos,
-		Body: &BlockStmt{
-			Pos_:       pos,
-			Statements: loopStmts,
-		},
+		Body: loopBody,
 	}
 	outerStmts = append(outerStmts, loopStmt)
 
-	// 6. Return a BlockStmt wrapping the Init and the Loop
 	return &BlockStmt{
 		Pos_:       pos,
 		Statements: outerStmts,
@@ -455,17 +445,29 @@ func (t *Translator) desugarAggregate(expr tast.Expr) Expr {
 
 		// Emit sequential assignments for each struct field
 		for _, f := range e.Fields {
+			// FIX: Safely translate the Key Expr into an Identifier
+			var keyIdent *Identifier
+			var keyType types.Type = types.UnknownType{}
+
+			if f.Key != nil {
+				if ident, ok := t.translateExpr(f.Key).(*Identifier); ok {
+					keyIdent = ident
+					keyType = ident.Type
+				}
+			}
+
 			stmts = append(stmts, &AssignStmt{
 				Pos_: pos,
 				LValue: &FieldAccess{
 					Pos_:   pos,
 					Object: &Identifier{Pos_: pos, Value: tmpName, Type: aggType, Symbol: sym},
-					Field:  &Identifier{Pos_: pos, Value: f.Name.Value, Type: f.Name.Type, Symbol: f.Name.Symbol},
-					Type:   f.Name.Type,
+					Field:  keyIdent,
+					Type:   keyType,
 				},
 				RValue: t.translateExpr(f.Value),
 			})
 		}
+
 	}
 
 	// 2. Yield the populated temporary variable

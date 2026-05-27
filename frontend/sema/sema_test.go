@@ -63,10 +63,6 @@ func taskTypeExpr(base ast.TypeExpr) *ast.TaskTypeExpr {
 	return &ast.TaskTypeExpr{Base: base}
 }
 
-func genericTypeExpr(name string, params ...ast.TypeExpr) *ast.GenericType {
-	return &ast.GenericType{Pos_: zpos(), Name: name, Params: params}
-}
-
 // =============================================================================
 // AST statement constructors
 // =============================================================================
@@ -156,7 +152,7 @@ func structLiteralExpr(typeName string, fields ...ast.StructField) *ast.StructLi
 }
 
 func structField(name string, value ast.Expr) ast.StructField {
-	return ast.StructField{Pos_: zpos(), Name: ident(name), Value: value}
+	return ast.StructField{Pos_: zpos(), Key: ident(name), Value: value}
 }
 
 // =============================================================================
@@ -252,19 +248,43 @@ func literalPattern(value ast.Expr) *ast.LiteralPattern {
 	return &ast.LiteralPattern{Pos_: zpos(), Value: value}
 }
 
-// variantPattern builds a VariantPattern. The name is both the `Name` field
-// and the `Binding` identifier, mirroring how the analyser reads it.
+// For Struct and Unit variants (e.g., case Circle{radius: r}: or case None:)
 func variantPattern(variantName string, fields ...ast.VariantPatternField) *ast.VariantPattern {
 	return &ast.VariantPattern{
-		Pos_:    zpos(),
-		Name:    variantName,
-		Binding: ident(variantName),
-		Fields:  fields,
+		Pos_:   zpos(),
+		Name:   variantName,
+		Fields: fields,
+	}
+}
+
+// For Tuple variants (e.g., case Point(x, y):)
+func tupleVariantPattern(variantName string, bindings ...string) *ast.VariantPattern {
+	var tBindings []*ast.Identifier
+	for _, b := range bindings {
+		tBindings = append(tBindings, ident(b))
+	}
+	return &ast.VariantPattern{
+		Pos_:          zpos(),
+		Name:          variantName,
+		TupleBindings: tBindings,
 	}
 }
 
 func variantField(field, binding string) ast.VariantPatternField {
 	return ast.VariantPatternField{Field: field, Binding: ident(binding)}
+}
+
+func mapTypeExpr(key, val ast.TypeExpr) *ast.MapTypeExpr {
+	return &ast.MapTypeExpr{Pos_: zpos(), Key: key, Value: val}
+}
+func vecTypeExpr(base ast.TypeExpr) *ast.VectorTypeExpr {
+	return &ast.VectorTypeExpr{Pos_: zpos(), Base: base}
+}
+func mkTupleVariant(name string, tupleTypes ...ast.TypeExpr) ast.VariantTypeExpr {
+	return ast.VariantTypeExpr{Name: name, TupleFields: tupleTypes}
+}
+func methodCallExpr(obj ast.Expr, method string, args ...ast.CallArg) *ast.MethodCallExpr {
+	return &ast.MethodCallExpr{Pos_: zpos(), Object: obj, Method: ident(method), Arguments: args}
 }
 
 // =============================================================================
@@ -400,9 +420,9 @@ func TestScope_InnerScopeSeesOuterVariable(t *testing.T) {
 	program := makeProgram(
 		mainFn(
 			declareStmt("outer", false, intLit(42)),
-			exprStmt(blockStmt(
-				exprStmt(ident("outer")), // must resolve without error
-			)),
+			blockStmt(
+				exprStmt(ident("outer")),
+			),
 		),
 	)
 	_, errs := analyze(t, program)
@@ -412,16 +432,15 @@ func TestScope_InnerScopeSeesOuterVariable(t *testing.T) {
 func TestScope_InnerVariableNotLeakedToOuter(t *testing.T) {
 	program := makeProgram(
 		mainFn(
-			exprStmt(blockStmt(
+			blockStmt( // Removed exprStmt()
 				declareStmt("inner", false, intLit(7)),
-			)),
-			exprStmt(ident("inner")), // out of scope – must error
+			),
+			exprStmt(ident("inner")),
 		),
 	)
 	_, errs := analyze(t, program)
 	assertHasError(t, errs, "undefined name 'inner'")
 }
-
 func TestScope_ForLoopInitVariableScopedToLoop(t *testing.T) {
 	// A variable introduced in a for-loop init clause must not escape the loop.
 	program := makeProgram(
@@ -1110,13 +1129,12 @@ func TestStmt_Declare_UnitRhsIsError(t *testing.T) {
 }
 
 func TestStmt_Declare_ShadowingInInnerScopeOk(t *testing.T) {
-	// Re-using the same name in a nested block is fine (different scope).
 	program := makeProgram(
 		mainFn(
 			declareStmt("x", false, intLit(1)),
-			exprStmt(blockStmt(
-				declareStmt("x", false, boolLit(true)), // different scope
-			)),
+			blockStmt( // Removed exprStmt()
+				declareStmt("x", false, boolLit(true)), 
+			),
 		),
 	)
 	_, errs := analyze(t, program)
@@ -1521,23 +1539,6 @@ func TestTypeDecl_ResolveSliceType(t *testing.T) {
 
 func TestTypeDecl_ResolveTaskType(t *testing.T) {
 	fn := makeFn("f", taskTypeExpr(intTypeExpr()), blockStmt())
-	program := makeProgram(fn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
-func TestTypeDecl_ResolveOptionGeneric(t *testing.T) {
-	fn := makeFn("f", genericTypeExpr("Option", intTypeExpr()), blockStmt())
-	program := makeProgram(fn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
-func TestTypeDecl_ResolveResultGeneric(t *testing.T) {
-	fn := makeFn("f",
-		genericTypeExpr("Result", intTypeExpr(), strTypeExpr()),
-		blockStmt(),
-	)
 	program := makeProgram(fn)
 	_, errs := analyze(t, program)
 	assertNoErrors(t, errs)
@@ -2099,6 +2100,113 @@ func TestFunction_MutualRecursionResolvable(t *testing.T) {
 	program := makeProgram(isEven, isOdd)
 	_, errs := analyze(t, program)
 	assertNoErrors(t, errs)
+}
+
+func TestExpr_MapAndVecLiterals(t *testing.T) {
+	t.Run("Valid Map Literal", func(t *testing.T) {
+		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
+			Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
+			Fields: []ast.StructField{
+				{Key: strLit("score"), Value: intLit(100)},
+			},
+		})))
+		_, errs := analyze(t, program)
+		assertNoErrors(t, errs)
+	})
+
+	t.Run("Valid Vec Literal (Unkeyed)", func(t *testing.T) {
+		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
+			Type: vecTypeExpr(intTypeExpr()),
+			Fields: []ast.StructField{
+				{Key: nil, Value: intLit(1)},
+				{Key: nil, Value: intLit(2)},
+			},
+		})))
+		_, errs := analyze(t, program)
+		assertNoErrors(t, errs)
+	})
+
+	t.Run("Invalid Map Literal Type Mismatch", func(t *testing.T) {
+		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
+			Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
+			Fields: []ast.StructField{
+				{Key: strLit("score"), Value: boolLit(true)}, // bool instead of int
+			},
+		})))
+		_, errs := analyze(t, program)
+		assertHasError(t, errs, "type mismatch for map value")
+	})
+}
+
+func TestExpr_MethodCallsAndMutability(t *testing.T) {
+	t.Run("Mutating method on mutable variable is OK", func(t *testing.T) {
+		program := makeProgram(mainFn(
+			declareStmt("m", true, &ast.StructLiteral{
+				Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
+			}),
+			exprStmt(methodCallExpr(ident("m"), "put", callArg(strLit("a")), callArg(intLit(1)))),
+		))
+		_, errs := analyze(t, program)
+		assertNoErrors(t, errs)
+	})
+
+	t.Run("Mutating method on IMMUTABLE variable is ERROR", func(t *testing.T) {
+		program := makeProgram(mainFn(
+			// Notice: mutable = false
+			declareStmt("m", false, &ast.StructLiteral{
+				Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
+			}),
+			exprStmt(methodCallExpr(ident("m"), "put", callArg(strLit("a")), callArg(intLit(1)))),
+		))
+		_, errs := analyze(t, program)
+		assertHasError(t, errs, "cannot call mutating method 'put' on immutable variable 'm'")
+	})
+
+	t.Run("Method does not exist", func(t *testing.T) {
+		program := makeProgram(mainFn(
+			declareStmt("v", false, &ast.StructLiteral{Type: vecTypeExpr(intTypeExpr())}),
+			exprStmt(methodCallExpr(ident("v"), "fly")),
+		))
+		_, errs := analyze(t, program)
+		assertHasError(t, errs, "does not exist on type")
+	})
+}
+
+func TestMatch_TupleVariantDestructuring(t *testing.T) {
+	t.Run("Destructured variables are visible in body", func(t *testing.T) {
+		program := makeProgram(
+			sumTypeDecl("Shape", mkTupleVariant("Point", intTypeExpr(), intTypeExpr())),
+			mainFn(
+				declareStmt("p", false, callExpr(ident("Point"), callArg(intLit(10)), callArg(intLit(20)))), // Assuming CallExpr instantiation for tuples
+				exprStmt(matchExpr(ident("p"),
+					matchArm(
+						tupleVariantPattern("Point", "x", "y"),
+						infixExpr(ident("x"), "+", ident("y")), // x and y must be resolvable here
+					),
+				)),
+			),
+		)
+		_, errs := analyze(t, program)
+		// We expect no errors regarding undefined names!
+		assertNoErrors(t, errs)
+	})
+
+	t.Run("Wrong number of bindings throws error", func(t *testing.T) {
+		program := makeProgram(
+			sumTypeDecl("Shape", mkTupleVariant("Point", intTypeExpr(), intTypeExpr())),
+			mainFn(
+				declareStmt("p", false, callExpr(ident("Point"), callArg(intLit(10)), callArg(intLit(20)))),
+				exprStmt(matchExpr(ident("p"),
+					matchArm(
+						tupleVariantPattern("Point", "x"), // Only provided 1 binding for a 2-tuple
+						intLit(1),
+					),
+				)),
+			),
+		)
+		_, errs := analyze(t, program)
+		assertHasError(t, errs, "wrong number of bindings for tuple variant")
+	})
 }
 
 // Helper so test file compiles even with no direct ast reference on all paths.

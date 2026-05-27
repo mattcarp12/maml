@@ -28,45 +28,66 @@ func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 		res.LiveOut[id] = make(map[string]bool)
 	}
 
+	// Precompute block summaries once upfront
+	blockUses := make(map[mir.BlockID]map[string]bool)
+	blockDefs := make(map[mir.BlockID]map[string]bool)
+	for id, block := range g.Blocks {
+		useSet, defSet := computeBlockUseDef(block)
+		blockUses[id] = useSet
+		blockDefs[id] = defSet
+	}
+
 	changed := true
 	for changed {
 		changed = false
 
+		// Find the true maximum block ID in the graph
+		maxID := mir.BlockID(0)
+		for id := range g.Blocks {
+			if id > maxID {
+				maxID = id
+			}
+		}
+
 		// Iterate backward through blocks (reverse order speeds up convergence)
-		for id := mir.BlockID(len(g.Blocks) - 1); id >= 0; id-- {
+		for id := maxID; id >= 0; id-- {
 			block, exists := g.Blocks[id]
 			if !exists {
 				continue
 			}
 
 			// 1. LiveOut = Union of LiveIn of all successors
-			newLiveOut := make(map[string]bool)
 			succs := getSuccessors(block)
 			for _, succID := range succs {
 				for v := range res.LiveIn[succID] {
-					newLiveOut[v] = true
+					if !res.LiveOut[id][v] {
+						res.LiveOut[id][v] = true
+						changed = true
+					}
 				}
 			}
 
-			// 2. Compute Use and Def for this block
-			useSet, defSet := computeBlockUseDef(block)
+			// Get Use and Def for this block
+			useSet := blockUses[id]
+			defSet := blockDefs[id]
 
 			// 3. LiveIn = Use U (LiveOut - Def)
-			newLiveIn := make(map[string]bool)
+			// 3. LiveIn = Use U (LiveOut - Def)
+			// First, fold in the local uses
 			for v := range useSet {
-				newLiveIn[v] = true
-			}
-			for v := range newLiveOut {
-				if !defSet[v] {
-					newLiveIn[v] = true
+				if !res.LiveIn[id][v] {
+					res.LiveIn[id][v] = true
+					changed = true
 				}
 			}
-
-			// 4. Check for changes
-			if !mapEquals(res.LiveIn[id], newLiveIn) || !mapEquals(res.LiveOut[id], newLiveOut) {
-				res.LiveIn[id] = newLiveIn
-				res.LiveOut[id] = newLiveOut
-				changed = true
+			// Next, pass through the non-redefined LiveOut variables
+			for v := range res.LiveOut[id] {
+				if !defSet[v] {
+					if !res.LiveIn[id][v] {
+						res.LiveIn[id][v] = true
+						changed = true
+					}
+				}
 			}
 		}
 	}
@@ -86,7 +107,7 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 		case *mir.RefAllocInst:
 			defSet[i.Dst] = true
 		case *mir.AssignInst:
-			for _, u := range extractUses(i.Expr) {
+			for _, u := range extractUses(i.RValue) {
 				if !defSet[u] {
 					useSet[u] = true
 				}
@@ -147,6 +168,8 @@ func extractUses(expr hir.Expr) []string {
 		uses = append(uses, extractUses(e.Index)...)
 	case *hir.FieldAccess:
 		uses = append(uses, extractUses(e.Object)...)
+		// default:
+		// 	panic(fmt.Sprintf("liveness: unhandled expression type %T in extractUses", e))
 	}
 	return uses
 }
@@ -159,16 +182,4 @@ func getSuccessors(block *mir.BasicBlock) []mir.BlockID {
 		return []mir.BlockID{t.TrueTarget, t.FalseTarget}
 	}
 	return nil
-}
-
-func mapEquals(a, b map[string]bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if !b[k] {
-			return false
-		}
-	}
-	return true
 }

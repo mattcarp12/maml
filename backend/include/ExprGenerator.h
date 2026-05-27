@@ -28,8 +28,7 @@ llvm::Value *compileVariantLiteral(CodegenContext &ctx, const nlohmann::json &ex
 llvm::Value *compileSliceExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e);
-llvm::Value *compileArrayLiteral(CodegenContext &ctx, const nlohmann::json &expr);
-llvm::Value *compileStructLiteral(CodegenContext &ctx, const nlohmann::json &expr);
+llvm::Value *compileZeroAllocExpr(CodegenContext &ctx, const nlohmann::json &expr);
 
 // --- ExprCalls ---
 llvm::Value *compileCallExpr(CodegenContext &ctx, const nlohmann::json &expr);

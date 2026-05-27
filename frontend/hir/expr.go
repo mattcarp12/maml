@@ -13,26 +13,26 @@ import (
 // =============================================================================
 
 type Identifier struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Value  string
 	Type   types.Type    // Permanently bound type
 	Symbol *types.Symbol // Permanently bound semantic identity/scope
 }
 
 type IntLiteral struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value int64
 	Type  types.Type
 }
 
 type BoolLiteral struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value bool
 	Type  types.Type
 }
 
 type StringLiteral struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value string
 	Type  types.Type
 }
@@ -45,7 +45,7 @@ type StringLiteral struct {
 // It instructs the backend to allocate zero-initialized memory for the given type.
 // The decision between Stack vs Heap is deferred to the MIR/Backend AllocPass.
 type ZeroAllocExpr struct {
-	Pos_ Position
+	Pos_ Position   `json:"-"`
 	Type types.Type // The type defining the size of the allocation
 }
 
@@ -54,14 +54,14 @@ type ZeroAllocExpr struct {
 // =============================================================================
 
 type PrefixExpr struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Operator string
 	Right    Expr
 	Type     types.Type
 }
 
 type InfixExpr struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Left     Expr
 	Operator string
 	Right    Expr
@@ -73,35 +73,35 @@ type InfixExpr struct {
 // =============================================================================
 
 type CallArg struct {
-	Pos_     Position
+	Pos_     Position `json:"-"`
 	Argument Expr
 	Mut      bool
 	Own      bool
 }
 
 type CallExpr struct {
-	Pos_      Position
+	Pos_      Position `json:"-"`
 	Function  Expr
 	Arguments []CallArg
 	Type      types.Type
 }
 
 type FieldAccess struct {
-	Pos_   Position
+	Pos_   Position `json:"-"`
 	Object Expr
 	Field  *Identifier
 	Type   types.Type
 }
 
 type IndexExpr struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Left  Expr
 	Index Expr
 	Type  types.Type
 }
 
 type SliceExpr struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 	Left Expr
 	Low  Expr
 	High Expr
@@ -113,7 +113,7 @@ type SliceExpr struct {
 // =============================================================================
 
 type IfExpr struct {
-	Pos_        Position
+	Pos_        Position `json:"-"`
 	Condition   Expr
 	Consequence *BlockStmt
 	Alternative *BlockStmt
@@ -121,7 +121,7 @@ type IfExpr struct {
 }
 
 type AwaitExpr struct {
-	Pos_  Position
+	Pos_  Position `json:"-"`
 	Value Expr
 	Type  types.Type
 }
@@ -175,6 +175,8 @@ func (ce *CallExpr) String() string {
 	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
 }
 func (ce *CallExpr) exprNode() {}
+
+
 
 func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
 func (fa *FieldAccess) String() string {

@@ -90,19 +90,28 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
     // ===========================================================================
 
     if (fn.contains("blocks")) {
+      // 1. Gather and sort block IDs numerically to prevent lexicographical sorting corruption
+      std::vector<int> sortedBlockIds;
       for (auto it = fn["blocks"].begin(); it != fn["blocks"].end(); ++it) {
-        int blockId = std::stoi(it.key());
+        sortedBlockIds.push_back(std::stoi(it.key()));
+      }
+      std::sort(sortedBlockIds.begin(), sortedBlockIds.end());
+
+      // 2. Translate statements strictly following the sorted flow control sequence
+      for (int blockId : sortedBlockIds) {
+        std::string blockKey = std::to_string(blockId);
+        const auto &blockData = fn["blocks"][blockKey];
 
         Builder->SetInsertPoint(ctx.Blocks[blockId]);
 
-        if (it.value().contains("statements")) {
-          for (const auto &stmt : it.value()["statements"]) {
+        if (blockData.contains("statements")) {
+          for (const auto &stmt : blockData["statements"]) {
             compileStatement(ctx, stmt);
           }
         }
 
         // Emit the strict block exit routing!
-        compileTerminator(ctx, it.value()["terminator"]);
+        compileTerminator(ctx, blockData["terminator"]);
       }
     }
   }

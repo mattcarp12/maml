@@ -41,6 +41,9 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	var returnType types.Type = types.UnitType{}
 	if v.ReturnType != nil {
 		returnType = a.resolveAstType(v.ReturnType)
+		if v.IsAsync {
+			returnType = types.TaskType{Base: returnType}
+		}
 	}
 
 	fnType := &types.FunctionType{

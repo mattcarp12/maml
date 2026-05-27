@@ -61,9 +61,8 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
   if (nodeType == "SliceExpr") return compileSliceExpr(ctx, expr);
   if (nodeType == "CallExpr") return compileCallExpr(ctx, expr);
   if (nodeType == "IndexExpr") return compileIndexExpr(ctx, expr);
+  if (nodeType == "ZeroAllocExpr") return compileZeroAllocExpr(ctx, expr);
   if (nodeType == "AsyncPrologueExpr") return compileAsyncPrologueExpr(ctx, expr);
-  if (nodeType == "ArrayLiteral") return compileArrayLiteral(ctx, expr);
-  if (nodeType == "StructLiteral") return compileStructLiteral(ctx, expr);
 
   ctx.Error.fatal("Unsupported expression node type encountered: " + std::string(nodeType), expr);
   return nullptr;

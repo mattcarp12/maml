@@ -111,7 +111,7 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 }
 
 func (p *Parser) parseFnParams() []*ast.Param {
-	var params []*ast.Param
+	params := []*ast.Param{}
 
 	success := p.parseCommaSeparatedList(token.RPAREN, func() {
 		params = append(params, p.parseParam())
@@ -199,24 +199,43 @@ func (p *Parser) parseSumType() *ast.SumTypeExpr {
 }
 
 func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
-	// curToken is '|'
-
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
 	name := p.curToken.Literal
 
-	variant := &ast.VariantTypeExpr{Name: name}
+	variant := &ast.VariantTypeExpr{
+		Name:        name,                    // Or build your ast.Name here
+		TupleFields: make([]ast.TypeExpr, 0), // Initialize empty slice!
+	}
 
-	// Optional payload block: { field type, ... }
+	// Optional Struct payload: { field type, ... }
 	if p.peekToken.Type == token.LBRACE {
 		p.nextToken() // step onto '{'
-		// Reuse parseProductType which handles the { field type, ... } syntax.
 		pt := p.parseProductType()
 		if pt == nil {
 			return nil
 		}
 		variant.Fields = pt.Fields
+	} else if p.peekToken.Type == token.LPAREN {
+		// NEW: Optional Tuple payload: (type, type, ...)
+		p.nextToken() // step onto '('
+
+		// If it's not empty (), parse the list of types
+		if p.peekToken.Type != token.RPAREN {
+			p.nextToken() // step onto first type
+			variant.TupleFields = append(variant.TupleFields, p.parseTypeExpr())
+
+			for p.peekToken.Type == token.COMMA {
+				p.nextToken() // step onto ','
+				p.nextToken() // step onto next type
+				variant.TupleFields = append(variant.TupleFields, p.parseTypeExpr())
+			}
+		}
+
+		if !p.expectPeek(token.RPAREN) {
+			return nil
+		}
 	}
 
 	p.nextToken() // step past variant (onto next '|' or end)
@@ -224,6 +243,7 @@ func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
 
 	return variant
 }
+
 func (p *Parser) parseProductType() *ast.StructTypeExpr {
 	pt := &ast.StructTypeExpr{
 		Pos_: p.curPos(),
@@ -307,31 +327,52 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		p.nextToken() // Step onto the identifier
 		name := p.curToken.Literal
 
-		// NEW: If followed by '<', it's a compiler-known generic type!
+		// If followed by '<', it's a compiler-known generic type!
 		if p.peekToken.Type == token.LT {
 			p.nextToken() // Step onto '<'
 
-			var params []ast.TypeExpr
-			// Parse first type argument
-			params = append(params, p.parseTypeExpr())
+			switch name {
+			case "Map":
+				keyType := p.parseTypeExpr()
+				if !p.expectPeek(token.COMMA) {
+					return nil
+				}
+				valType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				return &ast.MapTypeExpr{Key: keyType, Value: valType, Pos_: startPos}
 
-			// Parse subsequent comma-separated arguments (e.g., Result<T, E>)
-			for p.peekToken.Type == token.COMMA {
-				p.nextToken() // Step onto ','
-				params = append(params, p.parseTypeExpr())
-			}
+			case "Vec", "Option":
+				baseType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				if name == "Vec" {
+					return &ast.VectorTypeExpr{Base: baseType, Pos_: startPos}
+				}
+				return &ast.OptionTypeExpr{Base: baseType, Pos_: startPos}
 
-			if !p.expectPeek(token.GT) { // Expect '>'
+			case "Result":
+				okType := p.parseTypeExpr()
+				if !p.expectPeek(token.COMMA) {
+					return nil
+				}
+				errType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				return &ast.ResultTypeExpr{Ok: okType, Err: errType, Pos_: startPos}
+
+			default:
+				// The Gatekeeper catches invalid generics here, because in a type signature, `T<` is always an error.
+				p.addError(fmt.Sprintf(
+					"user-defined generic types like '%s<...>' are not currently supported. Only Map, Vec, Option, and Result are allowed.",
+					name,
+				))
 				return nil
 			}
-
-			return &ast.GenericType{
-				Name:   name,
-				Params: params,
-				Pos_:   startPos,
-			}
 		}
-
 		// Standard named type (int, string, etc.)
 		return &ast.NamedTypeExpr{
 			Name: &ast.Identifier{Value: name},

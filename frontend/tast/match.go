@@ -13,16 +13,16 @@ import (
 // =============================================================================
 
 type MatchExpr struct {
-	Pos_    Position
-	End_    Position
+	Pos_    Position `json:"-"`
+	End_    Position `json:"-"`
 	Subject Expr
 	Arms    []MatchArm
 	Type    types.Type // Permanently bound unified return type of the match
 }
 
 type MatchArm struct {
-	Pos_    Position
-	End_    Position
+	Pos_    Position `json:"-"`
+	End_    Position `json:"-"`
 	Pattern Pattern
 	Body    Expr
 }
@@ -32,12 +32,12 @@ type MatchArm struct {
 // =============================================================================
 
 type WildcardPattern struct {
-	Pos_ Position
+	Pos_ Position `json:"-"`
 }
 
 type LiteralPattern struct {
-	Pos_  Position
-	End_  Position
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
 	Value Expr
 }
 
@@ -47,12 +47,13 @@ type VariantPatternField struct {
 }
 
 type VariantPattern struct {
-	Pos_    Position
-	End_    Position
-	Variant *Identifier // The AST representation of the variant name
-	Fields  []VariantPatternField
-	Type    types.Type    // Permanently bound SumType being matched against
-	Symbol  *types.Symbol // Permanently bound VariantSymbol (contains discriminant)
+	Pos_          Position    `json:"-"`
+	End_          Position    `json:"-"`
+	Variant       *Identifier // The AST representation of the variant name
+	TupleBindings []*Identifier
+	Fields        []VariantPatternField
+	Type          types.Type    // Permanently bound SumType being matched against
+	Symbol        *types.Symbol // Permanently bound VariantSymbol (contains discriminant)
 }
 
 // =============================================================================

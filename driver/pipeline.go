@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -151,4 +152,50 @@ func (p *Pipeline) Run(srcPath string) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
+}
+
+// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+func (p *Pipeline) DumpAST(srcPath string) ([]byte, error) {
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
+	}
+
+	comp := frontend.New()
+	astProgram, err := comp.CompileAST(string(content))
+	if err != nil {
+		return nil, err
+	}
+
+	// MarshalIndent formats the JSON neatly for readable snapshot files.
+	// Struct fields marked with `json:"-"` (like Pos_ and End_) are automatically skipped.
+	jsonBytes, err := json.MarshalIndent(astProgram, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
+	}
+
+	return jsonBytes, nil
+}
+
+// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
+	}
+
+	comp := frontend.New()
+	tastProgram, err := comp.CompileTAST(string(content))
+	if err != nil {
+		return nil, err
+	}
+
+	// MarshalIndent formats the JSON neatly for readable snapshot files.
+	// Struct fields marked with `json:"-"` (like Pos_ and End_) are automatically skipped.
+	jsonBytes, err := json.MarshalIndent(tastProgram, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
+	}
+
+	return jsonBytes, nil
 }

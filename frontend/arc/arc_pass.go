@@ -57,7 +57,7 @@ func InjectARC(g *mir.Graph, liveness *liveness.LivenessResult) {
 			// B. Retain Injection (Shared Aliases)
 			// Assigning a reference type via a plain identifier creates an immutable shared alias.
 			if assign, ok := inst.(*mir.AssignInst); ok && isRef(assign.Dst) {
-				if ident, isIdent := assign.Expr.(*hir.Identifier); isIdent {
+				if ident, isIdent := assign.RValue.(*hir.Identifier); isIdent {
 					newStmts = append(newStmts, &mir.RefIncInst{Src: ident.Value})
 				}
 			}

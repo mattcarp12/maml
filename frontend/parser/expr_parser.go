@@ -48,33 +48,51 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	name := p.curToken.Literal
 	startPos := p.curPos()
 
-	// NEW: Intercept compiler-known generic types inside expressions!
-	if (name == "Vec" || name == "Map" || name == "Option" || name == "Result") && p.peekToken.Type == token.LT {
-		p.nextToken() // Step onto '<'
+	if p.peekToken.Type == token.LT {
+		// Only intercept if it is a compiler-known intrinsic!
+		switch name {
+		case "Map", "Vec", "Option", "Result":
+			p.nextToken() // Step onto '<'
 
-		var params []ast.TypeExpr
-		// Reuse your existing type expression parser loops
-		params = append(params, p.parseTypeExpr())
+			switch name {
+			case "Map":
+				keyType := p.parseTypeExpr()
+				if !p.expectPeek(token.COMMA) {
+					return nil
+				}
+				valType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				return &ast.MapTypeExpr{Key: keyType, Value: valType, Pos_: startPos}
 
-		for p.peekToken.Type == token.COMMA {
-			p.nextToken() // Step onto ','
-			params = append(params, p.parseTypeExpr())
-		}
+			case "Vec", "Option":
+				baseType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				if name == "Vec" {
+					return &ast.VectorTypeExpr{Base: baseType, Pos_: startPos}
+				}
+				return &ast.OptionTypeExpr{Base: baseType, Pos_: startPos}
 
-		if !p.expectPeek(token.GT) { // Expect '>'
-			return nil
-		}
-
-		// Because we added exprNode() above, returning this as an ast.Expr is fully legal!
-		return &ast.GenericType{
-			Name:   name,
-			Params: params,
-			Pos_:   startPos,
+			case "Result":
+				okType := p.parseTypeExpr()
+				if !p.expectPeek(token.COMMA) {
+					return nil
+				}
+				errType := p.parseTypeExpr()
+				if !p.expectPeek(token.GT) {
+					return nil
+				}
+				return &ast.ResultTypeExpr{Ok: okType, Err: errType, Pos_: startPos}
+			}
+		default:
+			// Do nothing! Let it fall through so `x < 10` evaluates correctly as an InfixExpr.
 		}
 	}
 
-	// Unit variant constructors: None emitted as a zero-arg CallExpr so that
-	// codegen can treat all constructors uniformly.
+	// Unit variant constructors: None
 	if name == "None" && p.peekToken.Type != token.LPAREN {
 		return &ast.CallExpr{
 			Function:  &ast.Identifier{Value: "None", Pos_: startPos},
@@ -83,7 +101,6 @@ func (p *Parser) parseIdentifier() ast.Expr {
 		}
 	}
 
-	// Standard fallback for normal variables/identifiers
 	return &ast.Identifier{Value: name, Pos_: startPos}
 }
 
@@ -213,13 +230,30 @@ func (p *Parser) parseIfExpression() ast.Expr {
 		Pos_:        pos,
 	}
 }
-
 func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
-	callExpr := &ast.CallExpr{
-		Function: function,
-		Pos_:     p.curPos(), // position of the '('
+	pos := p.curPos() // Position of the '('
+
+	// Intercept method calls: a.b() evaluates as FieldAccess(a, b) -> Call()
+	if fa, ok := function.(*ast.FieldAccess); ok {
+		methodCall := &ast.MethodCallExpr{
+			Object: fa.Object, // The receiver (e.g., `a` or `a[10]`)
+			Method: fa.Field,  // The method name (e.g., `b`)
+			Pos_:   pos,
+		}
+
+		// Parse the arguments safely with your newly updated empty-slice logic
+		methodCall.Arguments = p.parseCallArguments(token.RPAREN)
+
+		return methodCall
 	}
 
+	// Standard fallback for regular function calls: foo()
+	callExpr := &ast.CallExpr{
+		Function: function,
+		Pos_:     pos,
+	}
+
+	// Parse the arguments safely
 	callExpr.Arguments = p.parseCallArguments(token.RPAREN)
 
 	return callExpr
@@ -227,7 +261,7 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 
 // parseExpressionList reads a comma-separated list of generic expressions.
 func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
-	var list []ast.Expr
+	list := []ast.Expr{}
 
 	p.parseCommaSeparatedList(end, func() {
 		if elem := p.parseExpression(LOWEST); elem != nil {
@@ -241,7 +275,7 @@ func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
 // parseCallArguments reads a comma-separated list of function arguments,
 // preserving 'mut' and 'own' modifiers.
 func (p *Parser) parseCallArguments(end token.TokenType) []ast.CallArg {
-	var args []ast.CallArg
+	args := []ast.CallArg{}
 
 	p.parseCommaSeparatedList(end, func() {
 		args = append(args, p.parseCallArg())
@@ -271,18 +305,21 @@ func (p *Parser) parseCallArg() ast.CallArg {
 }
 
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
-	leftIdent, ok := left.(*ast.Identifier)
-	if !ok {
+	// Validate that the left side is a valid type for instantiation
+	switch left.(type) {
+	case *ast.Identifier, *ast.MapTypeExpr, *ast.VectorTypeExpr:
+		// Valid types for struct/map literals!
+	default:
 		p.addError(fmt.Sprintf(
-			"expected identifier before '{' in struct literal, got %T at line %d",
+			"expected identifier, Map, or Vec before '{' in literal, got %T at line %d",
 			left, p.curToken.Line,
 		))
 		return nil
 	}
 
 	sl := &ast.StructLiteral{
-		Type: leftIdent,
-		Pos_: leftIdent.Pos(),
+		Type: left, // Assign the generic Expr directly
+		Pos_: left.Pos(),
 	}
 
 	success := p.parseCommaSeparatedList(token.RBRACE, func() {
@@ -300,27 +337,35 @@ func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 }
 
 func (p *Parser) parseStructField() *ast.StructField {
-	sf := &ast.StructField{
-		Name: &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()},
-	}
-
-	// Previously this called both expectPeek (which adds a "expected next
-	// token" error via peekError) AND AddError with a duplicate message.
-	// Now we only call expectPeek; its peekError message is sufficient and
-	// already includes line/col information.
-	if !p.expectPeek(token.COLON) {
-		return nil
-	}
-	p.nextToken() // step onto the value expression
-
-	valExpr := p.parseExpression(LOWEST)
-	if valExpr == nil {
-		// parseExpression already recorded the specific error; no need to
-		// add a redundant "unable to parse struct field value expression".
+	// 1. Parse the first expression (could be a Key or an unkeyed Value)
+	firstExpr := p.parseExpression(LOWEST)
+	if firstExpr == nil {
 		return nil
 	}
 
-	sf.Value = valExpr
+	sf := &ast.StructField{Pos_: firstExpr.Pos()}
+
+	// 2. Is there a colon? If so, it's a Key: Value pair! (Structs & Maps)
+	if p.peekToken.Type == token.COLON {
+		p.nextToken() // step onto ':'
+		p.nextToken() // step onto the Value expression
+
+		sf.Key = firstExpr // The first thing we parsed was the key
+
+		valExpr := p.parseExpression(LOWEST)
+		if valExpr == nil {
+			return nil
+		}
+		sf.Value = valExpr
+		sf.End_ = valExpr.End()
+
+	} else {
+		// 3. No colon! It's an unkeyed element! (Vectors)
+		sf.Key = nil
+		sf.Value = firstExpr
+		sf.End_ = firstExpr.End()
+	}
+
 	return sf
 }
 

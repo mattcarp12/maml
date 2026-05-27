@@ -82,34 +82,6 @@ type ContinueStmt struct {
 }
 
 // =============================================================================
-// MIR Loop Construct
-// =============================================================================
-
-// LoopStmt represents an unconditional infinite loop.
-//
-// This acts as the primitive iterative construct used during lowering.
-type LoopStmt struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Body *BlockStmt `json:"body"`
-}
-
-// =============================================================================
-// Explicit ARC Statements
-// =============================================================================
-
-type RetainStmt struct {
-	Pos_  Position `json:"-"`
-	Value Expr     `json:"value"`
-}
-
-type ReleaseStmt struct {
-	Pos_  Position `json:"-"`
-	Value Expr     `json:"value"`
-}
-
-// =============================================================================
 // Interface Implementations
 // =============================================================================
 
@@ -249,30 +221,3 @@ func (s *ContinueStmt) String() string {
 }
 
 func (s *ContinueStmt) stmtNode() {}
-
-func (l *LoopStmt) Pos() Position { return l.Pos_ }
-func (l *LoopStmt) End() Position { return l.End_ }
-
-func (l *LoopStmt) String() string {
-	return fmt.Sprintf("loop %s", l.Body.String())
-}
-
-func (l *LoopStmt) stmtNode() {}
-
-func (r *RetainStmt) Pos() Position { return r.Pos_ }
-func (r *RetainStmt) End() Position { return r.Value.End() }
-
-func (r *RetainStmt) String() string {
-	return fmt.Sprintf("retain(%s)", r.Value.String())
-}
-
-func (r *RetainStmt) stmtNode() {}
-
-func (r *ReleaseStmt) Pos() Position { return r.Pos_ }
-func (r *ReleaseStmt) End() Position { return r.Value.End() }
-
-func (r *ReleaseStmt) String() string {
-	return fmt.Sprintf("release(%s)", r.Value.String())
-}
-
-func (r *ReleaseStmt) stmtNode() {}

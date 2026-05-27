@@ -60,6 +60,9 @@ func (a *Analyzer) resolveTypeBody(v *ast.TypeDecl) {
 					Type: a.resolveAstType(f.Type),
 				})
 			}
+			for _, tf := range v.TupleFields {
+				variant.TupleTypes = append(variant.TupleTypes, a.resolveAstType(tf))
+			}
 			st.Variants = append(st.Variants, variant)
 
 			// Register the variant constructor in the symbol table
@@ -122,6 +125,8 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 			return types.StringType{}
 		case "unit":
 			return types.UnitType{}
+		case "any":
+			return types.AnyType{}
 		default:
 			if custom := a.lookupCustomType(e.Name.Value); custom != nil {
 				return custom
@@ -138,6 +143,10 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 		return types.SliceType{
 			Base: a.resolveAstType(e.Base),
 		}
+	case *ast.TaskTypeExpr:
+		return types.TaskType{
+			Base: a.resolveAstType(e.Base),
+		}
 	case *ast.MapTypeExpr:
 		return types.MapType{
 			Key:   a.resolveAstType(e.Key),
@@ -147,21 +156,12 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 		return types.VectorType{
 			Base: a.resolveAstType(e.Base),
 		}
-	case *ast.TaskTypeExpr:
-		return types.TaskType{
-			Base: a.resolveAstType(e.Base),
-		}
-	case *ast.GenericType:
-		// Generics like Option<T> or Result<T, E>
-		if e.Name == "Option" && len(e.Params) == 1 {
-			return types.NewOptionType(a.resolveAstType(e.Params[0]))
-		}
-		if e.Name == "Result" && len(e.Params) == 2 {
-			return types.NewResultType(a.resolveAstType(e.Params[0]), a.resolveAstType(e.Params[1]))
-		}
-		a.errorf(e.Pos(), "unknown or invalid generic type %s", e.Name)
-		return types.UnknownType{}
+	case *ast.OptionTypeExpr:
+		return types.NewOptionType(a.resolveAstType(e.Base))
+	case *ast.ResultTypeExpr:
+		return types.NewResultType(a.resolveAstType(e.Ok), a.resolveAstType(e.Err))
 	}
+
 	return types.UnknownType{}
 }
 

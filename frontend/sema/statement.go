@@ -137,8 +137,17 @@ func (a *Analyzer) buildReturnStmt(s *ast.ReturnStmt) *tast.ReturnStmt {
 		retType = typeOf(tastValue)
 	}
 
-	if a.expectedReturn != nil && !retType.Equals(a.expectedReturn) && !types.IsUnknown(retType) {
-		a.errorf(s.Pos_, "type mismatch: expected return type '%s', got '%s'", a.expectedReturn.String(), retType.String())
+	expected := a.expectedReturn
+
+	// Unwrap Task<T> to T if we are inside an async function
+	if a.currentFn != nil && a.currentFn.IsAsync {
+		if taskTy, ok := expected.(types.TaskType); ok {
+			expected = taskTy.Base
+		}
+	}
+
+	if !retType.Equals(expected) && !types.IsUnknown(retType) && !types.IsUnknown(expected) {
+		a.errorf(s.Pos(), "type mismatch: expected return type '%s', got '%s'", expected, retType)
 	}
 
 	return &tast.ReturnStmt{

@@ -72,7 +72,6 @@ func (p *Parser) parseStmt() ast.Stmt {
 		return p.parseForStmt()
 	case token.BREAK:
 		return p.parseBreakStmt()
-
 	case token.CONTINUE:
 		return p.parseContinueStmt()
 	default:
