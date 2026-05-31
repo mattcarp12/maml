@@ -3,8 +3,8 @@ package liveness
 import (
 	"testing"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 func newTestGraph(entryID int) *mir.Graph {
@@ -23,8 +23,8 @@ func addBlock(g *mir.Graph, id int, term mir.Terminator) *mir.BasicBlock {
 	return block
 }
 
-func identExpr(name string) *hir.Identifier {
-	return &hir.Identifier{
+func identExpr(name string) *tast.Identifier {
+	return &tast.Identifier{
 		Value: name,
 	}
 }
@@ -49,7 +49,7 @@ func jumpTerm(target int) *mir.JumpTerminator {
 	}
 }
 
-func branchTerm(cond hir.Expr, trueTarget, falseTarget int) *mir.BranchTerminator {
+func branchTerm(cond tast.Expr, trueTarget, falseTarget int) *mir.BranchTerminator {
 	return &mir.BranchTerminator{
 		Condition:   cond,
 		TrueTarget:  mir.BlockID(trueTarget),
@@ -69,38 +69,38 @@ func refAllocInst(dst string) *mir.RefAllocInst {
 	return &mir.RefAllocInst{Dst: dst}
 }
 
-func assignInst(dst string, expr hir.Expr) *mir.AssignInst {
+func assignInst(dst string, expr tast.Expr) *mir.AssignInst {
 	return &mir.AssignInst{Dst: dst, RValue: expr}
 }
 
-func infixExpr(left hir.Expr, op string, right hir.Expr) *hir.InfixExpr {
-	return &hir.InfixExpr{Left: left, Operator: op, Right: right}
+func infixExpr(left tast.Expr, op string, right tast.Expr) *tast.InfixExpr {
+	return &tast.InfixExpr{Left: left, Operator: op, Right: right}
 }
 
-func prefixExpr(op string, right hir.Expr) *hir.PrefixExpr {
-	return &hir.PrefixExpr{Operator: op, Right: right}
+func prefixExpr(op string, right tast.Expr) *tast.PrefixExpr {
+	return &tast.PrefixExpr{Operator: op, Right: right}
 }
 
-func callExpr(fn hir.Expr, args []hir.Expr) *hir.CallExpr {
-	var callArgs []hir.CallArg
+func callExpr(fn tast.Expr, args []tast.Expr) *tast.CallExpr {
+	var callArgs []tast.CallArg
 	for _, arg := range args {
-		callArgs = append(callArgs, hir.CallArg{Argument: arg})
+		callArgs = append(callArgs, tast.CallArg{Argument: arg})
 	}
-	return &hir.CallExpr{Function: fn, Arguments: callArgs}
+	return &tast.CallExpr{Function: fn, Arguments: callArgs}
 }
 
-func sliceExpr(left, low, high hir.Expr) *hir.SliceExpr {
-	return &hir.SliceExpr{Left: left, Low: low, High: high}
+func sliceExpr(left, low, high tast.Expr) *tast.SliceExpr {
+	return &tast.SliceExpr{Left: left, Low: low, High: high}
 }
 
-func indexExpr(left, index hir.Expr) *hir.IndexExpr {
-	return &hir.IndexExpr{Left: left, Index: index}
+func indexExpr(left, index tast.Expr) *tast.IndexExpr {
+	return &tast.IndexExpr{Left: left, Index: index}
 }
 
-func fieldAccess(obj hir.Expr, fieldName string) *hir.FieldAccess {
-	return &hir.FieldAccess{
+func fieldAccess(obj tast.Expr, fieldName string) *tast.FieldAccess {
+	return &tast.FieldAccess{
 		Object: obj,
-		Field:  &hir.Identifier{Value: fieldName},
+		Field:  &tast.Identifier{Value: fieldName},
 	}
 }
 
@@ -266,7 +266,7 @@ func TestAnalyzeLiveness(t *testing.T) {
 				expr := infixExpr(
 					callExpr(
 						identExpr("myFunc"),
-						[]hir.Expr{
+						[]tast.Expr{
 							indexExpr(fieldAccess(identExpr("obj"), "field"), identExpr("idx")),
 							sliceExpr(identExpr("arr"), identExpr("low"), identExpr("high")),
 						},

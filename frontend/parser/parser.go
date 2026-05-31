@@ -26,6 +26,7 @@ type Parser struct {
 	prefixParseFns      map[token.TokenType]prefixParseFn
 	infixParseFns       map[token.TokenType]infixParseFn
 	allowStructLiterals bool
+	lookahead           []token.Token
 }
 
 func New(l *lexer.Lexer) *Parser {

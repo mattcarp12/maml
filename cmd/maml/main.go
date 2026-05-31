@@ -26,6 +26,12 @@ func main() {
 		dumpAstCmd(os.Args[2:])
 	case "dump-tast":
 		dumpTastCmd(os.Args[2:])
+	case "dump-mir":
+		dumpMirCmd(os.Args[2:])
+	case "dump-llvm":
+		dumpLlvmCmd(os.Args[2:])
+	case "dump-all":
+		dumpAllCmd(os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -40,9 +46,13 @@ func printUsage() {
 	fmt.Println("  build      Compile a .maml file into a native executable")
 	fmt.Println("  run        Compile and immediately run a .maml file")
 	fmt.Println("  check      Run syntax and semantic checks")
-	fmt.Println("  dump-ast   Parse file and output JSON serialized AST to stdout") // NEW
+	fmt.Println("  dump-ast   Parse file and output JSON serialized AST to stdout")
+	fmt.Println("  dump-tast  Parse file and output JSON serialized TAST to stdout")
+	fmt.Println("  dump-hir   Parse file and output JSON serialized HIR to stdout")
+	fmt.Println("  dump-mir   Parse file and output JSON serialized MIR to stdout")
+	fmt.Println("  dump-llvm  Parse file, invoke backend, and output LLVM IR to stdout")
+	fmt.Println("  dump-all    Dump source and all IR phases into a single file")
 }
-
 func buildCmd(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	out := fs.String("out", "maml_app", "Output executable name")
@@ -132,4 +142,59 @@ func dumpTastCmd(args []string) {
 
 	// Print directly to standard output so users can redirect it to a file
 	fmt.Println(string(jsonBytes))
+}
+
+func dumpMirCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: maml dump-mir <file.maml>")
+		os.Exit(1)
+	}
+	p := driver.New(driver.Config{})
+	out, err := p.DumpMIR(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Compilation failed:\n%v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(out))
+}
+
+func dumpLlvmCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: maml dump-llvm <file.maml>")
+		os.Exit(1)
+	}
+	p := driver.New(driver.Config{})
+	out, err := p.DumpLLVM(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "LLVM IR Generation failed:\n%v\n", err)
+		os.Exit(1)
+	}
+	// Print directly to standard output so users can inspect it or pipe it to a file
+	fmt.Println(string(out))
+}
+
+func dumpAllCmd(args []string) {
+	fs := flag.NewFlagSet("dump-all", flag.ExitOnError)
+	out := fs.String("out", "maml_dump.txt", "Output file path")
+	fs.Parse(args)
+
+	positionalArgs := fs.Args()
+	if len(positionalArgs) < 1 {
+		fmt.Println("Usage: maml dump-all [options] <file.maml>")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	srcPath := positionalArgs[0]
+	p := driver.New(driver.Config{})
+
+	fmt.Printf("Dumping all compiler phases for '%s' to '%s'...\n", srcPath, *out)
+
+	err := p.DumpAll(srcPath, *out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Dump failed:\n%v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Success.")
 }

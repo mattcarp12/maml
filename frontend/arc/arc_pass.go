@@ -1,9 +1,11 @@
 package arc
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
+	"sort"
+
 	"github.com/mattcarp12/maml/frontend/liveness"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -11,7 +13,7 @@ import (
 func InjectARC(g *mir.Graph, liveness *liveness.LivenessResult) {
 	// 1. Pre-scan to map variable names to their Types
 	varTypes := make(map[string]types.Type)
-	for _, block := range g.Blocks {
+	for _, block := range g.SortedBlocks() {
 		for _, inst := range block.Statements {
 			switch i := inst.(type) {
 			case *mir.TempDeclInst:
@@ -28,7 +30,7 @@ func InjectARC(g *mir.Graph, liveness *liveness.LivenessResult) {
 	}
 
 	// 2. Single-Pass Block Injection
-	for _, block := range g.Blocks {
+	for _, block := range g.SortedBlocks() {
 		var newStmts []mir.Instruction
 		activeRefs := make(map[string]bool)
 
@@ -57,7 +59,7 @@ func InjectARC(g *mir.Graph, liveness *liveness.LivenessResult) {
 			// B. Retain Injection (Shared Aliases)
 			// Assigning a reference type via a plain identifier creates an immutable shared alias.
 			if assign, ok := inst.(*mir.AssignInst); ok && isRef(assign.Dst) {
-				if ident, isIdent := assign.RValue.(*hir.Identifier); isIdent {
+				if ident, isIdent := assign.RValue.(*tast.Identifier); isIdent {
 					newStmts = append(newStmts, &mir.RefIncInst{Src: ident.Value})
 				}
 			}
@@ -66,10 +68,21 @@ func InjectARC(g *mir.Graph, liveness *liveness.LivenessResult) {
 		// C. End of Life / Scope Exit Releases
 		// If a reference variable is active but mathematically absent from the LiveOut set,
 		// it dies within this block. We safely drop it before the terminator.
+
+		// Extract the dying references into a slice first
+		var dyingRefs []string
 		for v := range activeRefs {
 			if !liveness.LiveOut[block.ID][v] && v != "_ret" {
-				newStmts = append(newStmts, &mir.RefDecInst{Src: v})
+				dyingRefs = append(dyingRefs, v)
 			}
+		}
+
+		// Sort them alphabetically to guarantee a deterministic instruction sequence
+		sort.Strings(dyingRefs)
+
+		// Iterate over the sorted slice to emit the actual MIR instructions
+		for _, v := range dyingRefs {
+			newStmts = append(newStmts, &mir.RefDecInst{Src: v})
 		}
 
 		block.Statements = newStmts

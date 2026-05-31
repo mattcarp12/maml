@@ -304,14 +304,16 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		if p.peekToken.Type == token.RBRACKET {
 			p.nextToken()                 // Step onto ']'
 			baseType := p.parseTypeExpr() // Recursively parse the base type
+			if baseType == nil {
+				return nil
+			}
 			return &ast.SliceTypeExpr{Base: baseType, Pos_: startPos}
 		}
 
 		// Or is it a fixed-size array? `[5]T`
 		if !p.expectPeek(token.INT) {
-			return nil // expectPeek will automatically log an error
+			return nil
 		}
-
 		size, _ := strconv.ParseInt(p.curToken.Literal, 10, 64)
 
 		if !p.expectPeek(token.RBRACKET) {
@@ -319,6 +321,9 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		}
 
 		baseType := p.parseTypeExpr() // Recursively parse the base type
+		if baseType == nil {
+			return nil
+		}
 		return &ast.ArrayTypeExpr{Size: int(size), Base: baseType, Pos_: startPos}
 	}
 
@@ -330,49 +335,9 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		// If followed by '<', it's a compiler-known generic type!
 		if p.peekToken.Type == token.LT {
 			p.nextToken() // Step onto '<'
-
-			switch name {
-			case "Map":
-				keyType := p.parseTypeExpr()
-				if !p.expectPeek(token.COMMA) {
-					return nil
-				}
-				valType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				return &ast.MapTypeExpr{Key: keyType, Value: valType, Pos_: startPos}
-
-			case "Vec", "Option":
-				baseType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				if name == "Vec" {
-					return &ast.VectorTypeExpr{Base: baseType, Pos_: startPos}
-				}
-				return &ast.OptionTypeExpr{Base: baseType, Pos_: startPos}
-
-			case "Result":
-				okType := p.parseTypeExpr()
-				if !p.expectPeek(token.COMMA) {
-					return nil
-				}
-				errType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				return &ast.ResultTypeExpr{Ok: okType, Err: errType, Pos_: startPos}
-
-			default:
-				// The Gatekeeper catches invalid generics here, because in a type signature, `T<` is always an error.
-				p.addError(fmt.Sprintf(
-					"user-defined generic types like '%s<...>' are not currently supported. Only Map, Vec, Option, and Result are allowed.",
-					name,
-				))
-				return nil
-			}
+			return p.parseGenericTypeExpr(name, startPos)
 		}
+
 		// Standard named type (int, string, etc.)
 		return &ast.NamedTypeExpr{
 			Name: &ast.Identifier{Value: name},
@@ -382,4 +347,42 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 
 	p.addError(fmt.Sprintf("expected a type, got %s", p.peekToken.Type))
 	return nil
+}
+
+func (p *Parser) parseGenericTypeExpr(name string, pos ast.Position) *ast.GenericTypeExpr {
+	args := []ast.TypeExpr{}
+
+	// We arrive here with curToken sitting on '<'
+	// peekToken is the start of the first type argument.
+	// parseTypeExpr will call nextToken() immediately, stepping onto it.
+	arg := p.parseTypeExpr()
+	if arg == nil {
+		return nil
+	}
+	args = append(args, arg)
+
+	// Loop for remaining comma-separated type arguments
+	for p.peekToken.Type == token.COMMA {
+		p.nextToken() // Step onto ','. Now peekToken is the start of the NEXT type argument.
+
+		arg := p.parseTypeExpr() // This will call nextToken(), stepping onto the type argument.
+		if arg == nil {
+			return nil
+		}
+		args = append(args, arg)
+	}
+
+	// After the loop, the next token must be '>'
+	if !p.expectPeek(token.GT) {
+		return nil
+	}
+
+	return &ast.GenericTypeExpr{
+		Name: &ast.Identifier{
+			Value: name,
+			Pos_:  pos,
+		},
+		Args: args,
+		Pos_: pos,
+	}
 }

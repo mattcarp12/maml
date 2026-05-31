@@ -2,10 +2,12 @@ package ownership
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 // BindingState manages the flow-sensitive lifecycle of a variable.
@@ -61,7 +63,7 @@ func (a *Analyzer) Analyze(g *mir.Graph) []ast.CompileError {
 	for changed {
 		changed = false
 
-		for _, block := range g.Blocks {
+		for _, block := range g.SortedBlocks() {
 			// 1. Merge incoming states from visited predecessors only
 			mergedIn := a.mergePredecessors(g, block, stateOut, visited)
 			stateIn[block.ID] = mergedIn
@@ -131,7 +133,7 @@ func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateO
 
 func getPredecessors(g *mir.Graph, target mir.BlockID) []mir.BlockID {
 	var preds []mir.BlockID
-	for _, block := range g.Blocks {
+	for _, block := range g.SortedBlocks() {
 		switch t := block.Terminator.(type) {
 		case *mir.JumpTerminator:
 			if t.Target == target {
@@ -162,7 +164,7 @@ func statesEqual(s1, s2 *BlockState) bool {
 func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	// A zero-position fallback; in a complete compiler, MIR instructions
 	// should retain the ast.Position from their source HIR node.
-	pos := hir.Position{}
+	pos := tast.Position{}
 
 	switch i := inst.(type) {
 	case *mir.TempDeclInst:
@@ -183,7 +185,11 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	case *mir.MoveInst:
 		a.checkAccess(i.Src, state, pos)
 		if binding, exists := state.Bindings[i.Src]; exists {
-			binding.Invalidated = true // Affine transfer of ownership
+			// Only invalidate user-visible variables; compiler temporaries are
+			// single-use by construction and don't need affine tracking.
+			if !isCompilerGenerated(i.Src) && !isCompilerGenerated(i.Dst) {
+				binding.Invalidated = true
+			}
 		}
 		state.Bindings[i.Dst] = &BindingState{Invalidated: false, MutLocked: false}
 
@@ -204,14 +210,24 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 	// A zero-position fallback; in a complete compiler, MIR terminators
 	// should retain the ast.Position from their source HIR node for exact error tracing.
-	pos := hir.Position{}
+	pos := tast.Position{}
 
 	switch term.(type) {
 	case *mir.CoroSuspendTerminator:
 		// Phase 5 Invariant: Mutable borrows cannot cross await boundaries.
 		// If the task is suspended and rescheduled onto a different thread while
 		// holding an exclusive lock, it creates a severe data race.
-		for name, binding := range state.Bindings {
+
+		// Extract and sort the variable names to guarantee deterministic error output
+		var names []string
+		for name := range state.Bindings {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		// FIXED: Iterate through the sorted names to check for violations
+		for _, name := range names {
+			binding := state.Bindings[name]
 			if binding.MutLocked {
 				a.errorf(pos, "mutable borrow of variable '%s' cannot survive across an async suspension point", name)
 			}
@@ -225,16 +241,16 @@ func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 	}
 }
 
-func (a *Analyzer) errorf(pos hir.Position, format string, args ...interface{}) {
+func (a *Analyzer) errorf(pos tast.Position, format string, args ...interface{}) {
 	a.errors = append(a.errors, ast.CompileError{
 		Stage: "Ownership",
-		Pos:   pos.ToAST(), // TODO: In a full MIR implementation, position info should be threaded through MIR nodes
+		Pos:   pos,
 		Msg:   fmt.Sprintf(format, args...),
 	})
 }
 
 // checkAccess verifies that a variable is legally readable/writable.
-func (a *Analyzer) checkAccess(name string, state *BlockState, pos hir.Position) {
+func (a *Analyzer) checkAccess(name string, state *BlockState, pos tast.Position) {
 	binding, exists := state.Bindings[name]
 	if !exists {
 		return // Ignore unregistered symbols (e.g., globals or built-ins)
@@ -253,28 +269,28 @@ func (a *Analyzer) checkAccess(name string, state *BlockState, pos hir.Position)
 }
 
 // checkExprAccess recursively validates access to variables inside a flattened expression.
-func (a *Analyzer) checkExprAccess(expr hir.Expr, state *BlockState) {
+func (a *Analyzer) checkExprAccess(expr tast.Expr, state *BlockState) {
 	if expr == nil {
 		return
 	}
 
 	switch e := expr.(type) {
-	case *hir.Identifier:
+	case *tast.Identifier:
 		a.checkAccess(e.Value, state, e.Pos())
-	case *hir.InfixExpr:
+	case *tast.InfixExpr:
 		a.checkExprAccess(e.Left, state)
 		a.checkExprAccess(e.Right, state)
-	case *hir.PrefixExpr:
+	case *tast.PrefixExpr:
 		a.checkExprAccess(e.Right, state)
-	case *hir.CallExpr:
+	case *tast.CallExpr:
 		a.checkExprAccess(e.Function, state)
 		for _, arg := range e.Arguments {
 			a.checkExprAccess(arg.Argument, state)
 		}
-	case *hir.IndexExpr:
+	case *tast.IndexExpr:
 		a.checkExprAccess(e.Left, state)
 		a.checkExprAccess(e.Index, state)
-	case *hir.SliceExpr:
+	case *tast.SliceExpr:
 		a.checkExprAccess(e.Left, state)
 		if e.Low != nil {
 			a.checkExprAccess(e.Low, state)
@@ -282,7 +298,11 @@ func (a *Analyzer) checkExprAccess(expr hir.Expr, state *BlockState) {
 		if e.High != nil {
 			a.checkExprAccess(e.High, state)
 		}
-	case *hir.FieldAccess:
+	case *tast.FieldAccess:
 		a.checkExprAccess(e.Object, state)
 	}
+}
+
+func isCompilerGenerated(name string) bool {
+	return strings.HasPrefix(name, "__")
 }

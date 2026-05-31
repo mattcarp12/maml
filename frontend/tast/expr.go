@@ -139,6 +139,33 @@ type ArrayLiteral struct {
 	Type     types.Type // Permanently bound semantic type
 }
 
+type MapLiteral struct {
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	Elements []MapElement
+	Type     types.MapType
+}
+
+type MapElement struct {
+	Key   Expr
+	Value Expr
+}
+
+type VecLiteral struct {
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	Elements []Expr
+	Type     types.VectorType
+}
+
+type VariantLiteral struct {
+	Pos_      Position          `json:"-"`
+	End_      Position          `json:"-"`
+	Variant   *types.SumVariant // The specific variant (e.g., Some)
+	Arguments []Expr            // The inner values (e.g., [5])
+	Type      types.Type        // The resolved SumType (e.g., Option<int>)
+}
+
 // =============================================================================
 // Complex Expressions
 // =============================================================================
@@ -242,6 +269,33 @@ func (al *ArrayLiteral) String() string {
 }
 func (al *ArrayLiteral) exprNode() {}
 
+func (n *MapLiteral) Pos() Position { return n.Pos_ }
+func (n *MapLiteral) End() Position { return n.End_ }
+func (n *MapLiteral) String() string {
+	var elements []string
+	for _, e := range n.Elements {
+		elements = append(elements, fmt.Sprintf("%s: %s", e.Key.String(), e.Value.String()))
+	}
+	return fmt.Sprintf("%s{%s}", n.Type.String(), strings.Join(elements, ", "))
+}
+func (n *MapLiteral) exprNode() {}
+
+func (n *VecLiteral) Pos() Position { return n.Pos_ }
+func (n *VecLiteral) End() Position { return n.End_ }
+func (n *VecLiteral) String() string {
+	var elems []string
+	for _, el := range n.Elements {
+		elems = append(elems, el.String())
+	}
+	return fmt.Sprintf("%s[%s]", n.Type.String(), strings.Join(elems, ", "))
+}
+func (n *VecLiteral) exprNode() {}
+
+func (n *VariantLiteral) Pos() Position  { return n.Pos_ }
+func (n *VariantLiteral) End() Position  { return n.End_ }
+func (n *VariantLiteral) String() string { return n.Variant.Name + "(...)" }
+func (n *VariantLiteral) exprNode()      {}
+
 func (ce *CallExpr) Pos() Position { return ce.Pos_ }
 func (ce *CallExpr) End() Position {
 	if len(ce.Arguments) == 0 {
@@ -249,6 +303,7 @@ func (ce *CallExpr) End() Position {
 	}
 	return ce.Arguments[len(ce.Arguments)-1].Argument.End()
 }
+
 func (ce *CallExpr) String() string {
 	var args []string
 	for _, a := range ce.Arguments {

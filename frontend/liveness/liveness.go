@@ -1,8 +1,8 @@
 package liveness
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 // LivenessResult holds the LiveIn and LiveOut sets for every BasicBlock.
@@ -31,10 +31,10 @@ func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 	// Precompute block summaries once upfront
 	blockUses := make(map[mir.BlockID]map[string]bool)
 	blockDefs := make(map[mir.BlockID]map[string]bool)
-	for id, block := range g.Blocks {
+	for _, block := range g.SortedBlocks() {
 		useSet, defSet := computeBlockUseDef(block)
-		blockUses[id] = useSet
-		blockDefs[id] = defSet
+		blockUses[block.ID] = useSet
+		blockDefs[block.ID] = defSet
 	}
 
 	changed := true
@@ -144,29 +144,29 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 	return useSet, defSet
 }
 
-func extractUses(expr hir.Expr) []string {
+func extractUses(expr tast.Expr) []string {
 	var uses []string
 	switch e := expr.(type) {
-	case *hir.Identifier:
+	case *tast.Identifier:
 		uses = append(uses, e.Value)
-	case *hir.InfixExpr:
+	case *tast.InfixExpr:
 		uses = append(uses, extractUses(e.Left)...)
 		uses = append(uses, extractUses(e.Right)...)
-	case *hir.PrefixExpr:
+	case *tast.PrefixExpr:
 		uses = append(uses, extractUses(e.Right)...)
-	case *hir.CallExpr:
+	case *tast.CallExpr:
 		uses = append(uses, extractUses(e.Function)...)
 		for _, arg := range e.Arguments {
 			uses = append(uses, extractUses(arg.Argument)...)
 		}
-	case *hir.SliceExpr:
+	case *tast.SliceExpr:
 		uses = append(uses, extractUses(e.Left)...)
 		uses = append(uses, extractUses(e.Low)...)
 		uses = append(uses, extractUses(e.High)...)
-	case *hir.IndexExpr:
+	case *tast.IndexExpr:
 		uses = append(uses, extractUses(e.Left)...)
 		uses = append(uses, extractUses(e.Index)...)
-	case *hir.FieldAccess:
+	case *tast.FieldAccess:
 		uses = append(uses, extractUses(e.Object)...)
 		// default:
 		// 	panic(fmt.Sprintf("liveness: unhandled expression type %T in extractUses", e))

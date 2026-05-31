@@ -52,9 +52,9 @@ func Graph(g *mir.Graph) {
 	reachable := Reachable(g)
 
 	// Physically delete dead blocks from the map
-	for id := range g.Blocks {
-		if !reachable[id] {
-			delete(g.Blocks, id)
+	for _, block := range g.SortedBlocks() {
+		if !reachable[block.ID] {
+			delete(g.Blocks, block.ID)
 		}
 	}
 }

@@ -1,11 +1,13 @@
 package driver
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/mattcarp12/maml/frontend"
 	"github.com/mattcarp12/maml/frontend/mir"
@@ -53,27 +55,20 @@ func (p *Pipeline) Build(srcPath string) error {
 		return err
 	}
 
-	// 2. Temp Directory for Intermediate Build Files
+	// 2. Serialize MIR to JSON bytes in-memory
+	mirBytes, err := mir.MarshalProgram(res.MIR)
+	if err != nil {
+		return fmt.Errorf("failed to serialize MIR: %w", err)
+	}
+
+	// 3. Temp Directory (Only needed for the intermediate LLVM IR file now)
 	tempDir, err := os.MkdirTemp("", "maml_build_*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	jsonPath := filepath.Join(tempDir, "ast.json")
 	llPath := filepath.Join(tempDir, "output.ll")
-
-	// 3. Emit JSON
-	jsonFile, err := os.Create(jsonPath)
-	if err != nil {
-		return fmt.Errorf("failed to create json file: %w", err)
-	}
-	emitter := mir.NewEmitter()
-	if err := emitter.Emit(res.MIR, jsonFile); err != nil {
-		jsonFile.Close()
-		return fmt.Errorf("failed to emit HIR JSON: %w", err)
-	}
-	jsonFile.Close()
 
 	// 4. Locate and Execute the C++ Backend
 	backendBin := "maml-backend"
@@ -84,7 +79,12 @@ func (p *Pipeline) Build(srcPath string) error {
 		}
 	}
 
-	backendCmd := exec.Command(backendBin, jsonPath)
+	// Do NOT pass a file path argument; the C++ backend will read from stdin
+	backendCmd := exec.Command(backendBin)
+
+	// Pipe the in-memory JSON bytes directly to the backend's stdin
+	backendCmd.Stdin = bytes.NewReader(mirBytes)
+
 	llFile, err := os.Create(llPath)
 	if err != nil {
 		return fmt.Errorf("failed to create LLVM IR file: %w", err)
@@ -98,13 +98,6 @@ func (p *Pipeline) Build(srcPath string) error {
 		return fmt.Errorf("backend generation failure: %w", err)
 	}
 	llFile.Close()
-
-	// Optional: Print IR
-	if p.cfg.PrintIR {
-		irBytes, _ := os.ReadFile(llPath)
-		fmt.Println("=== Generated LLVM IR ===")
-		fmt.Println(string(irBytes))
-	}
 
 	// 5. Clang Compilation & Linking
 	args := []string{
@@ -169,7 +162,7 @@ func (p *Pipeline) DumpAST(srcPath string) ([]byte, error) {
 
 	// MarshalIndent formats the JSON neatly for readable snapshot files.
 	// Struct fields marked with `json:"-"` (like Pos_ and End_) are automatically skipped.
-	jsonBytes, err := json.MarshalIndent(astProgram, "", "  ")
+	jsonBytes, err := json.Marshal(astProgram)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
 	}
@@ -190,12 +183,115 @@ func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
 		return nil, err
 	}
 
-	// MarshalIndent formats the JSON neatly for readable snapshot files.
-	// Struct fields marked with `json:"-"` (like Pos_ and End_) are automatically skipped.
-	jsonBytes, err := json.MarshalIndent(tastProgram, "", "  ")
+	jsonBytes, err := json.Marshal(tastProgram)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
 	}
 
 	return jsonBytes, nil
+}
+
+// DumpMIR translates the target file and returns its pretty-printed JSON MIR representation.
+func (p *Pipeline) DumpMIR(srcPath string) ([]byte, error) {
+	comp := frontend.New()
+	res, err := comp.CompileFile(srcPath)
+	if res == nil || res.MIR == nil {
+		return nil, err
+	}
+
+	return mir.MarshalProgram(res.MIR)
+}
+
+// DumpLLVM translates the target file, invokes the C++ backend,
+// and returns the generated LLVM IR as a byte slice.
+func (p *Pipeline) DumpLLVM(srcPath string) ([]byte, error) {
+	// 1. Frontend: Generate MIR
+	comp := frontend.New()
+	res, err := comp.CompileFile(srcPath)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil || res.MIR == nil {
+		return nil, fmt.Errorf("frontend failed to generate MIR")
+	}
+
+	// 2. Serialize MIR to JSON bytes in-memory
+	mirBytes, err := mir.MarshalProgram(res.MIR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize MIR: %w", err)
+	}
+
+	// 3. Locate and Execute the C++ Backend
+	backendBin := "maml-backend"
+	if execPath, err := os.Executable(); err == nil {
+		localBackend := filepath.Join(filepath.Dir(execPath), "maml-backend")
+		if _, err := os.Stat(localBackend); err == nil {
+			backendBin = localBackend
+		}
+	}
+
+	backendCmd := exec.Command(backendBin)
+	backendCmd.Stdin = bytes.NewReader(mirBytes)
+
+	// Capture both stdout (the LLVM IR) and stderr (compiler errors) in-memory
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	backendCmd.Stdout = &stdoutBuf
+	backendCmd.Stderr = &stderrBuf
+
+	if err := backendCmd.Run(); err != nil {
+		return nil, fmt.Errorf("backend generation failure:\n%s\n%w", stderrBuf.String(), err)
+	}
+
+	return stdoutBuf.Bytes(), nil
+}
+
+// DumpAll generates all compiler phases and writes them to a single file
+// segregated by clear header comments.
+func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
+	// 1. Fetch all representations
+	srcBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to read source: %w", err)
+	}
+
+	astBytes, err := p.DumpAST(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to dump AST: %w", err)
+	}
+
+	tastBytes, err := p.DumpTAST(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to dump TAST: %w", err)
+	}
+
+	mirBytes, err := p.DumpMIR(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to dump MIR: %w", err)
+	}
+
+	llvmBytes, err := p.DumpLLVM(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to dump LLVM IR: %w", err)
+	}
+
+	// 2. Format the output with segregation headers
+	var buf bytes.Buffer
+
+	writeSection := func(title string, content []byte) {
+		buf.WriteString(fmt.Sprintf("// %s\n", strings.Repeat("=", 76)))
+		buf.WriteString(fmt.Sprintf("// %s\n", title))
+		buf.WriteString(fmt.Sprintf("// %s\n\n", strings.Repeat("=", 76)))
+		buf.Write(content)
+		buf.WriteString("\n\n")
+	}
+
+	writeSection(fmt.Sprintf("PHASE 0: SOURCE CODE (%s)", srcPath), srcBytes)
+	writeSection("PHASE 1: ABSTRACT SYNTAX TREE (AST)", astBytes)
+	writeSection("PHASE 2: TYPED ABSTRACT SYNTAX TREE (TAST)", tastBytes)
+	writeSection("PHASE 3: MID-LEVEL IR (MIR)", mirBytes)
+	writeSection("PHASE 4: LLVM IR", llvmBytes)
+
+	// 3. Write to the target file
+	return os.WriteFile(outPath, buf.Bytes(), 0644)
 }

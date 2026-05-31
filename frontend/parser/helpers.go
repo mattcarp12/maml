@@ -78,7 +78,29 @@ func (p *Parser) hadTooManyErrors() bool {
 func (p *Parser) nextToken() {
 	p.curToken = p.peekToken
 	p.peekToken = p.peek2Token
-	p.peek2Token = p.l.NextToken()
+	if len(p.lookahead) > 0 {
+		p.peek2Token = p.lookahead[0]
+		p.lookahead = p.lookahead[1:]
+	} else {
+		p.peek2Token = p.l.NextToken()
+	}
+}
+
+func (p *Parser) peekAhead(distance int) token.Token {
+	if distance == 1 {
+		return p.peekToken
+	}
+	if distance == 2 {
+		return p.peek2Token
+	}
+	// distance >= 3: need tokens beyond peek2Token.
+	// lookahead[0] = position 3, lookahead[1] = position 4, etc.
+	idx := distance - 3
+	needed := idx + 1 - len(p.lookahead)
+	for i := 0; i < needed; i++ {
+		p.lookahead = append(p.lookahead, p.l.NextToken())
+	}
+	return p.lookahead[idx]
 }
 
 // --- expectPeek / peekError --------------------------------------------------
@@ -216,4 +238,45 @@ func (p *Parser) parseCommaSeparatedList(end token.TokenType, parseElem func()) 
 
 	// Returns true if it found the end token, false otherwise
 	return p.expectPeek(end)
+}
+
+// looksLikeGenericInstantiation returns true when the token stream starting
+// at peekToken looks like a generic instantiation:
+//
+//	< Ident [, Ident]* > followed by `{` or `(`
+//
+// It does NOT consume any tokens; it only peeks ahead.
+// peekToken is already known to be LT when this is called.
+func (p *Parser) looksLikeGenericInstantiation() bool {
+	// Distances are relative to peekToken (distance 1).
+	// peekToken (distance 1) == LT  ← already confirmed by caller
+	// distance 2 must be an IDENT (first type argument)
+	if p.peekAhead(2).Type != token.IDENT {
+		return false
+	}
+
+	// Walk through comma-separated IDENT tokens looking for the closing >.
+	// We support flat type arg lists: <A>, <A, B>, <A, B, C>, …
+	// distance 2 is the first IDENT we already checked.
+	dist := 2
+	for {
+		// After an IDENT, expect either ',' (another arg) or '>' (close).
+		dist++ // step past the IDENT
+		next := p.peekAhead(dist)
+		switch next.Type {
+		case token.GT:
+			// Closing '>' found — check what follows it.
+			after := p.peekAhead(dist + 1)
+			return after.Type == token.LBRACE || after.Type == token.LPAREN
+		case token.COMMA:
+			// Another type argument — the token after ',' must be an IDENT.
+			dist++ // step past ','
+			if p.peekAhead(dist).Type != token.IDENT {
+				return false
+			}
+			// loop continues; dist now points at the next IDENT
+		default:
+			return false
+		}
+	}
 }

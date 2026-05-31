@@ -143,23 +143,8 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 		return types.SliceType{
 			Base: a.resolveAstType(e.Base),
 		}
-	case *ast.TaskTypeExpr:
-		return types.TaskType{
-			Base: a.resolveAstType(e.Base),
-		}
-	case *ast.MapTypeExpr:
-		return types.MapType{
-			Key:   a.resolveAstType(e.Key),
-			Value: a.resolveAstType(e.Value),
-		}
-	case *ast.VectorTypeExpr:
-		return types.VectorType{
-			Base: a.resolveAstType(e.Base),
-		}
-	case *ast.OptionTypeExpr:
-		return types.NewOptionType(a.resolveAstType(e.Base))
-	case *ast.ResultTypeExpr:
-		return types.NewResultType(a.resolveAstType(e.Ok), a.resolveAstType(e.Err))
+	case *ast.GenericTypeExpr:
+		return a.resolveBuiltinGeneric(e)
 	}
 
 	return types.UnknownType{}

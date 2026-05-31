@@ -8,6 +8,68 @@
 
 namespace maml {
 
+void defineCoroHelperStubs(CodegenContext &ctx) {
+  auto &Module = ctx.Module;
+  auto &Context = ctx.Context;
+  llvm::Type *voidTy = llvm::Type::getVoidTy(Context);
+  llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
+  llvm::Type *i1Ty = llvm::Type::getInt1Ty(Context);
+
+  // Define BEFORE any declarations to prevent LLVM suffixing
+  auto defineIfMissing = [&](const char *name, llvm::FunctionType *FT, auto body) {
+    if (Module->getFunction(name)) return;  // already exists
+
+    llvm::Function *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, name, *Module);
+
+    llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "entry", F);
+    ctx.Builder->SetInsertPoint(BB);
+    body(F);
+  };
+
+  // maml_coro_resume_helper
+  defineIfMissing(rt::CORO_RESUME, llvm::FunctionType::get(voidTy, {ptrTy}, false),
+                  [&](llvm::Function *) { ctx.Builder->CreateRetVoid(); });
+
+  // maml_coro_done_helper
+  defineIfMissing(rt::CORO_DONE, llvm::FunctionType::get(i1Ty, {ptrTy}, false),
+                  [&](llvm::Function *) { ctx.Builder->CreateRet(llvm::ConstantInt::get(i1Ty, 0)); });
+
+  // maml_coro_destroy_helper
+  defineIfMissing(rt::CORO_DESTROY, llvm::FunctionType::get(voidTy, {ptrTy}, false),
+                  [&](llvm::Function *) { ctx.Builder->CreateRetVoid(); });
+}
+
+void declareRuntimeFunctions(CodegenContext &ctx) {
+  auto &Module = ctx.Module;
+  auto &Context = ctx.Context;
+  llvm::Type *voidTy = llvm::Type::getVoidTy(Context);
+  llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
+  llvm::Type *i64Ty = llvm::Type::getInt64Ty(Context);
+  llvm::Type *i32Ty = llvm::Type::getInt32Ty(Context);
+  llvm::Type *i8Ty = llvm::Type::getInt8Ty(Context);
+
+  // maml_alloc: ptr (i64)
+  Module->getOrInsertFunction(rt::ALLOC, llvm::FunctionType::get(ptrTy, {i64Ty}, false));
+  // maml_free: void (ptr)
+  Module->getOrInsertFunction(rt::FREE, llvm::FunctionType::get(voidTy, {ptrTy}, false));
+  // maml_retain: void (ptr)
+  Module->getOrInsertFunction(rt::RETAIN, llvm::FunctionType::get(voidTy, {ptrTy}, false));
+  // maml_release: void (ptr)
+  Module->getOrInsertFunction(rt::RELEASE, llvm::FunctionType::get(voidTy, {ptrTy}, false));
+  // maml_vec_grow: ptr (ptr, i32, ptr, i32)
+  Module->getOrInsertFunction(rt::VEC_GROW, llvm::FunctionType::get(ptrTy, {ptrTy, i32Ty, ptrTy, i32Ty}, false));
+  // maml_map_create: ptr (i32, i8)
+  Module->getOrInsertFunction(rt::MAP_CREATE, llvm::FunctionType::get(ptrTy, {i32Ty, i8Ty}, false));
+  // maml_map_put: void (ptr, i64, ptr, ptr, i32)
+  Module->getOrInsertFunction(rt::MAP_PUT, llvm::FunctionType::get(voidTy, {ptrTy, i64Ty, ptrTy, ptrTy, i32Ty}, false));
+  // maml_map_get: ptr (ptr, i64, ptr, i32)
+  Module->getOrInsertFunction(rt::MAP_GET, llvm::FunctionType::get(ptrTy, {ptrTy, i64Ty, ptrTy, i32Ty}, false));
+  // maml_str_hash: i64 (ptr, i32)
+  Module->getOrInsertFunction(rt::STR_HASH, llvm::FunctionType::get(i64Ty, {ptrTy, i32Ty}, false));
+  // puts: i32 (ptr)
+  Module->getOrInsertFunction(rt::PUTS, llvm::FunctionType::get(i32Ty, {ptrTy}, false));
+}
+
 void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
   auto &Builder = ctx.Builder;
   auto &Context = ctx.Context;
@@ -20,6 +82,8 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
   if (fn.contains("return_type") && !fn["return_type"].is_null()) {
     retType = llvmTypeFor(ctx, fn["return_type"]);
   }
+
+  // Hardcode main to return i32 for C ABI compatibility
   if (name == "main") {
     retType = llvm::Type::getInt32Ty(Context);
   }
@@ -41,137 +105,88 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
     F->addFnAttr(llvm::Attribute::PresplitCoroutine);
   }
 
-  // 4. Reset Context State for the new function
-  ctx.SymbolTable.clear();
-  ctx.Blocks.clear();
+  // 4. Create a new Variable Scope
   ctx.pushScope();
 
-  // ===========================================================================
-  // Basic Block Materialization
-  // ===========================================================================
+  // 5. Setup an entry block specifically for stack allocations
+  llvm::BasicBlock *allocBB = llvm::BasicBlock::Create(Context, "entry_allocs", F);
+  Builder->SetInsertPoint(allocBB);
 
-  // Pre-allocate all basic blocks in LLVM before compiling any instructions.
-  // This mathematically guarantees forward-jumping terminators never fail.
-  if (fn.contains("blocks")) {
-    for (auto it = fn["blocks"].begin(); it != fn["blocks"].end(); ++it) {
-      int blockId = std::stoi(it.key());
-      llvm::BasicBlock *bb = llvm::BasicBlock::Create(Context, "bb_" + std::to_string(blockId), F);
-      ctx.Blocks[blockId] = bb;
+  // 6. Bind Arguments to Scope
+  unsigned idx = 0;
+  if (fn.contains("params")) {
+    for (auto &arg : F->args()) {
+      std::string paramName = fn["params"][idx]["name"].get<std::string>();
+      arg.setName(paramName);
+
+      llvm::AllocaInst *alloca = Builder->CreateAlloca(arg.getType(), nullptr, paramName);
+      Builder->CreateStore(&arg, alloca);
+
+      ctx.SymbolEnv.back()[paramName] = alloca;
+      idx++;
     }
   }
 
-  // ===========================================================================
-  // Entry Point Setup & Parameter Allocation
-  // ===========================================================================
+  if (!retType->isVoidTy()) {
+    llvm::AllocaInst *retAlloca = Builder->CreateAlloca(retType, nullptr, "_ret");
+    // Zero-initialize to prevent undefined behavior on early returns
+    Builder->CreateStore(llvm::Constant::getNullValue(retType), retAlloca);
+    ctx.SymbolEnv.back()["_ret"] = retAlloca;
+  }
 
-  if (fn.contains("entry_block")) {
-    int entryId = fn["entry_block"].get<int>();
-    Builder->SetInsertPoint(ctx.Blocks[entryId]);
-
-    // Materialize the universal "_ret" register if the function returns a value
-    if (!retType->isVoidTy() && !fn.value("is_async", false)) {
-      llvm::AllocaInst *retAlloc = Builder->CreateAlloca(retType, nullptr, "_ret");
-      ctx.SymbolEnv.back()["_ret"] = retAlloc;
+  // 7. Setup Basic Blocks (Flattened MIR)
+  if (fn.contains("blocks") && !fn["blocks"].is_null()) {
+    for (auto &[idStr, blockJson] : fn["blocks"].items()) {
+      int blockId = std::stoi(idStr);
+      llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "bb" + idStr, F);
+      ctx.Blocks[blockId] = BB;
     }
 
-    // Materialize arguments as stack-allocated variables in the entry block
-    unsigned Idx = 0;
-    for (auto &Arg : F->args()) {
-      std::string_view pName = fn["params"][Idx]["name"].get<std::string_view>();
-      llvm::Type *pType = paramTypes[Idx];
-      llvm::AllocaInst *alloca = Builder->CreateAlloca(pType, nullptr, std::string(pName));
-      Builder->CreateStore(&Arg, alloca);
-      ctx.SymbolEnv.back()[std::string(pName)] = alloca;
-      Idx++;
+    if (fn.contains("entry_block")) {
+      std::string entryStr = fn["entry_block"].get<std::string>();
+      int entryId = std::stoi(entryStr);
+      Builder->SetInsertPoint(allocBB);
+      Builder->CreateBr(ctx.Blocks[entryId]);
+    } else {
+      ctx.Error.fatal("Function missing 'entry_block'", fn);
     }
 
-    // ===========================================================================
-    // PHASE 9, STEP 3, 4, 5: Linear Instruction Translation
-    // ===========================================================================
+    for (auto &[idStr, blockJson] : fn["blocks"].items()) {
+      int blockId = std::stoi(idStr);
+      Builder->SetInsertPoint(ctx.Blocks[blockId]);
 
-    if (fn.contains("blocks")) {
-      // 1. Gather and sort block IDs numerically to prevent lexicographical sorting corruption
-      std::vector<int> sortedBlockIds;
-      for (auto it = fn["blocks"].begin(); it != fn["blocks"].end(); ++it) {
-        sortedBlockIds.push_back(std::stoi(it.key()));
-      }
-      std::sort(sortedBlockIds.begin(), sortedBlockIds.end());
-
-      // 2. Translate statements strictly following the sorted flow control sequence
-      for (int blockId : sortedBlockIds) {
-        std::string blockKey = std::to_string(blockId);
-        const auto &blockData = fn["blocks"][blockKey];
-
-        Builder->SetInsertPoint(ctx.Blocks[blockId]);
-
-        if (blockData.contains("statements")) {
-          for (const auto &stmt : blockData["statements"]) {
-            compileStatement(ctx, stmt);
-          }
+      if (blockJson.contains("instructions")) {
+        for (const auto &inst : blockJson["instructions"]) {
+          compileStatement(ctx, inst);
         }
-
-        // Emit the strict block exit routing!
-        compileTerminator(ctx, blockData["terminator"]);
+      }
+      if (blockJson.contains("terminator")) {
+        compileTerminator(ctx, blockJson["terminator"]);
       }
     }
+  } else {
+    Builder->CreateRetVoid();
   }
 
-  // Scope cleanup
-  if (!ctx.SymbolEnv.empty()) {
-    ctx.popScope();
-  }
-}
-
-static void generateCoroutineHelpers(CodegenContext &ctx) {
-  auto &Builder = ctx.Builder;
-  auto &Context = ctx.Context;
-  auto &Module = ctx.Module;
-
-  llvm::Type *voidTy = llvm::Type::getVoidTy(Context);
-  llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
-  llvm::Type *boolTy = llvm::Type::getInt1Ty(Context);
-
-  llvm::Function *coroResumeIntrin = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_resume);
-  llvm::Function *coroDestroyIntrin = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_destroy);
-  llvm::Function *coroDoneIntrin = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_done);
-
-  llvm::Function *resumeHelper = llvm::Function::Create(llvm::FunctionType::get(voidTy, {ptrTy}, false),
-                                                        llvm::Function::ExternalLinkage, rt::CORO_RESUME, *Module);
-  llvm::BasicBlock *resumeBB = llvm::BasicBlock::Create(Context, "entry", resumeHelper);
-  Builder->SetInsertPoint(resumeBB);
-  Builder->CreateCall(coroResumeIntrin, {resumeHelper->getArg(0)});
-  Builder->CreateRetVoid();
-
-  llvm::Function *destroyHelper = llvm::Function::Create(llvm::FunctionType::get(voidTy, {ptrTy}, false),
-                                                         llvm::Function::ExternalLinkage, rt::CORO_DESTROY, *Module);
-  llvm::BasicBlock *destroyBB = llvm::BasicBlock::Create(Context, "entry", destroyHelper);
-  Builder->SetInsertPoint(destroyBB);
-  Builder->CreateCall(coroDestroyIntrin, {destroyHelper->getArg(0)});
-  Builder->CreateRetVoid();
-
-  llvm::Function *doneHelper = llvm::Function::Create(llvm::FunctionType::get(boolTy, {ptrTy}, false),
-                                                      llvm::Function::ExternalLinkage, rt::CORO_DONE, *Module);
-  llvm::BasicBlock *doneBB = llvm::BasicBlock::Create(Context, "entry", doneHelper);
-  Builder->SetInsertPoint(doneBB);
-  llvm::Value *doneResult = Builder->CreateCall(coroDoneIntrin, {doneHelper->getArg(0)});
-  Builder->CreateRet(doneResult);
+  // 8. Cleanup Scope
+  ctx.popScope();
+  ctx.Blocks.clear();
 }
 
 void compileProgram(CodegenContext &ctx, const nlohmann::json &ast) {
-  std::string_view nodeType = "unknown";
-  if (ast.contains("node_type")) nodeType = ast["node_type"].get<std::string_view>();
+  if (ast.is_null()) return;
 
-  if (nodeType != "Program") return;
+  defineCoroHelperStubs(ctx);
 
-  generateCoroutineHelpers(ctx);
+  declareRuntimeFunctions(ctx);
 
-  for (const auto &decl : ast["decls"]) {
-    std::string_view declNodeType = "unknown";
-    if (decl.contains("node_type")) declNodeType = decl["node_type"].get<std::string_view>();
-
-    if (declNodeType == "FnDecl") {
-      compileFunction(ctx, decl);
+  // Loop through the explicit "functions" array from the DTO exporter
+  if (ast.contains("functions") && ast["functions"].is_array()) {
+    for (const auto &fn : ast["functions"]) {
+      compileFunction(ctx, fn);
     }
+  } else {
+    ctx.Error.fatal("Invalid MIR format: missing 'functions' array", ast);
   }
 }
 

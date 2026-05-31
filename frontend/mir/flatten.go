@@ -3,7 +3,7 @@ package mir
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/hir"
+	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -15,7 +15,7 @@ func (b *Builder) newTemp() string {
 
 // flattenExpr eliminates nested expressions by materializing intermediate
 // values into explicit, linear temporary variables inside the BasicBlock.
-func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *BasicBlock) {
+func (b *Builder) flattenExpr(expr tast.Expr, current *BasicBlock) (tast.Expr, *BasicBlock) {
 	if expr == nil {
 		return nil, current
 	}
@@ -24,13 +24,13 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 	// -------------------------------------------------------------------------
 	// 1. Base Cases (Already Flat)
 	// -------------------------------------------------------------------------
-	case *hir.Identifier, *hir.IntLiteral, *hir.BoolLiteral, *hir.StringLiteral:
+	case *tast.Identifier, *tast.IntLiteral, *tast.BoolLiteral, *tast.StringLiteral:
 		return e, current
 
 	// -------------------------------------------------------------------------
 	// 2. Complex Operations
 	// -------------------------------------------------------------------------
-	case *hir.InfixExpr:
+	case *tast.InfixExpr:
 		flatLeft, current := b.flattenExpr(e.Left, current)
 		flatRight, current := b.flattenExpr(e.Right, current)
 
@@ -44,25 +44,26 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: allocType})
 
-		flatOp := &hir.InfixExpr{Pos_: e.Pos_, Left: flatLeft, Operator: e.Operator, Right: flatRight, Type: allocType}
+		flatOp := &tast.InfixExpr{Pos_: e.Pos_, Left: flatLeft, Operator: e.Operator, Right: flatRight, Type: allocType}
 		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatOp})
 
-		return &hir.Identifier{Value: tmp, Type: allocType}, current
-	case *hir.PrefixExpr:
+		return &tast.Identifier{Value: tmp, Type: allocType}, current
+
+	case *tast.PrefixExpr:
 		flatRight, current := b.flattenExpr(e.Right, current)
 
 		tmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
-		flatOp := &hir.PrefixExpr{Pos_: e.Pos_, Operator: e.Operator, Right: flatRight, Type: e.Type}
+		flatOp := &tast.PrefixExpr{Pos_: e.Pos_, Operator: e.Operator, Right: flatRight, Type: e.Type}
 		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatOp})
 
-		return &hir.Identifier{Value: tmp, Type: e.Type}, current
+		return &tast.Identifier{Value: tmp, Type: e.Type}, current
 
-	case *hir.CallExpr:
+	case *tast.CallExpr:
 		return b.flattenCall(e, current)
 
-	case *hir.AwaitExpr:
+	case *tast.AwaitExpr:
 		// 1. Evaluate the task/promise being awaited
 		flatTask, current := b.flattenExpr(e.Value, current)
 
@@ -92,39 +93,280 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Expr, *Ba
 		resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{Dst: tmp, RValue: flatTask})
 
 		// 6. Execution continues exclusively in the resume block!
-		return &hir.Identifier{Value: tmp, Type: e.Type}, resumeBlock
+		return &tast.Identifier{Value: tmp, Type: e.Type}, resumeBlock
 
-	case *hir.FieldAccess:
-		flatObj, current := b.flattenExpr(e.Object, current)
+	// -------------------------------------------------------------------------
+	// 3. Struct Literal
+	//
+	// A named-struct literal is lowered into a sequence of flat instructions:
+	//
+	//   TempDeclInst   -- declares the struct register (backend: alloca)
+	//   StructInitInst -- one per field, field-index resolved from StructType
+	//
+	// The caller receives an *tast.Identifier pointing at the new temporary.
+	//
+	// Map / Vec / SumType literals are NOT decomposed field-by-field here;
+	// they pass through as a single AssignInst so the backend can route them
+	// to the appropriate runtime constructor.
+	// -------------------------------------------------------------------------
+	case *tast.StructLiteral:
+		return b.flattenStructLiteral(e, current)
+
+	// -------------------------------------------------------------------------
+	// 4. Field Access
+	//
+	// Flattened into TempDeclInst + FieldReadInst so the backend always
+	// receives a flat (index-resolved) load rather than a nested expression.
+	// -------------------------------------------------------------------------
+	case *tast.FieldAccess:
+		return b.flattenFieldAccess(e, current)
+
+	case *tast.ArrayLiteral:
+		return b.flattenArrayLiteral(e, current)
+
+	case *tast.MapLiteral:
+		return b.flattenMapLiteral(e, current)
+
+	case *tast.VecLiteral:
+		return b.flattenVecLiteral(e, current)
+
+	case *tast.VariantLiteral:
+		return b.flattenVariantLiteral(e, current)
+
+	case *tast.SliceExpr:
+		flatLeft, current := b.flattenExpr(e.Left, current)
+
+		var flatLow, flatHigh tast.Expr
+		if e.Low != nil {
+			flatLow, current = b.flattenExpr(e.Low, current)
+		}
+		if e.High != nil {
+			flatHigh, current = b.flattenExpr(e.High, current)
+		}
+
+		// ContainerType is on the Left identifier after flattening.
+		containerType := flatLeft.(*tast.Identifier).Type
 
 		tmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		current.Statements = append(current.Statements, &SliceInst{
+			Dst:           tmp,
+			Left:          flatLeft,
+			ContainerType: containerType,
+			Low:           flatLow,
+			High:          flatHigh,
+			ResultType:    e.Type,
+		})
 
-		flatAccess := &hir.FieldAccess{Pos_: e.Pos_, Object: flatObj, Field: e.Field, Type: e.Type}
-		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatAccess})
+		return &tast.Identifier{Value: tmp, Type: e.Type}, current
 
-		return &hir.Identifier{Value: tmp, Type: e.Type}, current
+	case *tast.MatchExpr:
+		return b.flattenMatchExpr(e, current)
 
-	case *hir.IndexExpr:
+	case *tast.MethodCallExpr:
+		return b.flattenMethodCall(e, current)
+
+	case *tast.IndexExpr:
 		flatLeft, current := b.flattenExpr(e.Left, current)
 		flatIndex, current := b.flattenExpr(e.Index, current)
 
 		tmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
-		flatIndexExpr := &hir.IndexExpr{Pos_: e.Pos_, Left: flatLeft, Index: flatIndex, Type: e.Type}
+		flatIndexExpr := &tast.IndexExpr{Pos_: e.Pos_, Left: flatLeft, Index: flatIndex, Type: e.Type}
 		current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatIndexExpr})
 
-		return &hir.Identifier{Value: tmp, Type: e.Type}, current
+		return &tast.Identifier{Value: tmp, Type: e.Type}, current
 
-	case *hir.IfExpr:
+	case *tast.IfExpr:
 		return b.flattenIfExpr(e, current)
+
+	case *tast.BlockStmt:
+		return b.flattenBlockExpr(e, current)
 	}
 
 	return expr, current
 }
 
-func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (hir.Expr, *BasicBlock) {
+func (b *Builder) flattenStructLiteral(e *tast.StructLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	// =========================================================================
+	// CASE 1: Named Structs (Field-by-Field Initialization)
+	// =========================================================================
+	if structType, isStruct := e.Type.(*types.StructType); isStruct {
+		tmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: structType})
+
+		for _, field := range e.Fields {
+			flatVal, nextBlock := b.flattenExpr(field.Value, current)
+			current = nextBlock
+
+			fieldName := ""
+			if ident, ok := field.Key.(*tast.Identifier); ok && ident != nil {
+				fieldName = ident.Value
+			}
+
+			fieldIndex := structType.GetFieldIndex(fieldName)
+			if fieldIndex == -1 {
+				fieldIndex = 0 // Failsafe
+			}
+
+			current.Statements = append(current.Statements, &StructInitInst{
+				Dst:        tmp,
+				FieldName:  fieldName,
+				FieldIndex: fieldIndex,
+				Value:      flatVal,
+			})
+		}
+		return &tast.Identifier{Value: tmp, Type: structType}, current
+	}
+
+	// =========================================================================
+	// CASE 2: Sum Types / Variants (Discriminant + Shifted Payload Initialization)
+	// =========================================================================
+	if sumTy, isSum := e.Type.(*types.SumType); isSum {
+		tmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: sumTy})
+
+		var targetVariant *types.SumVariant
+		discriminant := -1
+
+		// Step A: Check if Sema injected an explicit __discriminant (e.g., Unit Variants like `Quit`)
+		for _, field := range e.Fields {
+			if ident, ok := field.Key.(*tast.Identifier); ok && ident.Value == "__discriminant" {
+				if intLit, ok := field.Value.(*tast.IntLiteral); ok {
+					discriminant = int(intLit.Value)
+					targetVariant = &sumTy.Variants[discriminant]
+				}
+				break
+			}
+		}
+
+		// Step B: If not explicitly injected, infer the variant from the provided field names
+		if targetVariant == nil {
+			providedFields := make(map[string]bool)
+			for _, field := range e.Fields {
+				if ident, ok := field.Key.(*tast.Identifier); ok && ident != nil {
+					providedFields[ident.Value] = true
+				}
+			}
+
+			for i, v := range sumTy.Variants {
+				match := true
+				for _, vf := range v.Fields {
+					if !providedFields[vf.Name] {
+						match = false
+						break
+					}
+				}
+				// Ensure it's an exact match to avoid collisions
+				if match && len(v.Fields) > 0 && len(v.Fields) == len(providedFields) {
+					targetVariant = &sumTy.Variants[i]
+					discriminant = targetVariant.Discriminant
+					break
+				}
+			}
+		}
+
+		// Step C: Construct the ordered variant layout context array: [DiscriminantTy, Field1Ty, Field2Ty, ...]
+		var variantLayout []types.Type
+		if targetVariant != nil {
+			variantLayout = append(variantLayout, types.IntType{}) // Index 0: Discriminant (__discriminant) is always i32
+			for _, vf := range targetVariant.Fields {
+				variantLayout = append(variantLayout, vf.Type) // Followed by payload types in strict order
+			}
+		}
+
+		// Step D: Explicitly write the Discriminant to Index 0
+		if discriminant != -1 {
+			current.Statements = append(current.Statements, &StructInitInst{
+				Dst:           tmp,
+				FieldName:     "__discriminant",
+				FieldIndex:    0,
+				Value:         &tast.IntLiteral{Value: int64(discriminant), Type: types.IntType{}},
+				VariantLayout: variantLayout, // <--- Attach here
+			})
+		}
+		// Step D: Flatten and write the payload fields, shifted by +1
+		for _, field := range e.Fields {
+			fieldName := ""
+			if ident, ok := field.Key.(*tast.Identifier); ok && ident != nil {
+				fieldName = ident.Value
+			}
+
+			// Skip the synthetic discriminant if sema injected it
+			if fieldName == "__discriminant" {
+				continue
+			}
+
+			flatVal, nextBlock := b.flattenExpr(field.Value, current)
+			current = nextBlock
+
+			fieldIndex := 1
+			if targetVariant != nil {
+				for k, vf := range targetVariant.Fields {
+					if vf.Name == fieldName {
+						fieldIndex = k + 1
+						break
+					}
+				}
+			}
+
+			current.Statements = append(current.Statements, &StructInitInst{
+				Dst:           tmp,
+				FieldName:     fieldName,
+				FieldIndex:    fieldIndex,
+				Value:         flatVal,
+				VariantLayout: variantLayout,
+			})
+		}
+
+		return &tast.Identifier{Value: tmp, Type: sumTy}, current
+	}
+
+	// =========================================================================
+	// CASE 3: Maps, Vecs, and pass-through literals
+	// =========================================================================
+	tmp := b.newTemp()
+	t := e.Type
+	if t == nil {
+		t = types.UnknownType{}
+	}
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: e})
+
+	return &tast.Identifier{Value: tmp, Type: t}, current
+}
+
+// flattenFieldAccess lowers a *tast.FieldAccess into a TempDeclInst +
+// FieldReadInst pair.  The resolved field index is carried on the instruction
+// so the backend can emit a getelementptr without re-walking the type tree.
+func (b *Builder) flattenFieldAccess(e *tast.FieldAccess, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	flatObj, current := b.flattenExpr(e.Object, current)
+
+	// Resolve the declaration-order field index from the object's struct type.
+	// After flattening, flatObj is always an *tast.Identifier whose Type is the
+	// struct type (preserved by every flattenExpr path that emits a TempDeclInst).
+	fieldIndex := -1
+	if ident, ok := flatObj.(*tast.Identifier); ok {
+		if st, ok := ident.Type.(*types.StructType); ok {
+			fieldIndex = st.GetFieldIndex(e.Field.Value)
+		}
+	}
+
+	tmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+	current.Statements = append(current.Statements, &FieldReadInst{
+		Dst:        tmp,
+		Object:     flatObj,
+		FieldName:  e.Field.Value,
+		FieldIndex: fieldIndex,
+		Type:       e.Type,
+	})
+
+	return &tast.Identifier{Value: tmp, Type: e.Type}, current
+}
+
+func (b *Builder) flattenIfExpr(expr *tast.IfExpr, current *BasicBlock) (tast.Expr, *BasicBlock) {
 	// 1. Evaluate the condition explicitly in the current block
 	flatCond, current := b.flattenExpr(expr.Condition, current)
 
@@ -143,7 +385,7 @@ func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (hir.Expr
 		Name: resultTemp,
 		Type: expr.Type,
 	})
-	resultIdent := &hir.Identifier{Value: resultTemp, Type: expr.Type}
+	resultIdent := &tast.Identifier{Value: resultTemp, Type: expr.Type}
 
 	// 4. Seal the current block with a conditional switch
 	current.Terminator = &BranchTerminator{
@@ -152,55 +394,20 @@ func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (hir.Expr
 		FalseTarget: elseBlock.ID,
 	}
 
-	// Helper inline function to lower a block and bind its final yielded expression to the destination register
-	buildBlockWithYield := func(body *hir.BlockStmt, startBlock *BasicBlock) *BasicBlock {
-		if body == nil {
-			return startBlock
-		}
-		curr := startBlock
-		for i, stmt := range body.Statements {
-			if curr == nil {
-				break
-			}
-			// If this is the final statement in the block, check if it yields an expression value
-			if i == len(body.Statements)-1 {
-				// 1. Handle standard expression statement yields
-				if exprStmt, ok := stmt.(*hir.ExprStmt); ok {
-					var flatVal hir.Expr
-					flatVal, curr = b.flattenExpr(exprStmt.Value, curr)
-					if curr != nil {
-						curr.Statements = append(curr.Statements, &AssignInst{Dst: resultTemp, RValue: flatVal})
-					}
-					continue
-				}
-
-				// 2. FIXED: Handle explicit block values produced by desugared aggregates and match expressions
-				if yieldStmt, ok := stmt.(*hir.YieldStmt); ok {
-					var flatVal hir.Expr
-					flatVal, curr = b.flattenExpr(yieldStmt.Value, curr)
-					if curr != nil {
-						curr.Statements = append(curr.Statements, &AssignInst{Dst: resultTemp, RValue: flatVal})
-					}
-					continue
-				}
-			}
-			curr = b.buildStmt(stmt, curr)
-		}
-		return curr
-	}
-
-	// 5. Build the 'Then' branch with expression evaluation tracking
-	thenEnd := buildBlockWithYield(expr.Consequence, thenBlock)
+	// 5. Build the 'Then' branch
+	thenVal, thenEnd := b.flattenBlockExpr(expr.Consequence, thenBlock)
 	if thenEnd != nil {
+		thenEnd.Statements = append(thenEnd.Statements, &AssignInst{Dst: resultTemp, RValue: thenVal})
 		if thenEnd.Terminator == nil {
 			thenEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 		}
 	}
 
-	// 6. Build the 'Else' branch with expression evaluation tracking
+	// 6. Build the 'Else' branch
 	if expr.Alternative != nil {
-		elseEnd := buildBlockWithYield(expr.Alternative, elseBlock)
+		elseVal, elseEnd := b.flattenBlockExpr(expr.Alternative, elseBlock)
 		if elseEnd != nil {
+			elseEnd.Statements = append(elseEnd.Statements, &AssignInst{Dst: resultTemp, RValue: elseVal})
 			if elseEnd.Terminator == nil {
 				elseEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 			}
@@ -211,35 +418,61 @@ func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (hir.Expr
 	return resultIdent, mergeBlock
 }
 
+// flattenBlockExpr lowers a block-as-expression by walking its statements and
+// capturing the final yield value. This is the canonical path for any *tast.BlockStmt
+// that appears as an expression — including match arm bodies and standalone block exprs.
+//
+// It replaces the duplicated buildBlockWithYield closure in flattenIfExpr.
+func (b *Builder) flattenBlockExpr(block *tast.BlockStmt, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	if block == nil || len(block.Statements) == 0 {
+		return &tast.Identifier{Value: "_unit", Type: types.UnitType{}}, current
+	}
+
+	stmts := block.Statements
+	for i, stmt := range stmts {
+		if current == nil {
+			break
+		}
+		// If this is the last statement, check if it produces a value.
+		if i == len(stmts)-1 {
+			if yieldStmt, ok := stmt.(*tast.YieldStmt); ok {
+				flatVal, nextBlock := b.flattenExpr(yieldStmt.Value, current)
+				return flatVal, nextBlock
+			}
+			if exprStmt, ok := stmt.(*tast.ExprStmt); ok {
+				flatVal, nextBlock := b.flattenExpr(exprStmt.Value, current)
+				return flatVal, nextBlock
+			}
+		}
+		current = b.buildStmt(stmt, current)
+	}
+
+	return &tast.Identifier{Value: "_unit", Type: types.UnitType{}}, current
+}
+
 // flattenCall explicitly materializes function arguments into temporary slots
 // and enforces affine/borrowing capabilities via linear MIR instructions.
-func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *BasicBlock) {
-	var flatArgs []hir.CallArg
+func (b *Builder) flattenCall(e *tast.CallExpr, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	var flatArgs []tast.CallArg
 
 	for _, arg := range e.Arguments {
 		// 1. Evaluate the argument deeply (Left-to-Right execution)
 		flatArg, nextBlock := b.flattenExpr(arg.Argument, current)
 		current = nextBlock
 
-		// 2. Extract source identity and type
-		var srcName string
+		// 2. Extract type safely
 		var argType types.Type
-
-		switch a := flatArg.(type) {
-		case *hir.Identifier:
-			srcName = a.Value
-			argType = a.Type
-		case *hir.IntLiteral:
-			srcName = fmt.Sprintf("%d", a.Value)
-			argType = a.Type
-		case *hir.BoolLiteral:
-			srcName = fmt.Sprintf("%t", a.Value)
-			argType = a.Type
-		case *hir.StringLiteral:
-			srcName = fmt.Sprintf("\"%s\"", a.Value)
-			argType = a.Type
-		default:
-			srcName = flatArg.String()
+		if flatArg != nil {
+			switch a := flatArg.(type) {
+			case *tast.Identifier:
+				argType = a.Type
+			case *tast.IntLiteral:
+				argType = a.Type
+			case *tast.BoolLiteral:
+				argType = a.Type
+			case *tast.StringLiteral:
+				argType = a.Type
+			}
 		}
 
 		// 3. Materialize the explicit argument slot
@@ -249,44 +482,37 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *
 		}
 
 		// 4. ABI Lowering & Capability Enforcement
-		if arg.Own {
-			// Permanent Ownership Transfer
-			current.Statements = append(current.Statements, &MoveInst{
-				Dst: argTmp,
-				Src: srcName,
-			})
-		} else if arg.Mut {
-			// 1. Emit the zero-cost exclusivity marker for the Frontend
-			current.Statements = append(current.Statements, &MutBorrowInst{
-				Src: srcName,
-			})
-			// 2. Emit the actual structural routing for the Backend
-			current.Statements = append(current.Statements, &AssignInst{
-				Dst:    argTmp,
-				RValue: &hir.Identifier{Value: srcName, Type: argType},
-			})
-		} else {
-			// Standard Borrow or Primitive Copy
-			isPrimitive := false
-			if argType != nil {
-				switch argType.(type) {
-				case types.IntType, types.BoolType, types.UnitType:
-					isPrimitive = true
+		if ident, isIdent := flatArg.(*tast.Identifier); isIdent {
+			// Argument is a registered variable - we can enforce ownership/borrowing
+			if arg.Own {
+				current.Statements = append(current.Statements, &MoveInst{Dst: argTmp, Src: ident.Value})
+			} else if arg.Mut {
+				current.Statements = append(current.Statements, &MutBorrowInst{Src: ident.Value})
+				current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, RValue: flatArg})
+			} else {
+				// Primitive Copy vs Immutable Reference
+				isPrimitive := false
+				if argType != nil {
+					switch argType.(type) {
+					case types.IntType, types.BoolType, types.UnitType:
+						isPrimitive = true
+					}
+				}
+				if isPrimitive {
+					current.Statements = append(current.Statements, &CopyInst{Dst: argTmp, Src: ident.Value})
+				} else {
+					current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, RValue: flatArg})
 				}
 			}
-
-			if isPrimitive {
-				current.Statements = append(current.Statements, &CopyInst{Dst: argTmp, Src: srcName})
-			} else {
-				// Immutable borrow passes a reference pointer.
-				// No RefInc is needed because the call scope is strictly bound to the caller.
-				current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, RValue: flatArg})
-			}
+		} else {
+			// Argument is a literal value (e.g., 10, true, "hello")
+			// Emit a direct assignment instead of a copy instruction
+			current.Statements = append(current.Statements, &AssignInst{Dst: argTmp, RValue: flatArg})
 		}
 
-		flatArgs = append(flatArgs, hir.CallArg{
+		flatArgs = append(flatArgs, tast.CallArg{
 			Pos_:     arg.Pos_,
-			Argument: &hir.Identifier{Value: argTmp, Type: argType},
+			Argument: &tast.Identifier{Value: argTmp, Type: argType},
 			Mut:      arg.Mut,
 			Own:      arg.Own,
 		})
@@ -299,8 +525,312 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Expr, *
 	tmp := b.newTemp()
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 
-	flatCall := &hir.CallExpr{Pos_: e.Pos_, Function: flatFn, Arguments: flatArgs, Type: e.Type}
+	flatCall := &tast.CallExpr{Pos_: e.Pos_, Function: flatFn, Arguments: flatArgs, Type: e.Type}
 	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: flatCall})
 
-	return &hir.Identifier{Value: tmp, Type: e.Type}, current
+	return &tast.Identifier{Value: tmp, Type: e.Type}, current
+}
+
+func (b *Builder) flattenMethodCall(expr *tast.MethodCallExpr, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	// 1. Flatten the receiver object (the 'self' pointer)
+	flatObj, current := b.flattenExpr(expr.Object, current)
+
+	// 2. Prepare the arguments array, injecting the receiver as Arg 0
+	// (Note: Adjust 'tast.CallArg' to match your actual TAST argument struct if it differs)
+	var flatArgs []tast.CallArg
+	flatArgs = append(flatArgs, tast.CallArg{
+		Argument: flatObj,
+		// If your language uses 'mut self', you can check expr.Method.Symbol.ParamMode here
+	})
+
+	// 3. Flatten the remaining explicit arguments
+	for _, arg := range expr.Arguments {
+		var flatArg tast.Expr
+		flatArg, current = b.flattenExpr(arg.Argument, current)
+
+		flatArgs = append(flatArgs, tast.CallArg{
+			Argument: flatArg,
+			Mut:      arg.Mut,
+			Own:      arg.Own,
+		})
+	}
+
+	// 4. Construct a standard CallExpr using the resolved method symbol
+	desugaredCall := &tast.CallExpr{
+		Pos_: expr.Pos_,
+		Function: &tast.Identifier{
+			Pos_:   expr.Method.Pos_,
+			Value:  expr.Method.Symbol.Name, // e.g., "Player_move" instead of "move"
+			Type:   expr.Method.Type,
+			Symbol: expr.Method.Symbol,
+		},
+		Arguments: flatArgs,
+		Type:      expr.Type,
+	}
+
+	return desugaredCall, current
+}
+
+// flattenArrayLiteral lowers a *tast.ArrayLiteral into the flat MIR
+// instruction sequence:
+//
+//	TempDeclInst    -- declares the array register (backend: alloca)
+//	ArrayInitInst   -- one per element, carrying the element index and value
+//
+// This mirrors the struct literal approach exactly: decompose field-by-field
+// so the backend never needs to inspect tast nodes directly.
+func (b *Builder) flattenArrayLiteral(e *tast.ArrayLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	arrayType := e.Type.(types.ArrayType)
+
+	tmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: arrayType})
+
+	for i, elem := range e.Elements {
+		flatVal, nextBlock := b.flattenExpr(elem, current)
+		current = nextBlock
+
+		current.Statements = append(current.Statements, &ArrayInitInst{
+			Dst:   tmp,
+			Index: i,
+			Value: flatVal,
+		})
+	}
+
+	return &tast.Identifier{Value: tmp, Type: arrayType}, current
+}
+
+func (b *Builder) flattenMatchExpr(expr *tast.MatchExpr, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	// 1. Flatten the subject into a temp.
+	flatSubject, current := b.flattenExpr(expr.Subject, current)
+
+	// 2. Pre-allocate the result temp in the current block (before any branching).
+	resultTemp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{
+		Name: resultTemp,
+		Type: expr.Type,
+	})
+	resultIdent := &tast.Identifier{Value: resultTemp, Type: expr.Type}
+
+	mergeBlock := b.newBlock()
+
+	// For variant patterns we need the discriminant once; load it here.
+	// We re-use it across all arms so it is only loaded once in the dispatch block.
+	var flatDiscriminant tast.Expr
+	if len(expr.Arms) > 0 {
+		if _, isVariant := expr.Arms[0].Pattern.(*tast.VariantPattern); isVariant {
+			discrimTmp := b.newTemp()
+			subjectIdent := flatSubject.(*tast.Identifier)
+			current.Statements = append(current.Statements, &TempDeclInst{
+				Name: discrimTmp,
+				Type: types.IntType{},
+			})
+			current.Statements = append(current.Statements, &FieldReadInst{
+				Dst:        discrimTmp,
+				Object:     subjectIdent,
+				FieldName:  "__discriminant",
+				FieldIndex: 0,
+				Type:       types.IntType{},
+			})
+			flatDiscriminant = &tast.Identifier{Value: discrimTmp, Type: types.IntType{}}
+		}
+	}
+
+	// 3. Build each arm. dispatchBlock is where each new comparison is emitted;
+	//    it advances as we chain arms together.
+	dispatchBlock := current
+
+	for i, arm := range expr.Arms {
+		armBlock := b.newBlock()
+		var nextDispatchBlock *BasicBlock
+
+		switch pat := arm.Pattern.(type) {
+		case *tast.WildcardPattern:
+			// Unconditional: terminate the dispatch block with a direct jump.
+			dispatchBlock.Terminator = &JumpTerminator{Target: armBlock.ID}
+			// Wildcard is always last (exhaustiveness checked by sema), no next dispatch needed.
+
+		case *tast.LiteralPattern:
+			nextDispatchBlock = b.newBlock()
+			flatLiteral, _ := b.flattenExpr(pat.Value, dispatchBlock)
+			cmp := b.newTemp()
+			dispatchBlock.Statements = append(dispatchBlock.Statements, &TempDeclInst{
+				Name: cmp,
+				Type: types.BoolType{},
+			})
+			dispatchBlock.Statements = append(dispatchBlock.Statements, &AssignInst{
+				Dst: cmp,
+				RValue: &tast.InfixExpr{
+					Left:     flatSubject,
+					Operator: "==",
+					Right:    flatLiteral,
+					Type:     types.BoolType{},
+				},
+			})
+			dispatchBlock.Terminator = &BranchTerminator{
+				Condition:   &tast.Identifier{Value: cmp, Type: types.BoolType{}},
+				TrueTarget:  armBlock.ID,
+				FalseTarget: nextDispatchBlock.ID,
+			}
+
+		case *tast.VariantPattern:
+			isLast := i == len(expr.Arms)-1
+			if !isLast {
+				nextDispatchBlock = b.newBlock()
+			} else {
+				// Last variant arm: the "false" branch is unreachable
+				// (sema guarantees exhaustiveness), but we still need a valid target.
+				nextDispatchBlock = b.newBlock()
+				nextDispatchBlock.Terminator = &JumpTerminator{Target: mergeBlock.ID}
+			}
+			discriminant := pat.Symbol.Variant.Discriminant
+			discrimConst := &tast.IntLiteral{Value: int64(discriminant), Type: types.IntType{}}
+			cmp := b.newTemp()
+			dispatchBlock.Statements = append(dispatchBlock.Statements, &TempDeclInst{
+				Name: cmp,
+				Type: types.BoolType{},
+			})
+			dispatchBlock.Statements = append(dispatchBlock.Statements, &AssignInst{
+				Dst: cmp,
+				RValue: &tast.InfixExpr{
+					Left:     flatDiscriminant,
+					Operator: "==",
+					Right:    discrimConst,
+					Type:     types.BoolType{},
+				},
+			})
+			dispatchBlock.Terminator = &BranchTerminator{
+				Condition:   &tast.Identifier{Value: cmp, Type: types.BoolType{}},
+				TrueTarget:  armBlock.ID,
+				FalseTarget: nextDispatchBlock.ID,
+			}
+
+			// 1. Build the specific memory layout for this variant arm
+			var variantLayout []types.Type
+			variantLayout = append(variantLayout, types.IntType{}) // Index 0: Discriminant
+			// Append tuple payloads if they exist
+			for _, t := range pat.Symbol.Variant.TupleTypes {
+				variantLayout = append(variantLayout, t)
+			}
+			// Append struct payloads if they exist
+			for _, f := range pat.Symbol.Variant.Fields {
+				variantLayout = append(variantLayout, f.Type)
+			}
+
+			// Emit binding extractions at the top of the arm block.
+			// Tuple bindings: payload field 0, 1, 2...
+			for j, binding := range pat.TupleBindings {
+				armBlock.Statements = append(armBlock.Statements, &TempDeclInst{
+					Name: binding.Value,
+					Type: binding.Type,
+				})
+				armBlock.Statements = append(armBlock.Statements, &FieldReadInst{
+					Dst:           binding.Value,
+					Object:        flatSubject,
+					FieldName:     fmt.Sprintf("__payload_%d", j),
+					FieldIndex:    j + 1, // field 0 is discriminant, payload starts at 1
+					Type:          binding.Type,
+					VariantLayout: variantLayout,
+				})
+			}
+			// Struct field bindings.
+			for _, field := range pat.Fields {
+				if field.Binding == nil {
+					continue
+				}
+				variant := pat.Symbol.Variant
+				fieldIdx := -1
+				for k, vf := range variant.Fields {
+					if vf.Name == field.Field {
+						fieldIdx = k
+						break
+					}
+				}
+				armBlock.Statements = append(armBlock.Statements, &TempDeclInst{
+					Name: field.Binding.Value,
+					Type: field.Binding.Type,
+				})
+				armBlock.Statements = append(armBlock.Statements, &FieldReadInst{
+					Dst:           field.Binding.Value,
+					Object:        flatSubject,
+					FieldName:     field.Field,
+					FieldIndex:    fieldIdx + 1, // +1 past discriminant
+					Type:          field.Binding.Type,
+					VariantLayout: variantLayout,
+				})
+			}
+		}
+
+		// 4. Flatten the arm body and capture its result into resultTemp.
+		flatBody, armEnd := b.flattenExpr(arm.Body, armBlock)
+		if armEnd != nil {
+			armEnd.Statements = append(armEnd.Statements, &AssignInst{
+				Dst:    resultTemp,
+				RValue: flatBody,
+			})
+			if armEnd.Terminator == nil {
+				armEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
+			}
+		}
+
+		if nextDispatchBlock != nil {
+			dispatchBlock = nextDispatchBlock
+		}
+	}
+
+	return resultIdent, mergeBlock
+}
+
+// flattenVariantLiteral handles Some<T>, None, Ok<T>, Err<E>, etc.
+func (b *Builder) flattenVariantLiteral(e *tast.VariantLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	tmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+
+	// sumTy := e.Type.(*types.SumType)
+	variant := e.Variant
+
+	// Emit discriminant
+	current.Statements = append(current.Statements, &StructInitInst{
+		Dst:        tmp,
+		FieldName:  "__discriminant",
+		FieldIndex: 0,
+		Value:      &tast.IntLiteral{Value: int64(variant.Discriminant), Type: types.IntType{}},
+	})
+
+	// Emit payload (if any)
+	for i, arg := range e.Arguments {
+		flatArg, next := b.flattenExpr(arg, current)
+		current = next
+
+		current.Statements = append(current.Statements, &StructInitInst{
+			Dst:        tmp,
+			FieldName:  fmt.Sprintf("__payload_%d", i),
+			FieldIndex: i + 1,
+			Value:      flatArg,
+		})
+	}
+
+	return &tast.Identifier{Value: tmp, Type: e.Type}, current
+}
+
+// flattenVecLiteral lowers Vec literals using runtime constructor path
+func (b *Builder) flattenVecLiteral(e *tast.VecLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	tmp := b.newTemp()
+	t := e.Type
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+
+	// Pass through as composite for runtime to handle
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: e})
+
+	return &tast.Identifier{Value: tmp, Type: t}, current
+}
+
+// flattenMapLiteral similar to Vec
+func (b *Builder) flattenMapLiteral(e *tast.MapLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
+	tmp := b.newTemp()
+	t := e.Type
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: e})
+
+	return &tast.Identifier{Value: tmp, Type: t}, current
 }

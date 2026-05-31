@@ -14,6 +14,24 @@ func newGlobalScope() *Scope {
 		types:   make(map[string]types.Type),
 	}
 
+	// 1. Inject polymorphic Option variants
+	optType := types.NewOptionType(types.AnyType{})
+	global.symbols["Some"] = &types.Symbol{
+		Kind: types.VariantSymbol, Name: "Some", Type: optType, SumType: optType, Variant: optType.GetVariant("Some"),
+	}
+	global.symbols["None"] = &types.Symbol{
+		Kind: types.VariantSymbol, Name: "None", Type: optType, SumType: optType, Variant: optType.GetVariant("None"),
+	}
+
+	// 2. Inject polymorphic Result variants
+	resType := types.NewResultType(types.AnyType{}, types.AnyType{})
+	global.symbols["Ok"] = &types.Symbol{
+		Kind: types.VariantSymbol, Name: "Ok", Type: resType, SumType: resType, Variant: resType.GetVariant("Ok"),
+	}
+	global.symbols["Err"] = &types.Symbol{
+		Kind: types.VariantSymbol, Name: "Err", Type: resType, SumType: resType, Variant: resType.GetVariant("Err"),
+	}
+
 	// Standard Output
 	global.symbols["puts"] = &types.Symbol{
 		Kind:    types.FuncSymbol,

@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 // =============================================================================
@@ -29,13 +29,13 @@ func addBlock(g *mir.Graph, id int) *mir.BasicBlock {
 	return block
 }
 
-func identExpr(name string) *hir.Identifier {
-	return &hir.Identifier{
+func identExpr(name string) *tast.Identifier {
+	return &tast.Identifier{
 		Value: name,
 	}
 }
 
-func assignInst(dst string, expr hir.Expr) *mir.AssignInst {
+func assignInst(dst string, expr tast.Expr) *mir.AssignInst {
 	return &mir.AssignInst{
 		Dst:    dst,
 		RValue: expr,
@@ -56,15 +56,15 @@ func moveInst(dst, src string) *mir.MoveInst {
 	}
 }
 
-func callExpr(fnName string, args ...hir.CallArg) *hir.CallExpr {
-	return &hir.CallExpr{
+func callExpr(fnName string, args ...tast.CallArg) *tast.CallExpr {
+	return &tast.CallExpr{
 		Function:  identExpr(fnName),
 		Arguments: args,
 	}
 }
 
-func callArg(name string, own, mut bool) hir.CallArg {
-	return hir.CallArg{
+func callArg(name string, own, mut bool) tast.CallArg {
+	return tast.CallArg{
 		Argument: identExpr(name),
 		Own:      own,
 		Mut:      mut,
@@ -165,7 +165,7 @@ func TestAnalyzeEscape(t *testing.T) {
 			setupGraph: func() *mir.Graph {
 				g := newTestGraph(0)
 				b0 := addBlock(g, 0)
-				b0.Statements = append(b0.Statements, assignInst("_ret", &hir.IntLiteral{Value: 42}))
+				b0.Statements = append(b0.Statements, assignInst("_ret", &tast.IntLiteral{Value: 42}))
 				b0.Statements = append(b0.Statements, assignInst("_ret", callExpr("foo", callArg("param1", true, false))))
 				return g
 			},

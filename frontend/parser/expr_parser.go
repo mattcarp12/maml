@@ -48,57 +48,13 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	name := p.curToken.Literal
 	startPos := p.curPos()
 
-	if p.peekToken.Type == token.LT {
-		// Only intercept if it is a compiler-known intrinsic!
-		switch name {
-		case "Map", "Vec", "Option", "Result":
-			p.nextToken() // Step onto '<'
-
-			switch name {
-			case "Map":
-				keyType := p.parseTypeExpr()
-				if !p.expectPeek(token.COMMA) {
-					return nil
-				}
-				valType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				return &ast.MapTypeExpr{Key: keyType, Value: valType, Pos_: startPos}
-
-			case "Vec", "Option":
-				baseType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				if name == "Vec" {
-					return &ast.VectorTypeExpr{Base: baseType, Pos_: startPos}
-				}
-				return &ast.OptionTypeExpr{Base: baseType, Pos_: startPos}
-
-			case "Result":
-				okType := p.parseTypeExpr()
-				if !p.expectPeek(token.COMMA) {
-					return nil
-				}
-				errType := p.parseTypeExpr()
-				if !p.expectPeek(token.GT) {
-					return nil
-				}
-				return &ast.ResultTypeExpr{Ok: okType, Err: errType, Pos_: startPos}
-			}
-		default:
-			// Do nothing! Let it fall through so `x < 10` evaluates correctly as an InfixExpr.
-		}
-	}
-
-	// Unit variant constructors: None
-	if name == "None" && p.peekToken.Type != token.LPAREN {
-		return &ast.CallExpr{
-			Function:  &ast.Identifier{Value: "None", Pos_: startPos},
-			Arguments: nil,
-			Pos_:      startPos,
-		}
+	// Generic instantiation: Vec<int>{}, Map<string, int>{}, etc.
+	// When peek is '<' and the lookahead confirms a generic type arg list
+	// followed by '{' or '(', consume the '<TypeArgs>' here and return a
+	// GenericTypeExpr so the '{' infix handler can build the struct literal.
+	if p.peekToken.Type == token.LT && p.looksLikeGenericInstantiation() {
+		p.nextToken() // step onto '<'
+		return p.parseGenericTypeExpr(name, startPos)
 	}
 
 	return &ast.Identifier{Value: name, Pos_: startPos}
@@ -230,6 +186,7 @@ func (p *Parser) parseIfExpression() ast.Expr {
 		Pos_:        pos,
 	}
 }
+
 func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 	pos := p.curPos() // Position of the '('
 
@@ -307,7 +264,7 @@ func (p *Parser) parseCallArg() ast.CallArg {
 func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
 	// Validate that the left side is a valid type for instantiation
 	switch left.(type) {
-	case *ast.Identifier, *ast.MapTypeExpr, *ast.VectorTypeExpr:
+	case *ast.Identifier, *ast.GenericTypeExpr:
 		// Valid types for struct/map literals!
 	default:
 		p.addError(fmt.Sprintf(

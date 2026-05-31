@@ -453,39 +453,6 @@ func (s *SliceTypeExpr) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (v *VectorTypeExpr) MarshalJSON() ([]byte, error) {
-	type Alias VectorTypeExpr
-	return json.Marshal(&struct {
-		Kind string `json:"kind"`
-		*Alias
-	}{
-		Kind:  "VectorTypeExpr",
-		Alias: (*Alias)(v),
-	})
-}
-
-func (m *MapTypeExpr) MarshalJSON() ([]byte, error) {
-	type Alias MapTypeExpr
-	return json.Marshal(&struct {
-		Kind string `json:"kind"`
-		*Alias
-	}{
-		Kind:  "MapTypeExpr",
-		Alias: (*Alias)(m),
-	})
-}
-
-func (t *TaskTypeExpr) MarshalJSON() ([]byte, error) {
-	type Alias TaskTypeExpr
-	return json.Marshal(&struct {
-		Kind string `json:"kind"`
-		*Alias
-	}{
-		Kind:  "TaskTypeExpr",
-		Alias: (*Alias)(t),
-	})
-}
-
 func (s *StructTypeExpr) MarshalJSON() ([]byte, error) {
 	type Alias StructTypeExpr
 	return json.Marshal(&struct {

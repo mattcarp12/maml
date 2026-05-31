@@ -16,38 +16,62 @@ type Type interface {
 // --- INT ---
 type IntType struct{}
 
-func (t IntType) String() string         { return "int" }
-func (t IntType) Equals(other Type) bool { _, ok := other.(IntType); return ok }
-func (t IntType) IsReferenceType() bool  { return false }
-func (t IntType) SizeInBytes() int       { return 4 }
-func (t IntType) Alignment() int         { return 4 }
+func (t IntType) String() string { return "int" }
+func (t IntType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(IntType)
+	return ok
+}
+func (t IntType) IsReferenceType() bool { return false }
+func (t IntType) SizeInBytes() int      { return 4 }
+func (t IntType) Alignment() int        { return 4 }
 
 // --- BOOL ---
 type BoolType struct{}
 
-func (t BoolType) String() string         { return "bool" }
-func (t BoolType) Equals(other Type) bool { _, ok := other.(BoolType); return ok }
-func (t BoolType) IsReferenceType() bool  { return false }
-func (t BoolType) SizeInBytes() int       { return 1 } // 1 byte is enough for a bool
-func (t BoolType) Alignment() int         { return 1 }
+func (t BoolType) String() string { return "bool" }
+func (t BoolType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(BoolType)
+	return ok
+}
+func (t BoolType) IsReferenceType() bool { return false }
+func (t BoolType) SizeInBytes() int      { return 1 } // 1 byte is enough for a bool
+func (t BoolType) Alignment() int        { return 1 }
 
 // --- STRING ---
 type StringType struct{}
 
-func (t StringType) String() string         { return "string" }
-func (t StringType) Equals(other Type) bool { _, ok := other.(StringType); return ok }
-func (t StringType) IsReferenceType() bool  { return true }
-func (t StringType) SizeInBytes() int       { return 16 } // e.g., 8 bytes for pointer, 8 for length
-func (t StringType) Alignment() int         { return 8 }  // Largest field is a pointer (8)
+func (t StringType) String() string { return "string" }
+func (t StringType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(StringType)
+	return ok
+}
+func (t StringType) IsReferenceType() bool { return true }
+func (t StringType) SizeInBytes() int      { return 16 } // e.g., 8 bytes for pointer, 8 for length
+func (t StringType) Alignment() int        { return 8 }  // Largest field is a pointer (8)
 
 // --- UNIT ---
 type UnitType struct{}
 
-func (t UnitType) String() string         { return "unit" }
-func (t UnitType) Equals(other Type) bool { _, ok := other.(UnitType); return ok }
-func (t UnitType) IsReferenceType() bool  { return false }
-func (t UnitType) SizeInBytes() int       { return 0 } // Takes up 0 memory!
-func (t UnitType) Alignment() int         { return 1 }
+func (t UnitType) String() string { return "unit" }
+func (t UnitType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(UnitType)
+	return ok
+}
+func (t UnitType) IsReferenceType() bool { return false }
+func (t UnitType) SizeInBytes() int      { return 0 } // Takes up 0 memory!
+func (t UnitType) Alignment() int        { return 1 }
 
 // --- STRUCT ---
 // Structs are generally value types (allocated on the stack/inline) unless explicitly boxed.
@@ -58,6 +82,9 @@ type StructType struct {
 
 func (t *StructType) String() string { return t.Name }
 func (t *StructType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(*StructType)
 	return ok && t.Name == o.Name
 }
@@ -122,6 +149,9 @@ func (t ArrayType) String() string {
 	return fmt.Sprintf("[%d]%s", t.Size, t.Base.String())
 }
 func (t ArrayType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(ArrayType)
 	return ok && t.Size == o.Size && t.Base.Equals(o.Base)
 }
@@ -142,6 +172,9 @@ type SliceType struct {
 
 func (t SliceType) String() string { return "[]" + t.Base.String() }
 func (t SliceType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(SliceType)
 	return ok && t.Base.Equals(o.Base)
 }
@@ -158,6 +191,9 @@ type VectorType struct {
 
 func (t VectorType) String() string { return "Vec<" + t.Base.String() + ">" }
 func (t VectorType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(VectorType)
 	return ok && t.Base.Equals(o.Base)
 }
@@ -175,6 +211,9 @@ func (t MapType) String() string {
 	return fmt.Sprintf("Map<%s, %s>", t.Key.String(), t.Value.String())
 }
 func (t MapType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(MapType)
 	return ok && t.Key.Equals(o.Key) && t.Value.Equals(o.Value)
 }
@@ -188,8 +227,8 @@ func NewOptionType(base Type) *SumType {
 		BaseName: "Option",
 		TypeArgs: []Type{base},
 		Variants: []SumVariant{
-			{Name: "Some", Discriminant: 0, Fields: []StructField{{Name: "value", Type: base}}},
-			{Name: "None", Discriminant: 1, Fields: []StructField{}},
+			{Name: "Some", Discriminant: 0, TupleTypes: []Type{base}},
+			{Name: "None", Discriminant: 1, TupleTypes: []Type{}},
 		},
 	}
 }
@@ -200,8 +239,8 @@ func NewResultType(value Type, err Type) *SumType {
 		BaseName: "Result",
 		TypeArgs: []Type{value, err},
 		Variants: []SumVariant{
-			{Name: "Ok", Discriminant: 0, Fields: []StructField{{Name: "value", Type: value}}},
-			{Name: "Err", Discriminant: 1, Fields: []StructField{{Name: "error", Type: err}}},
+			{Name: "Ok", Discriminant: 0, TupleTypes: []Type{value}},
+			{Name: "Err", Discriminant: 1, TupleTypes: []Type{err}},
 		},
 	}
 }
@@ -224,13 +263,17 @@ func (v SumVariant) PayloadSize() int {
 	// 1. Calculate Struct Payload
 	for _, f := range v.Fields {
 		align := f.Type.Alignment()
-		if size%align != 0 { size += align - (size % align) }
+		if size%align != 0 {
+			size += align - (size % align)
+		}
 		size += f.Type.SizeInBytes()
 	}
 	// 2. Calculate Tuple Payload
 	for _, t := range v.TupleTypes {
 		align := t.Alignment()
-		if size%align != 0 { size += align - (size % align) }
+		if size%align != 0 {
+			size += align - (size % align)
+		}
 		size += t.SizeInBytes()
 	}
 	return size
@@ -255,12 +298,18 @@ func (t *SumType) String() string {
 }
 
 func (t *SumType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
 	o, ok := other.(*SumType)
 	if !ok || t.BaseName != o.BaseName || len(t.TypeArgs) != len(o.TypeArgs) {
 		return false
 	}
 	// Structurally compare the generic type arguments
 	for i := range t.TypeArgs {
+		if i >= len(o.TypeArgs) || t.TypeArgs[i] == nil || o.TypeArgs[i] == nil {
+			return false // or handle gracefully
+		}
 		if !t.TypeArgs[i].Equals(o.TypeArgs[i]) {
 			return false
 		}
@@ -301,7 +350,6 @@ type TaskType struct {
 
 func (t TaskType) String() string { return "Task<" + t.Base.String() + ">" }
 func (t TaskType) Equals(other Type) bool {
-	// If the entire other type is 'any', allow it
 	if _, ok := other.(AnyType); ok {
 		return true
 	}
@@ -339,6 +387,7 @@ func (t *FunctionType) String() string {
 	}
 	return "fn(" + strings.Join(params, ", ") + ") " + t.Return.String()
 }
+
 func (t *FunctionType) Equals(other Type) bool {
 	o, ok := other.(*FunctionType)
 	if !ok || len(t.Params) != len(o.Params) || !t.Return.Equals(o.Return) {
@@ -380,3 +429,7 @@ func (t AnyType) Equals(other Type) bool { return true }
 func (t AnyType) IsReferenceType() bool  { return true } // It represents an opaque pointer
 func (t AnyType) SizeInBytes() int       { return 8 }
 func (t AnyType) Alignment() int         { return 8 }
+func IsAny(other Type) bool {
+	_, ok := other.(AnyType)
+	return ok
+}

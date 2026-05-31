@@ -19,12 +19,9 @@ llvm::Value *compileInfixExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileLogicalAnd(CodegenContext &ctx, const nlohmann::json &expr, llvm::Value *leftVal);
 llvm::Value *compileLogicalOr(CodegenContext &ctx, const nlohmann::json &expr, llvm::Value *leftVal);
 
-// --- ExprControlFlow ---
-llvm::Value *compileAsyncPrologueExpr(CodegenContext &ctx, const nlohmann::json &expr);
 
 // --- ExprContainers ---
 llvm::Value *compileStringLiteral(CodegenContext &ctx, const nlohmann::json &expr);
-llvm::Value *compileVariantLiteral(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileSliceExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e);

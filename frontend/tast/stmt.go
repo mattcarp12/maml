@@ -92,6 +92,7 @@ func (b *BlockStmt) String() string {
 	return out.String()
 }
 func (b *BlockStmt) stmtNode() {}
+func (b *BlockStmt) exprNode() {}
 
 func (d *DeclareStmt) Pos() Position { return d.Pos_ }
 func (d *DeclareStmt) End() Position { return d.Value.End() }

@@ -28,6 +28,8 @@ func (a *Analyzer) buildExpr(expr ast.Expr) tast.Expr {
 		return a.buildInfixExpr(e)
 	case *ast.PrefixExpr:
 		return a.buildPrefixExpr(e)
+	case *ast.BlockStmt:
+		return a.buildBlockStmt(e)
 	case *ast.IfExpr:
 		return a.buildIfExpr(e)
 	case *ast.CallExpr:
@@ -58,12 +60,40 @@ func (a *Analyzer) buildExpr(expr ast.Expr) tast.Expr {
 // Primitive Builders
 // =============================================================================
 
-func (a *Analyzer) buildIdentifier(e *ast.Identifier) *tast.Identifier {
+func (a *Analyzer) buildIdentifier(e *ast.Identifier) tast.Expr {
 	sym := a.resolve(e.Value)
 	if sym == nil {
 		a.errorf(e.Pos(), "undefined name '%s'", e.Value)
 		return &tast.Identifier{Pos_: e.Pos_, Value: e.Value, Type: types.UnknownType{}}
 	}
+	if sym.Kind == types.VariantSymbol {
+		isUnit := sym.Variant != nil &&
+			len(sym.Variant.TupleTypes) == 0 &&
+			len(sym.Variant.Fields) == 0
+
+		if isUnit {
+			sumType := sym.SumType
+
+			// Generic Inference for Unit Variants (e.g., bare `None`)
+			if sumType.BaseName == "Option" && sym.Variant.Name == "None" {
+				if exp, ok := a.expectedReturn.(*types.SumType); ok && exp.BaseName == "Option" {
+					sumType = exp
+				}
+			}
+
+			return &tast.StructLiteral{
+				Pos_: e.Pos_,
+				Type: sumType,
+				Fields: []tast.StructField{
+					{
+						Key:   &tast.Identifier{Pos_: e.Pos_, Value: "__discriminant", Type: types.StringType{}},
+						Value: &tast.IntLiteral{Pos_: e.Pos_, Value: int64(sym.Variant.Discriminant), Type: types.IntType{}},
+					},
+				},
+			}
+		}
+	}
+
 	return &tast.Identifier{
 		Pos_:   e.Pos_,
 		Value:  e.Value,
@@ -152,14 +182,14 @@ func (a *Analyzer) buildIfExpr(e *ast.IfExpr) *tast.IfExpr {
 	}
 
 	consBlock := a.buildBlockStmt(e.Consequence)
-	consYield := typeOfBlock(consBlock)
+	consYield := TypeOfBlock(consBlock)
 
 	var altBlock *tast.BlockStmt
 	altYield := types.Type(types.UnitType{})
 
 	if e.Alternative != nil {
 		altBlock = a.buildBlockStmt(e.Alternative)
-		altYield = typeOfBlock(altBlock)
+		altYield = TypeOfBlock(altBlock)
 	}
 
 	resultType := mergeTypes(consYield, altYield)
@@ -173,89 +203,86 @@ func (a *Analyzer) buildIfExpr(e *ast.IfExpr) *tast.IfExpr {
 	}
 }
 
-func (a *Analyzer) buildCallExpr(e *ast.CallExpr) *tast.CallExpr {
-	funcNode := a.buildExpr(e.Function)
-	funcType := typeOf(funcNode)
-
-	var resultType types.Type = types.UnknownType{}
-	var expectedParams []types.Type
-	var paramModes []types.ParamMode
-	isFunc := false
-	isVariant := false
-
-	if ft, ok := funcType.(*types.FunctionType); ok {
-		isFunc = true
-		if len(e.Arguments) != len(ft.Params) {
-			a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d", len(ft.Params), len(e.Arguments))
+func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
+	// 1. EARLY DISPATCH: Inspect the raw AST identifier BEFORE calling buildExpr.
+	// This must happen at the AST level so it works regardless of what buildIdentifier
+	// returns — a *tast.Identifier for tuple variants OR a *tast.StructLiteral for
+	// unit variants like None. The old post-build check missed the unit-variant case
+	// because buildIdentifier("None") returns StructLiteral, not Identifier.
+	if funcIdent, ok := e.Function.(*ast.Identifier); ok {
+		if sym := a.resolve(funcIdent.Value); sym != nil && sym.Kind == types.VariantSymbol {
+			return a.buildTupleVariantLiteral(e, sym)
 		}
-		resultType = ft.Return
-		expectedParams = ft.Params
-		paramModes = ft.ParamModes
-
-	} else if ident, ok := funcNode.(*tast.Identifier); ok && ident.Symbol != nil && ident.Symbol.Kind == types.VariantSymbol {
-		// NEW: Handle Tuple Variant Instantiation!
-		isVariant = true
-		variant := ident.Symbol.Variant
-		if len(e.Arguments) != len(variant.TupleTypes) {
-			a.errorf(e.Pos(), "wrong number of arguments for tuple variant '%s': expected %d, got %d", variant.Name, len(variant.TupleTypes), len(e.Arguments))
-		}
-		resultType = ident.Symbol.SumType
-		expectedParams = variant.TupleTypes
-	} else if !types.IsUnknown(funcType) {
-		a.errorf(e.Pos(), "cannot call non-function type '%s'", funcType.String())
 	}
 
-	var args []tast.CallArg
-	for i, arg := range e.Arguments {
-		argNode := a.buildExpr(arg.Argument)
-		argType := typeOf(argNode)
+	// 2. Resolve the expression being called (e.g., 'divide')
+	funcNode := a.buildExpr(e.Function)
 
-		if (isFunc || isVariant) && i < len(expectedParams) {
-			if !argType.Equals(expectedParams[i]) && !types.IsUnknown(argType) && !types.IsUnknown(expectedParams[i]) {
-				a.errorf(arg.Pos_, "argument %d type mismatch: expected '%s', got '%s'", i+1, expectedParams[i].String(), argType.String())
-			}
-
-			if isFunc {
-				switch paramModes[i] {
-				case types.ParamMutBorrow:
-					if !arg.Mut {
-						a.errorf(arg.Pos_, "argument %d requires 'mut' modifier to match function signature", i+1)
-					}
-					if arg.Own {
-						a.errorf(arg.Pos_, "argument %d expects 'mut', got 'own'", i+1)
-					}
-				case types.ParamOwned:
-					if !arg.Own {
-						a.errorf(arg.Pos_, "argument %d requires 'own' modifier to match function signature", i+1)
-					}
-					if arg.Mut {
-						a.errorf(arg.Pos_, "argument %d expects 'own', got 'mut'", i+1)
-					}
-				case types.ParamBorrow:
-					if arg.Mut || arg.Own {
-						a.errorf(arg.Pos_, "argument %d does not take ownership modifiers", i+1)
-					}
-				}
-			} else if isVariant {
-				if arg.Mut || arg.Own {
-					a.errorf(arg.Pos_, "argument %d does not take ownership modifiers for variant instantiation", i+1)
-				}
-			}
+	// 3. STANDARD FUNCTION CALL HANDLING
+	// Only proceed here if it is NOT a variant.
+	ft, ok := typeOf(funcNode).(*types.FunctionType)
+	if !ok {
+		a.errorf(e.Pos(), "cannot call non-function type '%s'", typeOf(funcNode).String())
+		return &tast.CallExpr{
+			Pos_:      e.Pos_,
+			Function:  funcNode,
+			Arguments: nil,
+			Type:      types.UnknownType{},
 		}
+	}
 
-		args = append(args, tast.CallArg{
+	// Build and validate arguments for a standard function
+	if len(e.Arguments) != len(ft.Params) {
+		a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d", len(ft.Params), len(e.Arguments))
+	}
+
+	var tastArgs []tast.CallArg
+	for i, arg := range e.Arguments {
+		valNode := a.buildExpr(arg.Argument)
+		tastArgs = append(tastArgs, tast.CallArg{
 			Pos_:     arg.Pos_,
-			Argument: argNode,
+			Argument: valNode,
 			Mut:      arg.Mut,
 			Own:      arg.Own,
 		})
+
+		// Validate parameter type and mode if within bounds
+		if i < len(ft.Params) {
+			expected := ft.Params[i]
+			got := typeOf(valNode)
+			if !got.Equals(expected) && !types.IsUnknown(got) && !types.IsUnknown(expected) {
+				a.errorf(arg.Pos_, "argument %d type mismatch: expected '%s', got '%s'", i+1, expected.String(), got.String())
+			}
+
+			// Validate ownership/mutability modes
+			switch ft.ParamModes[i] {
+			case types.ParamMutBorrow:
+				if !arg.Mut {
+					a.errorf(arg.Pos_, "argument %d requires 'mut' modifier", i+1)
+				}
+				if arg.Own {
+					a.errorf(arg.Pos_, "argument %d expects 'mut', got 'own'", i+1)
+				}
+			case types.ParamOwned:
+				if !arg.Own {
+					a.errorf(arg.Pos_, "argument %d requires 'own' modifier", i+1)
+				}
+				if arg.Mut {
+					a.errorf(arg.Pos_, "argument %d expects 'own', got 'mut'", i+1)
+				}
+			case types.ParamBorrow:
+				if arg.Mut || arg.Own {
+					a.errorf(arg.Pos_, "argument %d does not take ownership modifiers", i+1)
+				}
+			}
+		}
 	}
 
 	return &tast.CallExpr{
 		Pos_:      e.Pos_,
 		Function:  funcNode,
-		Arguments: args,
-		Type:      resultType,
+		Arguments: tastArgs,
+		Type:      ft.Return,
 	}
 }
 
@@ -343,10 +370,17 @@ func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.MethodCallEx
 		})
 	}
 
+	// After:
+	methodSym := a.buildMethodSymbol(methodName, objType, resultType, expectedParams, mutating)
 	return &tast.MethodCallExpr{
-		Pos_:      e.Pos_,
-		Object:    objNode,
-		Method:    &tast.Identifier{Pos_: e.Method.Pos(), Value: methodName, Type: types.UnknownType{}},
+		Pos_:   e.Pos_,
+		Object: objNode,
+		Method: &tast.Identifier{
+			Pos_:   e.Method.Pos_,
+			Value:  methodSym.Name, // mangled name for codegen, e.g. "maml_vec_push"
+			Type:   methodSym.Type,
+			Symbol: methodSym,
+		},
 		Arguments: tastArgs,
 		Type:      resultType,
 	}
@@ -488,20 +522,15 @@ func (a *Analyzer) buildSliceExpr(e *ast.SliceExpr) *tast.SliceExpr {
 // Structs & Variants
 // =============================================================================
 
-func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral {
-	// e.Type is now an ast.Expr! We type-switch to determine how to build it.
+func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) tast.Expr {
 	switch typeNode := e.Type.(type) {
 
-	// =========================================================================
 	// CASE 1: Standard Structs and Variants (e.g., User{name: "Alice"})
-	// =========================================================================
 	case *ast.Identifier:
 		name := typeNode.Value
 		sym := a.resolve(name)
 		if sym != nil && sym.Kind == types.VariantSymbol {
-			// Note: You will need to update buildVariantLiteral to handle field.Key
-			// instead of field.Name, just like we do for structs below!
-			return a.buildVariantLiteral(e, sym)
+			return a.buildStructVariantLiteral(e, sym)
 		}
 
 		structDef := a.lookupStruct(name)
@@ -514,10 +543,9 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral 
 		seen := make(map[string]bool)
 
 		for _, field := range e.Fields {
-			// Struct keys MUST be identifiers
 			ident, ok := field.Key.(*ast.Identifier)
 			if !ok || field.Key == nil {
-				a.errorf(field.Value.Pos(), "struct fields must be keyed with identifiers (e.g., name: value)")
+				a.errorf(field.Value.Pos(), "struct fields must be keyed with identifiers")
 				continue
 			}
 
@@ -531,7 +559,6 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral 
 			valNode := a.buildExpr(field.Value)
 			valType := typeOf(valNode)
 
-			// Type check the field against the struct definition
 			expectedIdx := structDef.GetFieldIndex(fieldName)
 			if expectedIdx != -1 {
 				expectedType := structDef.Fields[expectedIdx].Type
@@ -543,9 +570,8 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral 
 			}
 
 			tastFields = append(tastFields, tast.StructField{
-				Pos_: field.Pos_,
-				End_: field.End_,
-				// FIX: Do not use a.buildExpr! Just wrap the raw name in an Identifier.
+				Pos_:  field.Pos_,
+				End_:  field.End_,
 				Key:   &tast.Identifier{Pos_: field.Key.Pos(), Value: fieldName, Type: types.StringType{}},
 				Value: valNode,
 			})
@@ -562,92 +588,30 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) *tast.StructLiteral 
 			Type:   structDef,
 		}
 
-	// =========================================================================
-	// CASE 2: Map Literal Instantiation (e.g., Map<string, int>{"score": 100})
-	// =========================================================================
-	case *ast.MapTypeExpr:
-		mapType := a.resolveAstType(typeNode).(types.MapType)
-		var tastFields []tast.StructField
+	// CASE 2: Generic Type Expressions (e.g., Map<K,V>{...}, Vec<T>{...})
+	case *ast.GenericTypeExpr:
+		resolvedType := a.resolveBuiltinGeneric(typeNode)
 
-		for _, field := range e.Fields {
-			if field.Key == nil {
-				a.errorf(field.Value.Pos(), "map literals require keyed fields (e.g., key: value)")
-				continue
+		switch ty := resolvedType.(type) {
+		case types.MapType:
+			return a.buildMapLiteral(e, ty)
+		case types.VectorType:
+			return a.buildVecLiteral(e, ty)
+		default:
+			if !types.IsUnknown(resolvedType) {
+				a.errorf(typeNode.Pos(), "type '%s' does not support literal instantiation", resolvedType.String())
 			}
-
-			keyNode := a.buildExpr(field.Key)
-			valNode := a.buildExpr(field.Value)
-
-			keyType := typeOf(keyNode)
-			valType := typeOf(valNode)
-
-			if !keyType.Equals(mapType.Key) && !types.IsUnknown(keyType) {
-				a.errorf(field.Key.Pos(), "type mismatch for map key: expected '%s', got '%s'", mapType.Key.String(), keyType.String())
-			}
-			if !valType.Equals(mapType.Value) && !types.IsUnknown(valType) {
-				a.errorf(field.Value.Pos(), "type mismatch for map value: expected '%s', got '%s'", mapType.Value.String(), valType.String())
-			}
-
-			tastFields = append(tastFields, tast.StructField{
-				Pos_:  field.Pos_,
-				End_:  field.End_,
-				Key:   keyNode, // TAST now holds the fully typed key expression
-				Value: valNode,
-			})
+			return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
 		}
 
-		return &tast.StructLiteral{
-			Pos_:   e.Pos_,
-			End_:   e.End_,
-			Fields: tastFields,
-			Type:   mapType,
-		}
-
-	// =========================================================================
-	// CASE 3: Vector Literal Instantiation (e.g., Vec<int>{1, 2, 3})
-	// =========================================================================
-	case *ast.VectorTypeExpr:
-		vecType := a.resolveAstType(typeNode).(types.VectorType)
-		var tastFields []tast.StructField
-
-		for i, field := range e.Fields {
-			if field.Key != nil {
-				a.errorf(field.Key.Pos(), "vector literals should be a simple list of values, not keyed")
-				continue
-			}
-
-			valNode := a.buildExpr(field.Value)
-			valType := typeOf(valNode)
-
-			if !valType.Equals(vecType.Base) && !types.IsUnknown(valType) {
-				a.errorf(field.Value.Pos(), "type mismatch for vector element %d: expected '%s', got '%s'", i, vecType.Base.String(), valType.String())
-			}
-
-			tastFields = append(tastFields, tast.StructField{
-				Pos_:  field.Pos_,
-				End_:  field.End_,
-				Key:   nil, // Safely unkeyed in TAST!
-				Value: valNode,
-			})
-		}
-
-		return &tast.StructLiteral{
-			Pos_:   e.Pos_,
-			End_:   e.End_,
-			Fields: tastFields,
-			Type:   vecType,
-		}
-
-	// =========================================================================
 	// DEFAULT: Invalid left-hand side
-	// =========================================================================
 	default:
 		a.errorf(e.Type.Pos(), "invalid type for literal instantiation")
 		return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
 	}
 }
 
-func (a *Analyzer) buildVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.StructLiteral {
+func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.StructLiteral {
 	variant := sym.Variant
 	sumType := sym.SumType
 
@@ -712,6 +676,81 @@ func (a *Analyzer) buildVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) 
 	}
 }
 
+func (a *Analyzer) buildTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) *tast.VariantLiteral {
+	variant := sym.Variant
+	sumType := sym.SumType
+
+	// --- STEP 1: GENERIC TYPE INFERENCE ---
+	// Update the sumType based on the arguments provided
+	switch sumType.BaseName {
+	case "Option":
+		if variant.Name == "Some" && len(e.Arguments) == 1 {
+			valNode := a.buildExpr(e.Arguments[0].Argument)
+			// Unify: Option<T> where T = typeOf(valNode)
+			sumType = types.NewOptionType(typeOf(valNode))
+			variant = sumType.GetVariant("Some")
+		} else if variant.Name == "None" {
+			// None carries no arguments, so infer T from the surrounding expected return type.
+			// e.g. in a function returning Option<int>, `None` or `None()` resolves to Option<int>.
+			if exp, ok := a.expectedReturn.(*types.SumType); ok && exp.BaseName == "Option" {
+				sumType = exp
+			}
+			variant = sumType.GetVariant("None")
+		}
+	case "Result":
+		// Try to infer from arguments first
+		var vType, eType types.Type = types.UnknownType{}, types.UnknownType{}
+
+		if variant.Name == "Ok" && len(e.Arguments) == 1 {
+			vType = typeOf(a.buildExpr(e.Arguments[0].Argument))
+		} else if variant.Name == "Err" && len(e.Arguments) == 1 {
+			eType = typeOf(a.buildExpr(e.Arguments[0].Argument))
+		}
+
+		// If we still have unknowns, try to infer from expected return type
+		if types.IsUnknown(vType) || types.IsUnknown(eType) {
+			if exp, ok := a.expectedReturn.(*types.SumType); ok && exp.BaseName == "Result" {
+				if len(exp.TypeArgs) == 2 {
+					if types.IsUnknown(vType) {
+						vType = exp.TypeArgs[0]
+					}
+					if types.IsUnknown(eType) {
+						eType = exp.TypeArgs[1]
+					}
+				}
+			}
+		}
+
+		sumType = types.NewResultType(vType, eType)
+		variant = sumType.GetVariant(variant.Name)
+	}
+
+	// --- STEP 2: BUILD AND VALIDATE ARGUMENTS ---
+	if len(e.Arguments) != len(variant.TupleTypes) {
+		a.errorf(e.Pos(), "variant '%s' expects %d arguments, got %d", variant.Name, len(variant.TupleTypes), len(e.Arguments))
+	}
+
+	var tastArgs []tast.Expr
+	for i, arg := range e.Arguments {
+		valNode := a.buildExpr(arg.Argument)
+		// Basic type validation against inferred tuple types
+		if i < len(variant.TupleTypes) {
+			if !typeOf(valNode).Equals(variant.TupleTypes[i]) {
+				a.errorf(arg.Pos_, "type mismatch for variant arg %d", i)
+			}
+		}
+		tastArgs = append(tastArgs, valNode)
+	}
+
+	return &tast.VariantLiteral{
+		Pos_:      e.Pos_,
+		End_:      e.End(),
+		Variant:   variant,
+		Arguments: tastArgs,
+		Type:      sumType, // This holds the concrete Option<int> or Result<V,E>
+	}
+}
+
 func (a *Analyzer) buildFieldAccess(e *ast.FieldAccess) *tast.FieldAccess {
 	objNode := a.buildExpr(e.Object)
 	objType := typeOf(objNode)
@@ -735,6 +774,65 @@ func (a *Analyzer) buildFieldAccess(e *ast.FieldAccess) *tast.FieldAccess {
 		Field:  &tast.Identifier{Pos_: e.Field.Pos_, Value: e.Field.Value, Type: resultType},
 		Type:   resultType,
 	}
+}
+
+// buildMethodSymbol constructs a synthetic symbol for a built-in method call.
+// It is called instead of buildIdentifier because built-in method names ("push",
+// "get", etc.) are not in the symbol table — they are structural properties of
+// their receiver type, not named declarations.
+//
+// The mangled Name is the runtime function the backend will call. It must match
+// the corresponding declaration in declareRuntimeFunctions on the C++ side.
+func (a *Analyzer) buildMethodSymbol(
+	methodName string,
+	receiverType types.Type,
+	returnType types.Type,
+	paramTypes []types.Type,
+	mutating bool,
+) *types.Symbol {
+	mangledName := mangleMethodName(methodName, receiverType)
+
+	paramModes := make([]types.ParamMode, len(paramTypes))
+	for i := range paramModes {
+		paramModes[i] = types.ParamBorrow
+	}
+
+	return &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: mangledName,
+		Type: &types.FunctionType{
+			Params:     paramTypes,
+			ParamModes: paramModes,
+			Return:     returnType,
+		},
+		Mutable: mutating,
+	}
+}
+
+// mangleMethodName produces the runtime function name for a built-in method.
+// These names must exactly match the declarations in declareRuntimeFunctions.
+func mangleMethodName(method string, receiver types.Type) string {
+	switch receiver.(type) {
+	case types.VectorType:
+		switch method {
+		case "push":
+			return "maml_vec_push"
+		case "pop":
+			return "maml_vec_pop"
+		case "len":
+			return "maml_vec_len"
+		}
+	case types.MapType:
+		switch method {
+		case "put":
+			return "maml_map_put"
+		case "get":
+			return "maml_map_get"
+		case "remove":
+			return "maml_map_remove"
+		}
+	}
+	return method // fallback: use name as-is
 }
 
 // =============================================================================
@@ -773,16 +871,26 @@ func typeOf(expr tast.Expr) types.Type {
 		return e.Type
 	case *tast.ArrayLiteral:
 		return e.Type
+	case *tast.VariantLiteral:
+		return e.Type
 	case *tast.AwaitExpr:
 		return e.Type
 	case *tast.MatchExpr:
 		return e.Type
+	case *tast.MethodCallExpr:
+		return e.Type
+	case *tast.MapLiteral:
+		return e.Type
+	case *tast.VecLiteral:
+		return e.Type
+	case *tast.BlockStmt:
+		return TypeOfBlock(e)
 	}
 	return types.UnknownType{}
 }
 
-// typeOfBlock evaluates the unified return type of a block by checking its final Yield statement.
-func typeOfBlock(block *tast.BlockStmt) types.Type {
+// TypeOfBlock evaluates the unified return type of a block by checking its final Yield statement.
+func TypeOfBlock(block *tast.BlockStmt) types.Type {
 	if block == nil || len(block.Statements) == 0 {
 		return types.UnitType{}
 	}

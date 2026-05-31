@@ -45,7 +45,6 @@ set(BACKEND_SOURCES
     src/TypeLowering.cpp
     src/ExprCore.cpp
     src/ExprOperators.cpp
-    src/ExprControlFlow.cpp
     src/ExprContainers.cpp
     src/ExprCalls.cpp
     src/StmtGenerator.cpp

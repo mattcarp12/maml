@@ -24,8 +24,8 @@ type Param struct {
 	Pos_   Position `json:"-"`
 	End_   Position `json:"-"`
 	Name   string
-	Type   types.Type    // Permanently bound semantic type
-	Symbol *types.Symbol // Permanently bound semantic scope and ParamMode
+	Type   types.Type
+	Symbol *types.Symbol
 }
 
 type FnDecl struct {

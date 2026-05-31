@@ -1,8 +1,8 @@
 package escape
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 type EscapeState int
@@ -28,7 +28,7 @@ func AnalyzeEscape(g *mir.Graph) map[string]EscapeState {
 	changed := true
 	for changed {
 		changed = false
-		for _, block := range g.Blocks {
+		for _, block := range g.SortedBlocks() {
 			// Iterate backwards through basic block statements for fast convergence.
 			for i := len(block.Statements) - 1; i >= 0; i-- {
 				inst := block.Statements[i]
@@ -50,9 +50,9 @@ func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
 		// Function calls must be evaluated unconditionally. Even if the assignment
 		// destination variable stays on the stack (or is discarded), any variables
 		// passed as arguments to the function must conservatively escape to the heap.
-		if call, ok := i.RValue.(*hir.CallExpr); ok {
+		if call, ok := i.RValue.(*tast.CallExpr); ok {
 			for _, arg := range call.Arguments {
-				if ident, ok := arg.Argument.(*hir.Identifier); ok {
+				if ident, ok := arg.Argument.(*tast.Identifier); ok {
 					if a.EscapeMap[ident.Value] != StateHeap {
 						a.EscapeMap[ident.Value] = StateHeap
 						changed = true
@@ -90,19 +90,19 @@ func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
 	return changed
 }
 
-func (a *EscapeAnalyzer) propagateFromExpr(expr hir.Expr) bool {
+func (a *EscapeAnalyzer) propagateFromExpr(expr tast.Expr) bool {
 	changed := false
 	switch e := expr.(type) {
-	case *hir.Identifier:
+	case *tast.Identifier:
 		if a.EscapeMap[e.Value] != StateHeap {
 			a.EscapeMap[e.Value] = StateHeap
 			changed = true
 		}
-	case *hir.CallExpr:
+	case *tast.CallExpr:
 		// Safe redundant fallback: if a function call expression is assigned
 		// directly to an escaping destination, guarantee all arguments escape.
 		for _, arg := range e.Arguments {
-			if ident, ok := arg.Argument.(*hir.Identifier); ok {
+			if ident, ok := arg.Argument.(*tast.Identifier); ok {
 				if a.EscapeMap[ident.Value] != StateHeap {
 					a.EscapeMap[ident.Value] = StateHeap
 					changed = true

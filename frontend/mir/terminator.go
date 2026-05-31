@@ -1,7 +1,7 @@
 package mir
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
+	"github.com/mattcarp12/maml/frontend/tast"
 )
 
 // Terminator is the required final instruction of every BasicBlock.
@@ -27,7 +27,7 @@ func (JumpTerminator) isTerminator() {}
 // BranchTerminator is a conditional jump.
 // Used exclusively by our desugared hir.IfExpr chains.
 type BranchTerminator struct {
-	Condition   hir.Expr
+	Condition   tast.Expr
 	TrueTarget  BlockID
 	FalseTarget BlockID
 }

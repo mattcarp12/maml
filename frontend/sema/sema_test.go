@@ -7,7 +7,6 @@ import (
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/sema"
 	"github.com/mattcarp12/maml/frontend/tast"
-	"github.com/mattcarp12/maml/frontend/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,10 +56,6 @@ func arrayTypeExpr(base ast.TypeExpr, size int) *ast.ArrayTypeExpr {
 
 func sliceTypeExpr(base ast.TypeExpr) *ast.SliceTypeExpr {
 	return &ast.SliceTypeExpr{Base: base}
-}
-
-func taskTypeExpr(base ast.TypeExpr) *ast.TaskTypeExpr {
-	return &ast.TaskTypeExpr{Base: base}
 }
 
 // =============================================================================
@@ -274,17 +269,8 @@ func variantField(field, binding string) ast.VariantPatternField {
 	return ast.VariantPatternField{Field: field, Binding: ident(binding)}
 }
 
-func mapTypeExpr(key, val ast.TypeExpr) *ast.MapTypeExpr {
-	return &ast.MapTypeExpr{Pos_: zpos(), Key: key, Value: val}
-}
-func vecTypeExpr(base ast.TypeExpr) *ast.VectorTypeExpr {
-	return &ast.VectorTypeExpr{Pos_: zpos(), Base: base}
-}
 func mkTupleVariant(name string, tupleTypes ...ast.TypeExpr) ast.VariantTypeExpr {
 	return ast.VariantTypeExpr{Name: name, TupleFields: tupleTypes}
-}
-func methodCallExpr(obj ast.Expr, method string, args ...ast.CallArg) *ast.MethodCallExpr {
-	return &ast.MethodCallExpr{Pos_: zpos(), Object: obj, Method: ident(method), Arguments: args}
 }
 
 // =============================================================================
@@ -318,59 +304,6 @@ func assertHasError(t *testing.T, errs []ast.CompileError, substr string) {
 	}
 	require.Failf(t, "expected error not found",
 		"wanted substring %q in errors:\n%v", substr, errs)
-}
-
-// assertErrorCount fails unless exactly n errors were produced.
-func assertErrorCount(t *testing.T, errs []ast.CompileError, n int) {
-	t.Helper()
-	require.Lenf(t, errs, n, "unexpected error count\nerrors: %v", errs)
-}
-
-// typeIs checks that a TAST expression carries the expected semantic type.
-func typeIs(expr tast.Expr, expected types.Type) bool {
-	if expr == nil {
-		return false
-	}
-	actual := exprType(expr)
-	return actual.Equals(expected)
-}
-
-// exprType extracts the semantic type from a TAST expression via the same
-// type-switch that the analyser uses internally.
-func exprType(expr tast.Expr) types.Type {
-	switch e := expr.(type) {
-	case *tast.IntLiteral:
-		return e.Type
-	case *tast.BoolLiteral:
-		return e.Type
-	case *tast.StringLiteral:
-		return e.Type
-	case *tast.Identifier:
-		return e.Type
-	case *tast.InfixExpr:
-		return e.Type
-	case *tast.PrefixExpr:
-		return e.Type
-	case *tast.IfExpr:
-		return e.Type
-	case *tast.CallExpr:
-		return e.Type
-	case *tast.FieldAccess:
-		return e.Type
-	case *tast.IndexExpr:
-		return e.Type
-	case *tast.SliceExpr:
-		return e.Type
-	case *tast.StructLiteral:
-		return e.Type
-	case *tast.ArrayLiteral:
-		return e.Type
-	case *tast.AwaitExpr:
-		return e.Type
-	case *tast.MatchExpr:
-		return e.Type
-	}
-	return types.UnknownType{}
 }
 
 // =============================================================================
@@ -857,21 +790,6 @@ func TestExpr_Await_Errors(t *testing.T) {
 	}
 }
 
-func TestExpr_Await_TaskTypeUnwrapped(t *testing.T) {
-	// Awaiting a Task<int> should resolve cleanly (inner type becomes int).
-	taskFn := makeFn("makeTask", taskTypeExpr(intTypeExpr()), blockStmt())
-	asyncFn := makeAsyncFn("runner", nil,
-		blockStmt(
-			declareStmt("result", false,
-				awaitExpr(callExpr(ident("makeTask"))),
-			),
-		),
-	)
-	program := makeProgram(taskFn, asyncFn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
 // =============================================================================
 // Array Literals
 // =============================================================================
@@ -1133,7 +1051,7 @@ func TestStmt_Declare_ShadowingInInnerScopeOk(t *testing.T) {
 		mainFn(
 			declareStmt("x", false, intLit(1)),
 			blockStmt( // Removed exprStmt()
-				declareStmt("x", false, boolLit(true)), 
+				declareStmt("x", false, boolLit(true)),
 			),
 		),
 	)
@@ -1532,13 +1450,6 @@ func TestTypeDecl_ResolveArrayType(t *testing.T) {
 
 func TestTypeDecl_ResolveSliceType(t *testing.T) {
 	fn := makeFn("f", sliceTypeExpr(intTypeExpr()), blockStmt())
-	program := makeProgram(fn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
-func TestTypeDecl_ResolveTaskType(t *testing.T) {
-	fn := makeFn("f", taskTypeExpr(intTypeExpr()), blockStmt())
 	program := makeProgram(fn)
 	_, errs := analyze(t, program)
 	assertNoErrors(t, errs)
@@ -2071,13 +1982,6 @@ func TestFunction_AsyncMainForbidden(t *testing.T) {
 	assertHasError(t, errs, "cannot be async")
 }
 
-func TestFunction_AsyncNonMainOk(t *testing.T) {
-	fn := makeAsyncFn("worker", taskTypeExpr(intTypeExpr()), blockStmt())
-	program := makeProgram(fn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
 // =============================================================================
 // Function hoisting: two-pass ensures mutual recursion compiles
 // =============================================================================
@@ -2100,76 +2004,6 @@ func TestFunction_MutualRecursionResolvable(t *testing.T) {
 	program := makeProgram(isEven, isOdd)
 	_, errs := analyze(t, program)
 	assertNoErrors(t, errs)
-}
-
-func TestExpr_MapAndVecLiterals(t *testing.T) {
-	t.Run("Valid Map Literal", func(t *testing.T) {
-		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
-			Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
-			Fields: []ast.StructField{
-				{Key: strLit("score"), Value: intLit(100)},
-			},
-		})))
-		_, errs := analyze(t, program)
-		assertNoErrors(t, errs)
-	})
-
-	t.Run("Valid Vec Literal (Unkeyed)", func(t *testing.T) {
-		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
-			Type: vecTypeExpr(intTypeExpr()),
-			Fields: []ast.StructField{
-				{Key: nil, Value: intLit(1)},
-				{Key: nil, Value: intLit(2)},
-			},
-		})))
-		_, errs := analyze(t, program)
-		assertNoErrors(t, errs)
-	})
-
-	t.Run("Invalid Map Literal Type Mismatch", func(t *testing.T) {
-		program := makeProgram(mainFn(exprStmt(&ast.StructLiteral{
-			Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
-			Fields: []ast.StructField{
-				{Key: strLit("score"), Value: boolLit(true)}, // bool instead of int
-			},
-		})))
-		_, errs := analyze(t, program)
-		assertHasError(t, errs, "type mismatch for map value")
-	})
-}
-
-func TestExpr_MethodCallsAndMutability(t *testing.T) {
-	t.Run("Mutating method on mutable variable is OK", func(t *testing.T) {
-		program := makeProgram(mainFn(
-			declareStmt("m", true, &ast.StructLiteral{
-				Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
-			}),
-			exprStmt(methodCallExpr(ident("m"), "put", callArg(strLit("a")), callArg(intLit(1)))),
-		))
-		_, errs := analyze(t, program)
-		assertNoErrors(t, errs)
-	})
-
-	t.Run("Mutating method on IMMUTABLE variable is ERROR", func(t *testing.T) {
-		program := makeProgram(mainFn(
-			// Notice: mutable = false
-			declareStmt("m", false, &ast.StructLiteral{
-				Type: mapTypeExpr(strTypeExpr(), intTypeExpr()),
-			}),
-			exprStmt(methodCallExpr(ident("m"), "put", callArg(strLit("a")), callArg(intLit(1)))),
-		))
-		_, errs := analyze(t, program)
-		assertHasError(t, errs, "cannot call mutating method 'put' on immutable variable 'm'")
-	})
-
-	t.Run("Method does not exist", func(t *testing.T) {
-		program := makeProgram(mainFn(
-			declareStmt("v", false, &ast.StructLiteral{Type: vecTypeExpr(intTypeExpr())}),
-			exprStmt(methodCallExpr(ident("v"), "fly")),
-		))
-		_, errs := analyze(t, program)
-		assertHasError(t, errs, "does not exist on type")
-	})
 }
 
 func TestMatch_TupleVariantDestructuring(t *testing.T) {

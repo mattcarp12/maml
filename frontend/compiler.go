@@ -5,17 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mattcarp12/maml/frontend/alloc"
-	"github.com/mattcarp12/maml/frontend/arc"
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/escape"
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/lexer"
-	"github.com/mattcarp12/maml/frontend/liveness"
 	"github.com/mattcarp12/maml/frontend/mir"
-	"github.com/mattcarp12/maml/frontend/ownership"
 	"github.com/mattcarp12/maml/frontend/parser"
-	"github.com/mattcarp12/maml/frontend/prune"
 	"github.com/mattcarp12/maml/frontend/sema"
 	"github.com/mattcarp12/maml/frontend/tast"
 )
@@ -30,14 +23,13 @@ func New() *Compiler {
 type FrontendResult struct {
 	AST  *ast.Program
 	TAST *tast.Program
-	HIR  *hir.Program
 	MIR  *mir.Program
 }
 
 // Frontend executes the canonical frontend pipeline.
 func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	// -------------------------------------------------------------------------
-	// Phase 1: Syntax Analysis -> AST
+	// Syntax Analysis -> AST
 	// -------------------------------------------------------------------------
 	l := lexer.New(src)
 	p := parser.New(l)
@@ -47,7 +39,7 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	}
 
 	// -------------------------------------------------------------------------
-	// Phase 2: Semantic Analysis -> TAST
+	// Semantic Analysis -> TAST
 	// -------------------------------------------------------------------------
 	semaAnalyzer := sema.New()
 	tastProgram, errs := semaAnalyzer.Analyze(astProgram)
@@ -55,61 +47,42 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 		return nil, formatErrors("Semantic", errs)
 	}
 
-	// -------------------------------------------------------------------------
-	// Phase 3 & 4: HIR Translation & MIR Construction (Allocation Agnostic)
-	// -------------------------------------------------------------------------
-	hirProgram := hir.Translate(tastProgram)
+	// --------------------------------------------------------------------------
+	// MIR Lowering -> MIR
+	// --------------------------------------------------------------------------
 
-	mirProgram := &mir.Program{
-		TypeDecls: make([]*hir.TypeDecl, 0),
-		Functions: make([]mir.Function, 0),
-	}
+	mirProgram := mir.BuildProgram(tastProgram)
 
-	var ownErrs []ast.CompileError
+	// ==========================================================================
+	// COMMENT OUT UNTIL CODEGEN IS WORKING
+	// ==========================================================================*/
 
-	// Sort declarations and execute the Micro-Package pipeline
-	for _, decl := range hirProgram.Decls {
-		switch d := decl.(type) {
-		case *hir.TypeDecl:
-			mirProgram.TypeDecls = append(mirProgram.TypeDecls, d)
+	// // Phase 5-8: Sequential Graph Passes
+	// // Iterate over each function and apply the passes sequentially to its CFG.
+	// for i := range mirProgram.Functions {
+	// 	fn := &mirProgram.Functions[i]
 
-		case *hir.FnDecl:
-			// Phase 4: Construct CFG
-			g := mir.Build(d)
+	// 	// Phase 5: Liveness & Escape Analysis
+	// 	livenessRes := liveness.AnalyzeLiveness(fn.Graph)
+	// 	escapes := escape.AnalyzeEscape(fn.Graph)
 
-			// Dead Code Elimination
-			prune.Graph(g)
+	// 	// Phase 6: Allocation Lowering
+	// 	alloc.LowerAllocations(fn.Graph, escapes)
 
-			// Phase 5: Dataflow Analysis
-			escapes := escape.AnalyzeEscape(g)
-			liveVars := liveness.AnalyzeLiveness(g)
+	// 	// Phase 7: ARC Injection
+	// 	arc.InjectARC(fn.Graph, livenessRes)
 
-			// Phase 6 & 7: Transformation
-			alloc.LowerAllocations(g, escapes)
-			arc.InjectARC(g, liveVars)
+	// 	// Phase 8: Ownership Analysis
+	// 	ownErrs := ownership.New().Analyze(fn.Graph)
+	// 	if len(ownErrs) > 0 {
+	// 		return nil, formatErrors("OWNERSHIP", ownErrs)
+	// 	}
+	// }
 
-			// Phase 5 Validation: Borrow Checker
-			ownAnalyzer := ownership.New()
-			ownErrs = append(ownErrs, ownAnalyzer.Analyze(g)...)
-
-			mirProgram.Functions = append(mirProgram.Functions, mir.Function{
-				Name:       d.Name,
-				Params:     d.Params,
-				ReturnType: d.ReturnType,
-				IsAsync:    d.IsAsync,
-				Graph:      g,
-			})
-		}
-	}
-
-	if len(ownErrs) > 0 {
-		return nil, formatErrors("Ownership", ownErrs)
-	}
-
+	// Return the fully populated pipeline state
 	return &FrontendResult{
 		AST:  astProgram,
 		TAST: tastProgram,
-		HIR:  hirProgram,
 		MIR:  mirProgram,
 	}, nil
 }
