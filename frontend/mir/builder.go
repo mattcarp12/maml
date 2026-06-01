@@ -154,8 +154,19 @@ func (b *Builder) buildReturnStmt(stmt *tast.ReturnStmt, current *BasicBlock) *B
 	if stmt.Value != nil {
 		var flatRet tast.Expr
 		flatRet, current = b.flattenExpr(stmt.Value, current)
-		// Store the evaluated return value in an explicit return register
-		current.Statements = append(current.Statements, &AssignInst{Dst: "_ret", RValue: flatRet})
+
+		// Check if the return value is a UnitType
+		isUnit := false
+		if ident, ok := flatRet.(*tast.Identifier); ok {
+			if _, isU := ident.Type.(types.UnitType); isU {
+				isUnit = true
+			}
+		}
+
+		// Only store the evaluated return value if it's not unit
+		if !isUnit {
+			current.Statements = append(current.Statements, &AssignInst{Dst: "_ret", RValue: flatRet})
+		}
 	}
 
 	current.Terminator = &ReturnTerminator{}

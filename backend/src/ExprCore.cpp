@@ -43,7 +43,6 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
   if (op == "call") return compileCallExpr(ctx, expr);
 
   // Complex Types
-  if (op == "slice") return compileSliceExpr(ctx, expr);
   if (op == "index_read") return compileIndexExpr(ctx, expr);
 
   // -------------------------------------------------------------------------

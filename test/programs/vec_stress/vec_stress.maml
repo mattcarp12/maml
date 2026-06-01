@@ -1,9 +1,9 @@
-fn read_element(s []int, idx int) int {
+fn read_element(s Vec<int>, idx int) int {
     return s[idx]
 }
 
 fn main() int {
-    v := Vec<int>()
+    mut v := Vec<int>{}
     
     // Push 20 items to trigger multiple maml_vec_grow allocations
     for (mut i := 0; i < 20; i = i + 1) {

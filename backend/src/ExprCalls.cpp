@@ -138,14 +138,79 @@ llvm::Value *compileCallExpr(CodegenContext &ctx, const nlohmann::json &expr) {
     i++;
   }
 
-  // 5. Fallback FunctionType generation for indirect/opaque function pointers
-  if (!FT) {
-    llvm::Type *retTy = llvmTypeFor(ctx, expr["maml_type"]);
-    FT = llvm::FunctionType::get(retTy, argTys, false);
+  std::string calleeName = expr["function"]["value"].get<std::string>();
+
+  // -------------------------------------------------------------------------
+  // 1. MAML MAP RUNTIME INTERCEPT
+  // -------------------------------------------------------------------------
+  if (calleeName == "maml_map_get" || calleeName == "maml_map_put") {
+    llvm::Value *keyArg = args[1];
+    llvm::Value *keyHash = nullptr;
+    llvm::Value *strPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.Context));
+    llvm::Value *strLen = ctx.Builder->getInt32(0);
+
+    // A. Determine if key is a String or Primitive
+    if (keyArg->getType()->isStructTy()) {
+      // MAML Strings are lowered as { ptr, i32 } structs.
+      // Extract the pointer and the length.
+      strPtr = ctx.Builder->CreateExtractValue(keyArg, {0}, "str_ptr");
+      strLen = ctx.Builder->CreateExtractValue(keyArg, {1}, "str_len");
+
+      // Hash the string at runtime by invoking maml_str_hash
+      llvm::FunctionCallee hashFn = ctx.Module->getOrInsertFunction(
+          "maml_str_hash",
+          llvm::FunctionType::get(ctx.Builder->getInt64Ty(),
+                                  {llvm::PointerType::getUnqual(ctx.Context), ctx.Builder->getInt32Ty()}, false));
+      keyHash = ctx.Builder->CreateCall(hashFn, {strPtr, strLen}, "hash_tmp");
+    } else {
+      // Primitive Integer Keys -> Zero-extend to u64 for the key_hash
+      if (keyArg->getType()->getIntegerBitWidth() < 64) {
+        keyHash = ctx.Builder->CreateZExt(keyArg, ctx.Builder->getInt64Ty(), "key_hash_zext");
+      } else {
+        keyHash = keyArg;  // Already 64-bit
+      }
+    }
+
+    // B. Rebuild the LLVM arguments array to match the strict Zig signatures
+    if (calleeName == "maml_map_get") {
+      args = {args[0], keyHash, strPtr, strLen};
+    } else if (calleeName == "maml_map_put") {
+      llvm::Value *valArg = args[2];
+
+      // Zig expects a pointer to the value bytes so it can memcpy them
+      if (!valArg->getType()->isPointerTy()) {
+        llvm::AllocaInst *valSpill = ctx.Builder->CreateAlloca(valArg->getType(), nullptr, "map_val_spill");
+        ctx.Builder->CreateStore(valArg, valSpill);
+        valArg = valSpill;
+      }
+
+      args = {args[0], keyHash, valArg, strPtr, strLen};
+    }
   }
 
-  // 6. Emit the Call
-  return Builder->CreateCall(FT, callee, args, "calltmp");
+  llvm::CallInst *callResult = ctx.Builder->CreateCall(FT, callee, args, "calltmp");
+
+  // -------------------------------------------------------------------------
+  // 2. MAML MAP RUNTIME INTERCEPT: Fix Return Values
+  // -------------------------------------------------------------------------
+  if (calleeName == "maml_map_get") {
+    // The Zig runtime returns `?*anyopaque` (an opaque pointer to the map slot).
+    // LLVM arithmetic operators need the actual integer, so we must emit a LoadInst.
+
+    // Attempt to extract the expected type from the MIR (e.g., i32).
+    // If your MIR 'call' node doesn't explicitly attach the return type,
+    // you can temporarily fallback to getInt32Ty while testing.
+    llvm::Type *valTy;
+    if (expr.contains("type")) {
+      valTy = llvmTypeFor(ctx, expr["type"]);
+    } else {
+      valTy = llvm::Type::getInt32Ty(ctx.Context);  // Fallback for integer testing
+    }
+
+    return ctx.Builder->CreateLoad(valTy, callResult, "map_val_load");
+  }
+
+  return callResult;
 }
 
 }  // namespace maml

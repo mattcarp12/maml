@@ -379,13 +379,26 @@ func (b *Builder) flattenIfExpr(expr *tast.IfExpr, current *BasicBlock) (tast.Ex
 		elseBlock = b.newBlock()
 	}
 
-	// 3. Pre-allocate a temporary register to hold the result of the if/else
-	resultTemp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: resultTemp,
-		Type: expr.Type,
-	})
-	resultIdent := &tast.Identifier{Value: resultTemp, Type: expr.Type}
+	// 3. Pre-allocate a temporary register ONLY if the type is not unit
+	isUnit := false
+	if _, ok := expr.Type.(types.UnitType); ok {
+		isUnit = true
+	}
+
+	var resultTemp string
+	var resultIdent *tast.Identifier
+
+	if !isUnit {
+		resultTemp = b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{
+			Name: resultTemp,
+			Type: expr.Type,
+		})
+		resultIdent = &tast.Identifier{Value: resultTemp, Type: expr.Type}
+	} else {
+		// Pass the sentinel identifier forward without declaring it
+		resultIdent = &tast.Identifier{Value: "_unit", Type: types.UnitType{}}
+	}
 
 	// 4. Seal the current block with a conditional switch
 	current.Terminator = &BranchTerminator{
@@ -397,7 +410,9 @@ func (b *Builder) flattenIfExpr(expr *tast.IfExpr, current *BasicBlock) (tast.Ex
 	// 5. Build the 'Then' branch
 	thenVal, thenEnd := b.flattenBlockExpr(expr.Consequence, thenBlock)
 	if thenEnd != nil {
-		thenEnd.Statements = append(thenEnd.Statements, &AssignInst{Dst: resultTemp, RValue: thenVal})
+		if !isUnit {
+			thenEnd.Statements = append(thenEnd.Statements, &AssignInst{Dst: resultTemp, RValue: thenVal})
+		}
 		if thenEnd.Terminator == nil {
 			thenEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 		}
@@ -407,7 +422,9 @@ func (b *Builder) flattenIfExpr(expr *tast.IfExpr, current *BasicBlock) (tast.Ex
 	if expr.Alternative != nil {
 		elseVal, elseEnd := b.flattenBlockExpr(expr.Alternative, elseBlock)
 		if elseEnd != nil {
-			elseEnd.Statements = append(elseEnd.Statements, &AssignInst{Dst: resultTemp, RValue: elseVal})
+			if !isUnit {
+				elseEnd.Statements = append(elseEnd.Statements, &AssignInst{Dst: resultTemp, RValue: elseVal})
+			}
 			if elseEnd.Terminator == nil {
 				elseEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 			}
@@ -603,13 +620,25 @@ func (b *Builder) flattenMatchExpr(expr *tast.MatchExpr, current *BasicBlock) (t
 	// 1. Flatten the subject into a temp.
 	flatSubject, current := b.flattenExpr(expr.Subject, current)
 
-	// 2. Pre-allocate the result temp in the current block (before any branching).
-	resultTemp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: resultTemp,
-		Type: expr.Type,
-	})
-	resultIdent := &tast.Identifier{Value: resultTemp, Type: expr.Type}
+	// 2. Pre-allocate the result temp ONLY if the type is not unit
+	isUnit := false
+	if _, ok := expr.Type.(types.UnitType); ok {
+		isUnit = true
+	}
+
+	var resultTemp string
+	var resultIdent *tast.Identifier
+
+	if !isUnit {
+		resultTemp = b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{
+			Name: resultTemp,
+			Type: expr.Type,
+		})
+		resultIdent = &tast.Identifier{Value: resultTemp, Type: expr.Type}
+	} else {
+		resultIdent = &tast.Identifier{Value: "_unit", Type: types.UnitType{}}
+	}
 
 	mergeBlock := b.newBlock()
 
@@ -763,10 +792,13 @@ func (b *Builder) flattenMatchExpr(expr *tast.MatchExpr, current *BasicBlock) (t
 		// 4. Flatten the arm body and capture its result into resultTemp.
 		flatBody, armEnd := b.flattenExpr(arm.Body, armBlock)
 		if armEnd != nil {
-			armEnd.Statements = append(armEnd.Statements, &AssignInst{
-				Dst:    resultTemp,
-				RValue: flatBody,
-			})
+			// Guard the assignment
+			if !isUnit {
+				armEnd.Statements = append(armEnd.Statements, &AssignInst{
+					Dst:    resultTemp,
+					RValue: flatBody,
+				})
+			}
 			if armEnd.Terminator == nil {
 				armEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 			}
@@ -812,25 +844,90 @@ func (b *Builder) flattenVariantLiteral(e *tast.VariantLiteral, current *BasicBl
 	return &tast.Identifier{Value: tmp, Type: e.Type}, current
 }
 
-// flattenVecLiteral lowers Vec literals using runtime constructor path
+// flattenVecLiteral lowers Vec literals using the runtime constructor path
+// by zero-allocating the vector and explicitly pushing each element.
 func (b *Builder) flattenVecLiteral(e *tast.VecLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
 	tmp := b.newTemp()
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
 
-	// Pass through as composite for runtime to handle
-	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: e})
+	// 1. Emit the zero-allocation (alloc_composite with no elements)
+	emptyVec := &tast.VecLiteral{
+		Pos_:     e.Pos_,
+		End_:     e.End_,
+		Elements: nil, // Strip elements so the backend just allocates the base struct
+		Type:     t,
+	}
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: emptyVec})
 
-	return &tast.Identifier{Value: tmp, Type: t}, current
+	// 2. Synthesize method calls to push each element sequentially
+	vecIdent := &tast.Identifier{Value: tmp, Type: t}
+	pushSym := &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "maml_vec_push", // Maps to the mangled runtime function
+	}
+
+	for _, elem := range e.Elements {
+		pushCall := &tast.MethodCallExpr{
+			Pos_:   e.Pos_,
+			Object: vecIdent,
+			Method: &tast.Identifier{
+				Value:  "maml_vec_push",
+				Symbol: pushSym,
+			},
+			// The compiler enforces mutability on vec.push() via the Mut flag
+			Arguments: []tast.CallArg{{Argument: elem, Mut: true}},
+			Type:      types.UnitType{},
+		}
+
+		// Recursively flatten the synthetic method call
+		_, current = b.flattenMethodCall(pushCall, current)
+	}
+
+	return vecIdent, current
 }
 
-// flattenMapLiteral similar to Vec
+// flattenMapLiteral lowers Map literals using the runtime constructor path
+// by zero-allocating the map and explicitly putting each key-value pair.
 func (b *Builder) flattenMapLiteral(e *tast.MapLiteral, current *BasicBlock) (tast.Expr, *BasicBlock) {
 	tmp := b.newTemp()
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
 
-	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: e})
+	// 1. Emit the zero-allocation (alloc_composite with no elements)
+	emptyMap := &tast.MapLiteral{
+		Pos_:     e.Pos_,
+		End_:     e.End_,
+		Elements: nil, // Strip elements so the backend just allocates the base struct
+		Type:     t,
+	}
+	current.Statements = append(current.Statements, &AssignInst{Dst: tmp, RValue: emptyMap})
 
-	return &tast.Identifier{Value: tmp, Type: t}, current
+	// 2. Synthesize method calls to put each key-value pair sequentially
+	mapIdent := &tast.Identifier{Value: tmp, Type: t}
+	putSym := &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "maml_map_put", // Maps to the mangled runtime function
+	}
+
+	for _, el := range e.Elements {
+		putCall := &tast.MethodCallExpr{
+			Pos_:   e.Pos_,
+			Object: mapIdent,
+			Method: &tast.Identifier{
+				Value:  "maml_map_put",
+				Symbol: putSym,
+			},
+			Arguments: []tast.CallArg{
+				{Argument: el.Key},
+				{Argument: el.Value},
+			},
+			Type: types.UnitType{},
+		}
+
+		// Recursively flatten the synthetic method call
+		_, current = b.flattenMethodCall(putCall, current)
+	}
+
+	return mapIdent, current
 }

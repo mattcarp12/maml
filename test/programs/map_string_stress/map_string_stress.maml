@@ -1,5 +1,5 @@
 fn main() int {
-    m := Map<string, int>()
+    mut m := Map<string, int>{}
     
     m.put("hello", 50)
     m.put("world", 60)

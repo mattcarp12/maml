@@ -22,7 +22,6 @@ llvm::Value *compileLogicalOr(CodegenContext &ctx, const nlohmann::json &expr, l
 
 // --- ExprContainers ---
 llvm::Value *compileStringLiteral(CodegenContext &ctx, const nlohmann::json &expr);
-llvm::Value *compileSliceExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileIndexExpr(CodegenContext &ctx, const nlohmann::json &expr);
 llvm::Value *compileFieldAccess(CodegenContext &ctx, const nlohmann::json &e);
 llvm::Value *compileZeroAllocExpr(CodegenContext &ctx, const nlohmann::json &expr);

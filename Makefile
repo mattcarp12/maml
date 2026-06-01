@@ -50,6 +50,9 @@ vet:
 test: all
 	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./... -v -cover
 
+e2e: all
+	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/integration_test.go -v -cover
+
 # =============================================================================
 # The End-to-End Execution Pipeline (The Verification Loop)
 # =============================================================================

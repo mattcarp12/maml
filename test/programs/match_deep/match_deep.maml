@@ -5,9 +5,9 @@ type Message =
 
 fn process(msg Message) int {
 	return match msg {
-		case Quit { => 10 }
-		case Move{x: mx, y: my} { => mx + my }
-		case Write{text: mt} { => 50 }
+		case Quit: { => 10 }
+		case Move{x: mx, y: my}: { => mx + my }
+		case Write{text: mt}: { => 50 }
 	}
 }
 

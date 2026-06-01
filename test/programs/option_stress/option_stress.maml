@@ -8,13 +8,13 @@ fn divide(a int, b int) Option<int> {
 
 fn compute(x int) Option<int> {
 	return match divide(100, x) {
-		case Some(val) {
+		case Some(val): {
 			=> match divide(val, 2) {
-				case Some(res) { => Some(res) }
-				case _ { => None }
+				case Some(res): { => Some(res) }
+				case _: { => None }
 			}
 		}
-		case _ { => None }
+		case _: { => None }
 	}
 }
 
@@ -23,13 +23,13 @@ fn main() int {
 	s2 := compute(0)
 
 	r1 := match s1 {
-		case Some(v) { => v }
-		case None { => 0 }
+		case Some(v): { => v }
+		case None: { => 0 }
 	}
 
 	r2 := match s2 {
-		case Some(v) { => v }
-		case None { => 10 }
+		case Some(v): { => v }
+		case None: { => 10 }
 	}
 
 	return r1 + r2

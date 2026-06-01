@@ -154,6 +154,128 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
   }
 
   // -------------------------------------------------------------------------
+  // slice_read — extracts a slice header from an array, string, or vector.
+  // -------------------------------------------------------------------------
+  if (op == "slice_read") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+    if (!dstPtr) {
+      ctx.Error.fatal("slice_read: unknown destination temporary '" + dst + "'", stmt);
+      return;
+    }
+
+    llvm::Value *leftVal = evaluateExpression(ctx, stmt["left"]);
+    if (!leftVal) return;
+
+    llvm::Type *leftTy = llvmTypeFor(ctx, stmt["container_type"]);
+    llvm::Value *leftPtr = leftVal;
+
+    // If leftVal is a loaded value, spill it to memory so we can safely GEP
+    if (!leftVal->getType()->isPointerTy()) {
+      llvm::AllocaInst *spill = ctx.Builder->CreateAlloca(leftTy, nullptr, "slice_source_spill");
+      ctx.Builder->CreateStore(leftVal, spill);
+      leftPtr = spill;
+    } else {
+      // Re-resolve the raw alloca if it's an identifier to avoid loading the pointer
+      if (stmt["left"].contains("value")) {
+        std::string leftName = stmt["left"]["value"].get<std::string>();
+        if (llvm::Value *sym = ctx.resolveSymbol(leftName)) {
+          if (llvm::isa<llvm::AllocaInst>(sym)) {
+            leftPtr = sym;
+          }
+        }
+      }
+    }
+
+    llvm::Value *lowVal = stmt.contains("low") && !stmt["low"].is_null() ? evaluateExpression(ctx, stmt["low"])
+                                                                         : ctx.Builder->getInt32(0);
+    llvm::Value *highVal = nullptr;
+
+    llvm::Value *originalCap = nullptr;
+    llvm::Value *originalRawPtr = nullptr;
+    llvm::Value *originalDataPtr = nullptr;
+
+    // Note: Use lowercase kinds because lowerType() exports them as "array", "slice", etc.
+    std::string_view leftKind = stmt["container_type"]["kind"].get<std::string_view>();
+
+    if (leftKind == "array") {
+      int size = stmt["container_type"]["size"].get<int>();
+      originalCap = ctx.Builder->getInt32(size);
+
+      // Get the pointer to the first element of the array
+      originalDataPtr = ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)},
+                                               "array_data_ptr");
+
+      // FIX: Fixed-size arrays are stack allocated and do NOT have an ARC header.
+      // Force the raw_ptr to null so maml_retain safely ignores it.
+      originalRawPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.Context));
+
+      highVal = stmt.contains("high") && !stmt["high"].is_null() ? evaluateExpression(ctx, stmt["high"]) : originalCap;
+
+    } else if (leftKind == "string") {
+      llvm::Value *dataGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}, "str_data_gep");
+      llvm::Value *lenGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)}, "str_len_gep");
+
+      originalRawPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataGep);
+      originalDataPtr = originalRawPtr;
+      originalCap = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), lenGep);
+
+      highVal = stmt.contains("high") && !stmt["high"].is_null() ? evaluateExpression(ctx, stmt["high"]) : originalCap;
+
+    } else if (leftKind == "slice" || leftKind == "vector") {
+      llvm::Value *rawGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)});
+      llvm::Value *dataGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)});
+      llvm::Value *lenGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(2)});
+      llvm::Value *capGep =
+          ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(3)});
+
+      originalRawPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), rawGep);
+      originalDataPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataGep);
+      originalCap = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), capGep);
+
+      highVal = stmt.contains("high") && !stmt["high"].is_null()
+                    ? evaluateExpression(ctx, stmt["high"])
+                    : ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), lenGep);
+    } else {
+      ctx.Error.fatal("slice_read: unrecognised container kind '" + std::string(leftKind) + "'", stmt);
+      return;
+    }
+
+    llvm::Value *newLen = ctx.Builder->CreateSub(highVal, lowVal, "slice_len");
+    llvm::Value *newCap = ctx.Builder->CreateSub(originalCap, lowVal, "slice_cap");
+
+    llvm::Type *baseTy = llvmTypeFor(ctx, stmt["container_type"]["elem_type"]);
+    llvm::Value *newDataPtr = ctx.Builder->CreateGEP(baseTy, originalDataPtr, lowVal, "slice_data_ptr");
+
+    llvm::Type *sliceTy = llvmTypeFor(ctx, stmt["result_type"]);
+
+    // Write the 4 fat-pointer fields into the pre-allocated slice struct
+    ctx.Builder->CreateStore(
+        originalRawPtr, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}));
+    ctx.Builder->CreateStore(
+        newDataPtr, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)}));
+    ctx.Builder->CreateStore(
+        newLen, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(2)}));
+    ctx.Builder->CreateStore(
+        newCap, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(3)}));
+
+    // ARC Retention: Bump the ref count on the underlying heap buffer if necessary
+    if (leftKind == "slice" || leftKind == "vector" || leftKind == "string" || leftKind == "array") {
+      llvm::FunctionCallee retainFn = ctx.Module->getOrInsertFunction(
+          "maml_retain", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context),
+                                                 {llvm::PointerType::getUnqual(ctx.Context)}, false));
+      ctx.Builder->CreateCall(retainFn, {originalRawPtr});
+    }
+
+    return;
+  }
+
+  // -------------------------------------------------------------------------
   // field_read  — loads one field from a struct alloca into a new temporary.
   //
   // JSON shape (from export.go):
@@ -223,12 +345,12 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     llvm::Type *gepTy = nullptr;
     if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(objPtr)) {
       gepTy = srcAlloca->getAllocatedType();
-    } 
+    }
 
     // --- PHASE 4: Override GEP Type with Variant Layout ---
     if (stmt.contains("variant_layout") && !stmt["variant_layout"].is_null()) {
-      std::vector<llvm::Type*> elementTypes;
-      for (const auto& tyJson : stmt["variant_layout"]) {
+      std::vector<llvm::Type *> elementTypes;
+      for (const auto &tyJson : stmt["variant_layout"]) {
         elementTypes.push_back(llvmTypeFor(ctx, tyJson));
       }
       gepTy = llvm::StructType::get(ctx.Context, elementTypes, /*isPacked=*/false);
