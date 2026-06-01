@@ -163,17 +163,13 @@ func (b *Builder) flattenExpr(expr tast.Expr, current *BasicBlock) (tast.Operand
 		return &tast.Identifier{Value: tmp, Type: e.Type}, current
 
 	case *tast.MapReadExpr:
-		// 1. Flatten the Map operand
 		flatMap, current := b.flattenExpr(e.Map, current)
-
-		// 2. Prepare Hash Information using the helper
 		hashVal, ptrVal, lenVal, current := b.lowerMapKey(e.Key, current)
 
-		// 3. Runtime Lookup: Call maml_map_get
 		opaqueTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: opaqueTmp, Type: types.AnyType{}})
 
-		// EMIT CALLINST DIRECTLY (No AssignInst, No tast.CallExpr)
+		// EMIT EXACTLY 4 ARGUMENTS FOR ZIG'S maml_map_get
 		current.Statements = append(current.Statements, &CallInst{
 			Dst:      opaqueTmp,
 			Function: &tast.Identifier{Value: "maml_map_get", Type: types.UnknownType{}},
@@ -185,15 +181,15 @@ func (b *Builder) flattenExpr(expr tast.Expr, current *BasicBlock) (tast.Operand
 			},
 			Type: types.AnyType{},
 		})
+
 		opaquePtr := &tast.Identifier{Value: opaqueTmp, Type: types.AnyType{}}
 
-		// 4. Dereference: Load the actual value from the opaque pointer
 		valTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: e.Type})
 		current.Statements = append(current.Statements, &LoadPtrInst{
 			Dst:  valTmp,
 			Ptr:  opaquePtr,
-			Type: e.Type, // The expected value type of the map
+			Type: e.Type,
 		})
 
 		return &tast.Identifier{Value: valTmp, Type: e.Type}, current

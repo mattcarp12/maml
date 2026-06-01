@@ -308,9 +308,6 @@ func (d *Desugar) buildArmConsequenceBlock(arm tast.MatchArm) *tast.BlockStmt {
 	}
 }
 
-// desugarMethodCallExpr transforms:
-//
-//	obj.method(args...)  →  method(obj, args...)
 func (d *Desugar) desugarMethodCallExpr(m *tast.MethodCallExpr) tast.Expr {
 	if m == nil {
 		return nil
@@ -326,11 +323,41 @@ func (d *Desugar) desugarMethodCallExpr(m *tast.MethodCallExpr) tast.Expr {
 		}
 	}
 
-	// 2. Build the desugared CallExpr
-	// The Method.Symbol already contains the mangled name (e.g. "maml_vec_push")
+	// 🌟 Route built-in methods to your dedicated collection nodes
+	leftType := tast.TypeOf(m.Object)
+	if _, isMap := leftType.(types.MapType); isMap {
+		if m.Method.Value == "get" && len(m.Arguments) == 1 {
+			return &tast.MapReadExpr{
+				Pos_: m.Pos_,
+				Map:  m.Object,
+				Key:  m.Arguments[0].Argument,
+				Type: m.Type,
+			}
+		}
+		if m.Method.Value == "put" && len(m.Arguments) == 2 {
+			// Because put() is an Expr but MapInsertStmt is a Stmt, we seamlessly
+			// wrap it in a BlockStmt that yields Unit to satisfy the AST.
+			return &tast.BlockStmt{
+				Pos_: m.Pos_,
+				Statements: []tast.Stmt{
+					&tast.MapInsertStmt{
+						Pos_:  m.Pos_,
+						Map:   m.Object,
+						Key:   m.Arguments[0].Argument,
+						Value: m.Arguments[1].Argument,
+					},
+					&tast.YieldStmt{
+						Value: &tast.Identifier{Value: "_unit", Type: types.UnitType{}},
+					},
+				},
+			}
+		}
+	}
+
+	// 2. Build the desugared CallExpr (for all normal methods)
 	flatCall := &tast.CallExpr{
 		Pos_:     m.Pos_,
-		Function: m.Method, // This is already a *tast.Identifier with correct Symbol
+		Function: m.Method,
 		Type:     m.Type,
 	}
 
@@ -339,7 +366,6 @@ func (d *Desugar) desugarMethodCallExpr(m *tast.MethodCallExpr) tast.Expr {
 		{
 			Pos_:     m.Pos_,
 			Argument: m.Object,
-			// Mut/Own flags are already on the original MethodCallArg if needed
 		},
 	}, m.Arguments...)
 

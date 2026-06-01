@@ -296,21 +296,20 @@ func (b *Builder) buildMapInsertStmt(stmt *tast.MapInsertStmt, current *BasicBlo
 	var flatMap, flatVal tast.Operand
 	flatMap, current = b.flattenExpr(stmt.Map, current)
 	flatVal, current = b.flattenExpr(stmt.Value, current)
-	
-	// Unpack hash components
+
 	hashVal, ptrVal, lenVal, current := b.lowerMapKey(stmt.Key, current)
 
-	putFn := &tast.Identifier{Value: "maml_map_put", Type: types.UnknownType{}}
 	putTmp := b.newTemp()
-
 	current.Statements = append(current.Statements, &TempDeclInst{Name: putTmp, Type: types.UnitType{}})
+
+	// EMIT EXACTLY 5 ARGUMENTS FOR ZIG'S maml_map_put
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      putTmp,
-		Function: putFn,
+		Function: &tast.Identifier{Value: "maml_map_put", Type: types.UnknownType{}},
 		Arguments: []MIRCallArg{
 			{Argument: flatMap, Mut: true},
 			{Argument: hashVal},
-			{Argument: flatVal},
+			{Argument: flatVal}, // Step 3 auto-spilling handles this in the backend!
 			{Argument: ptrVal},
 			{Argument: lenVal},
 		},
