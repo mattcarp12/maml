@@ -12,7 +12,6 @@ type Function struct {
 	ReturnType types.Type
 	IsAsync    bool
 	Graph      *Graph
-	Warnings   []string // e.g., "unreachable code detected"
 }
 
 // Program is the perfectly flat handover structure for the backend.

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/desugar"
 	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/parser"
@@ -46,6 +47,13 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	if len(errs) > 0 {
 		return nil, formatErrors("Semantic", errs)
 	}
+
+	// --------------------------------------------------------------------------
+	// Desugar pass (Modify in-place)
+	// --------------------------------------------------------------------------
+
+	desugarer := desugar.New()
+	desugarer.DesugarProgram(tastProgram)
 
 	// --------------------------------------------------------------------------
 	// MIR Lowering -> MIR

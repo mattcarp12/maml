@@ -115,10 +115,51 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 		return map[string]any{"op": "assign", "dst": i.Dst, "value": buildExprDTO(i.RValue)}
 	case *IndexAssignInst:
 		return map[string]any{"op": "index_assign", "target": i.Target, "target_type": lowerType(i.TargetType), "index": buildExprDTO(i.Index), "value": buildExprDTO(i.Value)}
+	case *BinaryOpInst:
+		return map[string]any{
+			"op":       "binary_op",
+			"dst":      i.Dst,
+			"operator": i.Operator,
+			"left":     buildExprDTO(i.Left),
+			"right":    buildExprDTO(i.Right),
+			"type":     lowerType(i.Type),
+		}
+	case *UnaryOpInst:
+		return map[string]any{
+			"op":       "unary_op",
+			"dst":      i.Dst,
+			"operator": i.Operator,
+			"operand":  buildExprDTO(i.Operand),
+			"type":     lowerType(i.Type),
+		}
+	case *IndexReadInst:
+		return map[string]any{
+			"op":          "index_read",
+			"dst":         i.Dst,
+			"source":      buildExprDTO(i.Source),
+			"source_type": lowerType(i.SourceType),
+			"index":       buildExprDTO(i.Index),
+			"type":        lowerType(i.Type),
+		}
+	case *CallInst:
+		args := []any{}
+		for _, arg := range i.Arguments {
+			args = append(args, map[string]any{
+				"argument": buildExprDTO(arg.Argument),
+				"mut":      arg.Mut,
+				"own":      arg.Own,
+			})
+		}
+		return map[string]any{
+			"op":        "call_inst",
+			"dst":       i.Dst,
+			"function":  buildExprDTO(i.Function),
+			"arguments": args,
+			"type":      lowerType(i.Type),
+		}
+
 	case *StructInitInst:
-		// Emitted once per field of a struct literal.
-		// The backend uses "field_index" as the GEP constant offset and
-		// "field_name" for debug info / error messages.
+
 		m := map[string]any{
 			"op":          "struct_init",
 			"dst":         i.Dst,
@@ -176,6 +217,35 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 			"high":           highDTO,
 			"result_type":    lowerType(i.ResultType),
 		}
+	case *VariantInitInst:
+		payloads := []any{}
+		for _, p := range i.Payloads {
+			payloads = append(payloads, buildExprDTO(p))
+		}
+		return map[string]any{
+			"op":           "variant_init",
+			"dst":          i.Dst,
+			"variant_name": i.VariantName,
+			"discriminant": i.Discriminant,
+			"payloads":     payloads,
+			"type":         lowerType(i.Type),
+		}
+	case *VariantReadInst:
+		return map[string]any{
+			"op":            "variant_read",
+			"dst":           i.Dst,
+			"object":        buildExprDTO(i.Object),
+			"variant_name":  i.VariantName,
+			"payload_index": i.PayloadIndex,
+			"type":          lowerType(i.Type),
+		}
+	case *VariantDiscriminantInst:
+		return map[string]any{
+			"op":     "variant_discriminant",
+			"dst":    i.Dst,
+			"object": buildExprDTO(i.Object),
+			"type":   lowerType(i.Type),
+		}
 	case *CopyInst:
 		return map[string]any{"op": "copy", "dst": i.Dst, "src": i.Src}
 	case *MoveInst:
@@ -188,6 +258,27 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 		return map[string]any{"op": "ref_dec", "src": i.Src}
 	case *MutBorrowInst:
 		return map[string]any{"op": "mut_borrow", "src": i.Src}
+	case *CastInst:
+		return map[string]any{
+			"op":   "cast",
+			"dst":  i.Dst,
+			"src":  buildExprDTO(i.Src),
+			"type": lowerType(i.Type),
+		}
+	case *LoadPtrInst:
+		return map[string]any{
+			"op":   "load_ptr",
+			"dst":  i.Dst,
+			"ptr":  buildExprDTO(i.Ptr),
+			"type": lowerType(i.Type),
+		}
+	case *StoreInst:
+		return map[string]any{
+			"op":      "store",
+			"dst_ptr": i.DstPtr,
+			"value":   buildExprDTO(i.Value),
+			"type":    lowerType(i.Type),
+		}
 	case *CoroPrologueInst:
 		return map[string]any{"op": "coro_prologue"}
 	default:
@@ -202,7 +293,22 @@ func buildTerminatorDTO(term Terminator) map[string]any {
 	case *JumpTerminator:
 		return map[string]any{"op": "br", "target": fmt.Sprintf("%d", t.Target)}
 	case *BranchTerminator:
-		return map[string]any{"op": "cond_br", "condition": buildExprDTO(t.Condition), "true_target": fmt.Sprintf("%d", t.TrueTarget), "false_target": fmt.Sprintf("%d", t.FalseTarget)}
+		// Determine if the condition is a literal or a temporary variable/identifier
+		var condDTO map[string]any
+		if t.Condition == "true" {
+			condDTO = map[string]any{"op": "const_bool", "value": true}
+		} else if t.Condition == "false" {
+			condDTO = map[string]any{"op": "const_bool", "value": false}
+		} else {
+			condDTO = map[string]any{"op": "ident", "value": t.Condition}
+		}
+
+		return map[string]any{
+			"op":           "cond_br",
+			"condition":    condDTO,
+			"true_target":  fmt.Sprintf("%d", t.TrueTarget),
+			"false_target": fmt.Sprintf("%d", t.FalseTarget),
+		}
 	case *UnreachableTerminator:
 		return map[string]any{"op": "unreachable"}
 	case *CoroSuspendTerminator:
@@ -217,17 +323,12 @@ func buildTerminatorDTO(term Terminator) map[string]any {
 // =============================================================================
 
 // buildExprDTO strips away frontend TAST node types and translates
-// expressions into simple opcode objects for the backend.
-//
-// NOTE: After the flatten pass, struct-related compound nodes should no longer
-// appear inside AssignInst.RValue (they are replaced by StructInitInst and
-// FieldReadInst).  The cases below are kept as a safety net for any path that
-// bypasses flattening (e.g. direct AssignInst emission in builder.go) and for
-// the Map/Vec literal pass-through path in flattenStructLiteral.
-func buildExprDTO(expr tast.Expr) any {
+// strictly flattened operands into simple opcode objects for the backend.
+func buildExprDTO(expr tast.Operand) any {
 	if expr == nil {
 		return nil
 	}
+
 	switch e := expr.(type) {
 	case *tast.Identifier:
 		return map[string]any{"op": "ident", "value": e.Value}
@@ -237,86 +338,9 @@ func buildExprDTO(expr tast.Expr) any {
 		return map[string]any{"op": "const_bool", "value": e.Value}
 	case *tast.StringLiteral:
 		return map[string]any{"op": "const_string", "value": e.Value}
-	case *tast.InfixExpr:
-		return map[string]any{"op": "infix", "operator": e.Operator, "left": buildExprDTO(e.Left), "right": buildExprDTO(e.Right)}
-	case *tast.PrefixExpr:
-		return map[string]any{"op": "prefix", "operator": e.Operator, "right": buildExprDTO(e.Right)}
-	case *tast.CallExpr:
-		args := []any{}
-		for _, arg := range e.Arguments {
-			args = append(args, buildExprDTO(arg.Argument))
-		}
-		return map[string]any{"op": "call", "function": buildExprDTO(e.Function), "arguments": args}
-
-	case *tast.VariantLiteral, *tast.MapLiteral, *tast.VecLiteral, *tast.StructLiteral:
-		// All composite literals go through alloc_composite for runtime construction
-		fields := []any{}
-		var typ any
-		switch v := e.(type) {
-		case *tast.VariantLiteral:
-			for _, arg := range v.Arguments {
-				fields = append(fields, map[string]any{"value": buildExprDTO(arg)})
-			}
-			typ = lowerType(v.Type)
-		case *tast.MapLiteral:
-			for _, el := range v.Elements {
-				fields = append(fields, map[string]any{
-					"key":   buildExprDTO(el.Key),
-					"value": buildExprDTO(el.Value),
-				})
-			}
-			typ = lowerType(v.Type)
-		case *tast.VecLiteral:
-			for _, el := range v.Elements {
-				fields = append(fields, map[string]any{"value": buildExprDTO(el)})
-			}
-			typ = lowerType(v.Type)
-		case *tast.StructLiteral:
-			// existing logic...
-			for _, f := range v.Fields {
-				entry := map[string]any{"value": buildExprDTO(f.Value)}
-				if f.Key != nil {
-					entry["key"] = buildExprDTO(f.Key)
-				}
-				fields = append(fields, entry)
-			}
-			typ = lowerType(v.Type)
-		}
-
-		return map[string]any{
-			"op":     "alloc_composite",
-			"type":   typ,
-			"fields": fields,
-		}
-
-	// FieldAccess: only reaches here if a FieldAccess somehow bypassed
-	// flattenFieldAccess (should not happen in practice).  Emit a best-effort
-	// DTO so the backend can at least report a meaningful error.
-	case *tast.FieldAccess:
-		fieldIndex := -1
-		if ident, ok := e.Object.(*tast.Identifier); ok {
-			if st, ok := ident.Type.(*types.StructType); ok {
-				fieldIndex = st.GetFieldIndex(e.Field.Value)
-			}
-		}
-		return map[string]any{
-			"op":          "field_access",
-			"object":      buildExprDTO(e.Object),
-			"field_name":  e.Field.Value,
-			"field_index": fieldIndex,
-		}
-
-	case *tast.IndexExpr:
-		return map[string]any{
-			"op":        "index_read",
-			"left":      buildExprDTO(e.Left),
-			"left_type": lowerType(e.Left.(*tast.Identifier).Type),
-			"index":     buildExprDTO(e.Index),
-			"elem_type": lowerType(e.Type),
-		}
-
 	default:
-		return map[string]any{"op": "unsupported_expr"}
+		// If this fires, our type system boundary failed.
+		panic(fmt.Sprintf("MIR Exporter Error: Illegal unflattened expression type reached backend: %T", expr))
 	}
 }
 

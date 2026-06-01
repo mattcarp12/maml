@@ -40,7 +40,7 @@ func BuildProgram(hirProg *tast.Program) *Program {
 
 		case *tast.FnDecl:
 			// Generate the CFG for the function body
-			graph := Build(d)
+			graph := buildFn(d)
 
 			// Bundle the CFG with the function's static signature
 			mirProg.Functions = append(mirProg.Functions, Function{
@@ -49,7 +49,6 @@ func BuildProgram(hirProg *tast.Program) *Program {
 				ReturnType: d.ReturnType,
 				IsAsync:    d.IsAsync,
 				Graph:      graph,
-				Warnings:   []string{},
 			})
 		}
 	}
@@ -57,8 +56,8 @@ func BuildProgram(hirProg *tast.Program) *Program {
 	return mirProg
 }
 
-// Build translates a hierarchical HIR function into a flat MIR Control Flow Graph.
-func Build(fn *tast.FnDecl) *Graph {
+// buildFn translates a hierarchical HIR function into a flat MIR Control Flow Graph.
+func buildFn(fn *tast.FnDecl) *Graph {
 	b := &Builder{
 		graph: NewGraph(),
 	}
@@ -146,13 +145,15 @@ func (b *Builder) buildStmt(stmt tast.Stmt, current *BasicBlock) *BasicBlock {
 		current.Terminator = &JumpTerminator{Target: activeLoop.Header}
 		// Return nil because any statements following a continue are dead code
 		return nil
+	case *tast.MapInsertStmt:
+		return b.buildMapInsertStmt(s, current)
 	}
 	return current
 }
 
 func (b *Builder) buildReturnStmt(stmt *tast.ReturnStmt, current *BasicBlock) *BasicBlock {
 	if stmt.Value != nil {
-		var flatRet tast.Expr
+		var flatRet tast.Operand
 		flatRet, current = b.flattenExpr(stmt.Value, current)
 
 		// Check if the return value is a UnitType
@@ -174,57 +175,41 @@ func (b *Builder) buildReturnStmt(stmt *tast.ReturnStmt, current *BasicBlock) *B
 }
 
 func (b *Builder) buildForStmt(stmt *tast.ForStmt, current *BasicBlock) *BasicBlock {
-	// 1. Evaluate the Init statement in the current block
+	// Init is now always outside (in a surrounding block)
 	if stmt.Init != nil {
 		current = b.buildStmt(stmt.Init, current)
 	}
 
-	// 2. Allocate the three distinct loop phases
 	condBlock := b.newBlock()
 	bodyBlock := b.newBlock()
 	exitBlock := b.newBlock()
 
-	// 3. Terminate the current block by jumping into the condition block
 	current.Terminator = &JumpTerminator{Target: condBlock.ID}
 
-	// 4. Flatten and evaluate the Loop Condition
-	var flatCond tast.Expr
+	var flatCond tast.Operand
 	condEvalBlock := condBlock
-
 	if stmt.Condition != nil {
 		flatCond, condEvalBlock = b.flattenExpr(stmt.Condition, condBlock)
 	} else {
-		// Infinite loops implicitly evaluate to true
 		flatCond = &tast.BoolLiteral{Value: true, Type: types.BoolType{}}
 	}
 
-	// 5. Branch based on the condition evaluation
 	condEvalBlock.Terminator = &BranchTerminator{
-		Condition:   flatCond,
+		Condition:   getConditionString(flatCond),
 		TrueTarget:  bodyBlock.ID,
 		FalseTarget: exitBlock.ID,
 	}
 
-	// 6. Push the loop tracker for break/continue support
 	b.loops = append(b.loops, LoopTracker{Header: condBlock.ID, Exit: exitBlock.ID})
 
-	// 7. Build the Body block
 	bodyEndBlock := b.buildBlockStmt(stmt.Body, bodyBlock)
 
-	// 8. Evaluate the Post statement (e.g., i = i + 1)
-	if stmt.Post != nil {
-		bodyEndBlock = b.buildStmt(stmt.Post, bodyEndBlock)
-	}
-
-	// 9. Jump back to the condition block to repeat
+	// Post is now inside the body (from desugar)
 	if bodyEndBlock.Terminator == nil {
 		bodyEndBlock.Terminator = &JumpTerminator{Target: condBlock.ID}
 	}
 
-	// 10. Pop the loop tracker
 	b.loops = b.loops[:len(b.loops)-1]
-
-	// 11. Return the exit block so the rest of the function continues from here
 	return exitBlock
 }
 
@@ -303,7 +288,39 @@ func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *B
 	return current
 }
 
-func (b *Builder) emitMemoryTransfer(dst string, flatRHS tast.Expr, dstSym *types.Symbol, current *BasicBlock) {
+func (b *Builder) buildMapInsertStmt(stmt *tast.MapInsertStmt, current *BasicBlock) *BasicBlock {
+	if stmt == nil {
+		return current
+	}
+
+	var flatMap, flatVal tast.Operand
+	flatMap, current = b.flattenExpr(stmt.Map, current)
+	flatVal, current = b.flattenExpr(stmt.Value, current)
+	
+	// Unpack hash components
+	hashVal, ptrVal, lenVal, current := b.lowerMapKey(stmt.Key, current)
+
+	putFn := &tast.Identifier{Value: "maml_map_put", Type: types.UnknownType{}}
+	putTmp := b.newTemp()
+
+	current.Statements = append(current.Statements, &TempDeclInst{Name: putTmp, Type: types.UnitType{}})
+	current.Statements = append(current.Statements, &CallInst{
+		Dst:      putTmp,
+		Function: putFn,
+		Arguments: []MIRCallArg{
+			{Argument: flatMap, Mut: true},
+			{Argument: hashVal},
+			{Argument: flatVal},
+			{Argument: ptrVal},
+			{Argument: lenVal},
+		},
+		Type: types.UnitType{},
+	})
+
+	return current
+}
+
+func (b *Builder) emitMemoryTransfer(dst string, flatRHS tast.Operand, dstSym *types.Symbol, current *BasicBlock) {
 	// Emit an allocation-agnostic temporary declaration
 	var t types.Type = types.UnknownType{}
 	if dstSym != nil {

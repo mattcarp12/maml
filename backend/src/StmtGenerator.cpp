@@ -73,42 +73,29 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
   // field_read (below) is the read side.
   // -------------------------------------------------------------------------
   if (op == "struct_init") {
-    std::string dst = stmt["dst"].get<std::string>();
-    int fieldIndex = stmt["field_index"].get<int>();
+    std::string dst = stmt.value("dst", "");
+    int field_index = stmt.value("field_index", 0);
 
-    llvm::Value *structPtr = ctx.resolveSymbol(dst);
-    if (!structPtr) {
-      ctx.Error.fatal("struct_init: unknown struct temporary '" + dst + "'", stmt);
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+    if (!dstPtr) {
+      ctx.Error.fatal("struct_init: target stack allocation not found for '" + dst + "'", stmt);
       return;
     }
 
-    auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(structPtr);
-    if (!alloca) {
-      ctx.Error.fatal("struct_init: symbol '" + dst + "' is not an alloca", stmt);
+    // Derive type from the alloca (most reliable source)
+    llvm::Type *structTy = nullptr;
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(dstPtr)) {
+      structTy = alloca->getAllocatedType();
+    } else {
+      ctx.Error.fatal("struct_init: target is not an alloca", stmt);
       return;
     }
 
-    // Default to the allocated type (e.g., the { i32, [N x i8] } base type)
-    llvm::Type *gepTy = alloca->getAllocatedType();
+    llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
+    if (!val) return;
 
-    // --- PHASE 4: Override GEP Type with Variant Layout ---
-    if (stmt.contains("variant_layout") && !stmt["variant_layout"].is_null()) {
-      std::vector<llvm::Type *> elementTypes;
-      for (const auto &tyJson : stmt["variant_layout"]) {
-        elementTypes.push_back(llvmTypeFor(ctx, tyJson));
-      }
-      gepTy = llvm::StructType::get(ctx.Context, elementTypes, /*isPacked=*/false);
-    }
-
-    llvm::Value *fieldVal = evaluateExpression(ctx, stmt["value"]);
-    if (!fieldVal) return;
-
-    // Because pointers are opaque, we just pass gepTy directly!
-    llvm::Value *fieldPtr =
-        ctx.Builder->CreateGEP(gepTy, structPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(fieldIndex)},
-                               dst + "." + stmt["field_name"].get<std::string>());
-
-    ctx.Builder->CreateStore(fieldVal, fieldPtr);
+    llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, dstPtr, field_index, dst + "_init_gep");
+    ctx.Builder->CreateStore(val, fieldGep);
     return;
   }
 
@@ -275,99 +262,57 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
-  // -------------------------------------------------------------------------
-  // field_read  — loads one field from a struct alloca into a new temporary.
-  //
-  // JSON shape (from export.go):
-  //   { "op": "field_read",
-  //     "dst": "_t2",          // name of the destination temporary
-  //     "object": { "op": "ident", "value": "_t1" },
-  //     "field_name": "x",     // source-level field name (for diagnostics)
-  //     "field_index": 0,      // declaration-order GEP index
-  //     "type": "i32"          // LLVM type of the loaded field
-  //   }
-  //
-  // The destination temporary was already declared (and its alloca emitted)
-  // by the preceding temp_decl instruction.  We GEP into the object's struct
-  // layout using the pre-resolved index and store the loaded value into the
-  // destination alloca.
-  // -------------------------------------------------------------------------
   if (op == "field_read") {
-    std::string dst = stmt["dst"].get<std::string>();
-    int fieldIndex = stmt["field_index"].get<int>();
-    llvm::Type *fieldType = llvmTypeFor(ctx, stmt["type"]);
+    std::string dst = stmt.value("dst", "");
+    int field_index = stmt.value("field_index", 0);
+    auto objectJson = stmt["object"];
 
-    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
-    if (!dstPtr) {
-      ctx.Error.fatal("field_read: unknown destination temporary '" + dst + "'", stmt);
-      return;
-    }
-
-    llvm::Value *objVal = evaluateExpression(ctx, stmt["object"]);
-    if (!objVal) return;
-
-    // evaluateExpression on an ident loads through the alloca; we need the
-    // raw pointer for GEP.  If the result is NOT a pointer already, spill it.
-    llvm::Value *objPtr = objVal;
-    if (!objVal->getType()->isPointerTy()) {
-      // Determine the struct type so we can create a properly-typed spill.
-      // We look up the object's name from the ident node, then inspect its
-      // alloca type.
-      if (stmt["object"].contains("value")) {
-        std::string objName = stmt["object"]["value"].get<std::string>();
-        if (llvm::Value *sym = ctx.resolveSymbol(objName)) {
-          if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(sym)) {
-            // Use the alloca directly — no load needed for a GEP source.
-            objPtr = srcAlloca;
-          }
-        }
-      }
-      if (objPtr == objVal) {
-        // Last resort: spill the loaded value into a fresh alloca.
-        llvm::AllocaInst *spill = ctx.Builder->CreateAlloca(objVal->getType(), nullptr, "field_read_spill");
-        ctx.Builder->CreateStore(objVal, spill);
-        objPtr = spill;
-      }
+    std::string objName;
+    if (objectJson.contains("value") && objectJson["value"].is_string()) {
+      objName = objectJson["value"].get<std::string>();
     } else {
-      // objVal is already a pointer (alloca or loaded ptr).  For a struct
-      // alloca, compileIdentifier loads through it — we need the raw alloca.
-      // Re-resolve from the symbol table to get the unloaded alloca.
-      if (stmt["object"].contains("value")) {
-        std::string objName = stmt["object"]["value"].get<std::string>();
-        if (llvm::Value *sym = ctx.resolveSymbol(objName)) {
-          if (llvm::isa<llvm::AllocaInst>(sym)) {
-            objPtr = sym;  // Use the alloca directly, skip the load.
-          }
-        }
-      }
-    }
-
-    llvm::Type *gepTy = nullptr;
-    if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(objPtr)) {
-      gepTy = srcAlloca->getAllocatedType();
-    }
-
-    // --- PHASE 4: Override GEP Type with Variant Layout ---
-    if (stmt.contains("variant_layout") && !stmt["variant_layout"].is_null()) {
-      std::vector<llvm::Type *> elementTypes;
-      for (const auto &tyJson : stmt["variant_layout"]) {
-        elementTypes.push_back(llvmTypeFor(ctx, tyJson));
-      }
-      gepTy = llvm::StructType::get(ctx.Context, elementTypes, /*isPacked=*/false);
-    } else if (!gepTy) {
-      ctx.Error.fatal("field_read: cannot determine struct type for object", stmt);
+      ctx.Error.fatal("field_read: object must be an identifier", stmt);
       return;
     }
 
-    // GEP using the concrete layout, bypassing the opaque array bounds
-    llvm::Value *fieldPtr =
-        ctx.Builder->CreateGEP(gepTy, objPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(fieldIndex)},
-                               stmt["field_name"].get<std::string>() + "_ptr");
+    llvm::Value *objVal = ctx.resolveSymbol(objName);
+    if (!objVal) {
+      ctx.Error.fatal("field_read: object '" + objName + "' not found", stmt);
+      return;
+    }
 
-    llvm::Value *fieldVal =
-        ctx.Builder->CreateLoad(fieldType, fieldPtr, stmt["field_name"].get<std::string>() + "_load");
+    llvm::Value *objPtr = nullptr;
+    llvm::Type *structTy = nullptr;
 
-    ctx.Builder->CreateStore(fieldVal, dstPtr);
+    // Case 1: Object is still an alloca (most common base case)
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(objVal)) {
+      objPtr = objVal;
+      structTy = alloca->getAllocatedType();
+    }
+    // Case 2: Object is a previously loaded struct value (nested field access)
+    else if (objVal->getType()->isStructTy()) {
+      // We need to spill the loaded struct back to a temporary alloca so we can GEP it
+      llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+      llvm::IRBuilder<> TmpBuilder(&F->getEntryBlock(), F->getEntryBlock().begin());
+
+      llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objVal->getType(), nullptr, objName + "_spill");
+
+      ctx.Builder->CreateStore(objVal, spillAlloca);
+
+      objPtr = spillAlloca;
+      structTy = objVal->getType();
+    } else {
+      ctx.Error.fatal("field_read: object '" + objName + "' is neither alloca nor struct value", stmt);
+      return;
+    }
+
+    // Now perform the GEP + load
+    llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, field_index, dst + "_gep");
+
+    llvm::Type *fieldTy = llvmTypeFor(ctx, stmt["type"]);
+    llvm::Value *loadedVal = ctx.Builder->CreateLoad(fieldTy, fieldGep, dst + "_val");
+
+    ctx.SymbolEnv.back()[dst] = loadedVal;
     return;
   }
 
@@ -432,6 +377,66 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
+  // -------------------------------------------------------------------------
+  // cast — explicitly converts a value to a different type representation.
+  // -------------------------------------------------------------------------
+  if (op == "cast") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *srcVal = evaluateExpression(ctx, stmt["src"]);
+    llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
+    llvm::Value *castVal = nullptr;
+
+    if (srcVal->getType()->isIntegerTy() && targetTy->isIntegerTy()) {
+      // e.g., zero-extending our i32 map key to an i64 for the hash
+      castVal = ctx.Builder->CreateZExtOrTrunc(srcVal, targetTy, dst + "_cast");
+    } else if (srcVal->getType()->isPointerTy() && targetTy->isPointerTy()) {
+      castVal = ctx.Builder->CreatePointerCast(srcVal, targetTy, dst + "_cast");
+    } else if (srcVal->getType()->isIntegerTy() && targetTy->isPointerTy()) {
+      castVal = ctx.Builder->CreateIntToPtr(srcVal, targetTy, dst + "_cast");
+    } else if (srcVal->getType()->isPointerTy() && targetTy->isIntegerTy()) {
+      castVal = ctx.Builder->CreatePtrToInt(srcVal, targetTy, dst + "_cast");
+    } else {
+      ctx.Error.fatal("cast: unsupported cast operation", stmt);
+      return;
+    }
+
+    ctx.SymbolEnv.back()[dst] = castVal;
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // load_ptr — dereferences an opaque pointer into a typed value.
+  // -------------------------------------------------------------------------
+  if (op == "load_ptr") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *ptrVal = evaluateExpression(ctx, stmt["ptr"]);
+    llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
+
+    // Evaluate the raw pointer, and execute a typed load
+    llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, ptrVal, dst + "_load");
+
+    // Bind to the destination register
+    ctx.SymbolEnv.back()[dst] = loadedVal;
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // store — writes a value directly into a destination pointer address.
+  // -------------------------------------------------------------------------
+  if (op == "store") {
+    llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
+    std::string dst_ptr_name = stmt["dst_ptr"].get<std::string>();
+
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst_ptr_name);
+    if (!dstPtr) {
+      ctx.Error.fatal("store: destination pointer not found: " + dst_ptr_name, stmt);
+      return;
+    }
+
+    ctx.Builder->CreateStore(val, dstPtr);
+    return;
+  }
+
   if (op == "ref_alloc") {
     llvm::Type *ty = llvmTypeFor(ctx, stmt["type"]);
     std::string dst = stmt["dst"].get<std::string>();
@@ -471,8 +476,330 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
+  if (op == "variant_discriminant") {
+    std::string dst = stmt["dst"].get<std::string>();
+    auto objectJson = stmt["object"];
+
+    // 1. Evaluate the underlying variant object to get its pointer
+    llvm::Value *objectPtr = evaluateExpression(ctx, objectJson);
+    if (!objectPtr) {
+      ctx.Error.fatal("Failed to evaluate object for variant_discriminant", stmt);
+      return;
+    }
+
+    // 2. Resolve the underlying LLVM structural type of the SumType
+    // using the calibration pattern established in Phase 1
+    llvm::Type *sumTy = llvmTypeFor(ctx, objectJson["type"]);
+
+    // 3. The discriminant is structurally guaranteed to be at index 0
+    // Use an explicit type-safe GEP calculation compatible with opaque pointers
+    llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 0, dst + "_gep");
+
+    // 4. Load the i32 tag value out of the pointer target
+    llvm::Value *discrimVal = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), discrimGep, dst + "_val");
+
+    // 5. Track the loaded discriminant value in our local value registry
+    ctx.SymbolEnv.back()[dst] = discrimVal;
+
+    return;
+  }
+
+  if (op == "variant_read") {
+    std::string dst = stmt.value("dst", "");
+    std::string variant_name = stmt.value("variant_name", "");
+    int payload_index = stmt.value("payload_index", 0);
+    auto objectJson = stmt["object"];
+
+    // 1. Evaluate the underlying variant object pointer
+    llvm::Value *objectPtr = evaluateExpression(ctx, objectJson);
+    if (!objectPtr) {
+      ctx.Error.fatal("Failed to evaluate object for variant_read", stmt);
+      return;
+    }
+
+    // 2. Reconstruct the precise layout for this specific variant.
+    // This ensures LLVM can accurately compute structural field offsets.
+    std::vector<llvm::Type *> fieldTys;
+    fieldTys.push_back(llvm::Type::getInt32Ty(ctx.Context));  // Element 0 is always the discriminant
+
+    // Look up the variant payload signature from the object type's metadata
+    if (objectJson.contains("type") && objectJson["type"].contains("variants")) {
+      for (const auto &v : objectJson["type"]["variants"]) {
+        if (v.value("name", "") == variant_name) {
+          if (v.contains("tuple_types")) {
+            for (const auto &tJson : v["tuple_types"]) {
+              fieldTys.push_back(llvmTypeFor(ctx, tJson));
+            }
+          }
+          if (v.contains("fields")) {
+            for (const auto &fJson : v["fields"]) {
+              fieldTys.push_back(llvmTypeFor(ctx, fJson["type"]));
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // Failsafe: If type metadata is sparse, backfill up to the index with the target type
+    if (fieldTys.size() <= static_cast<size_t>(1 + payload_index)) {
+      while (fieldTys.size() <= static_cast<size_t>(1 + payload_index)) {
+        fieldTys.push_back(llvmTypeFor(ctx, stmt["type"]));
+      }
+    }
+
+    // 3. Create an anonymous structural representation for this variant's active layout
+    llvm::StructType *variantStructTy = llvm::StructType::get(ctx.Context, fieldTys, /*isPacked=*/false);
+
+    // 4. Calculate the type-safe GEP into the payload buffer element
+    // Offset is 1 + payload_index to step past the discriminant at index 0
+    llvm::Value *payloadGep = ctx.Builder->CreateStructGEP(variantStructTy, objectPtr, 1 + payload_index, dst + "_gep");
+
+    // 5. Load the payload value using its true LLVM type
+    llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
+    llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, payloadGep, dst + "_val");
+
+    // 6. Map the value to the destination register name
+    ctx.SymbolEnv.back()[dst] = loadedVal;
+  }
+
+  if (op == "variant_init") {
+    std::string dst = stmt.value("dst", "");
+    std::string variant_name = stmt.value("variant_name", "");
+    int discriminant = stmt.value("discriminant", 0);
+    auto payloadsJson = stmt["payloads"];
+
+    // 1. Locate the pre-allocated target memory block pointer
+    llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+    if (!dstPtr) {
+      ctx.Error.fatal("variant_init: target stack allocation pointer not found for '" + dst + "'", stmt);
+      return;
+    }
+
+    // 2. Dynamically reconstruct the precise structural schema layout for this variant.
+    // Element 0 is always the i32 discriminant.
+    std::vector<llvm::Type *> fieldTys;
+    fieldTys.push_back(llvm::Type::getInt32Ty(ctx.Context));
+
+    // Gather structural types for every tracked payload parameter
+    for (const auto &pJson : payloadsJson) {
+      fieldTys.push_back(llvmTypeFor(ctx, pJson["type"]));
+    }
+
+    // Bind types together into an anonymous LLVM layout schema
+    llvm::StructType *variantStructTy = llvm::StructType::get(ctx.Context, fieldTys, /*isPacked=*/false);
+
+    // 3. Compute the structural GEP for index 0 and write the tag discriminant value
+    llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(variantStructTy, dstPtr, 0, dst + "_disc_gep");
+    llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), discriminant);
+    ctx.Builder->CreateStore(discrimVal, discrimGep);
+
+    // 4. Sequentially evaluate and store each active payload item
+    for (size_t i = 0; i < payloadsJson.size(); ++i) {
+      auto pJson = payloadsJson[i];
+
+      // Evaluate the sub-expression to yield a live LLVM value
+      llvm::Value *payloadVal = evaluateExpression(ctx, pJson);
+      if (!payloadVal) {
+        ctx.Error.fatal("variant_init: Failed to evaluate payload field index " + std::to_string(i), stmt);
+        continue;
+      }
+
+      // Offset the index by +1 to skip past the element 0 discriminant tag slot
+      llvm::Value *payloadGep =
+          ctx.Builder->CreateStructGEP(variantStructTy, dstPtr, 1 + i, dst + "_pld_" + std::to_string(i) + "_gep");
+
+      // Safely commit the value directly into the variant allocation
+      ctx.Builder->CreateStore(payloadVal, payloadGep);
+    }
+  }
+
   if (op == "coro_prologue") {
     // (Coroutine intrinsics setup goes here)
+    return;
+  }
+
+  if (op == "binary_op") {
+    std::string dst = stmt["dst"].get<std::string>();
+    std::string_view opSymbol = stmt["operator"].get<std::string_view>();
+    llvm::Value *left = evaluateExpression(ctx, stmt["left"]);
+    llvm::Value *right = evaluateExpression(ctx, stmt["right"]);
+    llvm::Value *result = nullptr;
+
+    if (opSymbol == "/" || opSymbol == "%") {
+      llvm::Value *isZero = ctx.Builder->CreateICmpEQ(right, llvm::ConstantInt::get(right->getType(), 0), "is_zero");
+      llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+      llvm::BasicBlock *trapBB = llvm::BasicBlock::Create(ctx.Context, "trap_div_zero", F);
+      llvm::BasicBlock *contBB = llvm::BasicBlock::Create(ctx.Context, "cont_div", F);
+
+      ctx.Builder->CreateCondBr(isZero, trapBB, contBB);
+      ctx.Builder->SetInsertPoint(trapBB);
+      llvm::Function *trapFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::trap);
+      ctx.Builder->CreateCall(trapFn);
+      ctx.Builder->CreateUnreachable();
+
+      ctx.Builder->SetInsertPoint(contBB);
+      if (opSymbol == "/") result = ctx.Builder->CreateSDiv(left, right, "divtmp");
+      if (opSymbol == "%") result = ctx.Builder->CreateSRem(left, right, "modtmp");
+    } else if (opSymbol == "+") {
+      result = ctx.Builder->CreateAdd(left, right, "addtmp");
+    } else if (opSymbol == "-") {
+      result = ctx.Builder->CreateSub(left, right, "subtmp");
+    } else if (opSymbol == "*") {
+      result = ctx.Builder->CreateMul(left, right, "multmp");
+    } else if (opSymbol == "==") {
+      result = ctx.Builder->CreateICmpEQ(left, right, "eqtmp");
+    } else if (opSymbol == "!=") {
+      result = ctx.Builder->CreateICmpNE(left, right, "neqtmp");
+    } else if (opSymbol == "<") {
+      result = ctx.Builder->CreateICmpSLT(left, right, "lttmp");
+    } else if (opSymbol == ">") {
+      result = ctx.Builder->CreateICmpSGT(left, right, "gttmp");
+    } else if (opSymbol == "<=") {
+      result = ctx.Builder->CreateICmpSLE(left, right, "letmp");
+    } else if (opSymbol == ">=") {
+      result = ctx.Builder->CreateICmpSGE(left, right, "getmp");
+    } else {
+      ctx.Error.fatal("Unknown binary operator: " + std::string(opSymbol), stmt);
+    }
+
+    ctx.SymbolEnv.back()[dst] = result;
+    return;
+  }
+
+  if (op == "unary_op") {
+    std::string dst = stmt["dst"].get<std::string>();
+    std::string_view opSymbol = stmt["operator"].get<std::string_view>();
+    llvm::Value *operand = evaluateExpression(ctx, stmt["operand"]);
+    llvm::Value *result = nullptr;
+
+    if (opSymbol == "!") {
+      result = ctx.Builder->CreateXor(operand, llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 1), "nottmp");
+    } else if (opSymbol == "-") {
+      result =
+          ctx.Builder->CreateSub(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 0), operand, "negtmp");
+    } else {
+      ctx.Error.fatal("Unknown unary operator: " + std::string(opSymbol), stmt);
+    }
+
+    ctx.SymbolEnv.back()[dst] = result;
+    return;
+  }
+
+  if (op == "index_read") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *leftVal = evaluateExpression(ctx, stmt["source"]);
+    llvm::Value *indexVal = evaluateExpression(ctx, stmt["index"]);
+    llvm::Type *elemTy = llvmTypeFor(ctx, stmt["type"]);
+
+    llvm::Value *leftPtr = leftVal;
+    if (stmt["source"].contains("value")) {
+      std::string leftName = stmt["source"]["value"].get<std::string>();
+      if (llvm::Value *sym = ctx.resolveSymbol(leftName)) {
+        if (llvm::isa<llvm::AllocaInst>(sym)) {
+          leftPtr = sym;
+        }
+      }
+    }
+
+    const auto &leftTypeJson = stmt["source_type"];
+    std::string_view kind = "unknown";
+    if (leftTypeJson.is_object() && leftTypeJson.contains("kind")) {
+      kind = leftTypeJson["kind"].get<std::string_view>();
+    }
+
+    llvm::Value *elemPtr = nullptr;
+    if (kind == "array") {
+      llvm::Type *arrayTy = llvmTypeFor(ctx, leftTypeJson);
+      elemPtr = ctx.Builder->CreateGEP(arrayTy, leftPtr, {ctx.Builder->getInt32(0), indexVal}, "array_elem_ptr");
+    } else if (kind == "string") {
+      llvm::Type *strTy = llvmTypeFor(ctx, leftTypeJson);
+      llvm::Value *dataPtrGep =
+          ctx.Builder->CreateGEP(strTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}, "str_data_gep");
+      llvm::Value *dataPtr =
+          ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtrGep, "str_data_ptr");
+      elemPtr = ctx.Builder->CreateGEP(llvm::Type::getInt8Ty(ctx.Context), dataPtr, indexVal, "char_ptr");
+    } else if (kind == "slice") {
+      llvm::Type *hdrTy = llvmTypeFor(ctx, leftTypeJson);
+      llvm::Value *dataPtrGep = ctx.Builder->CreateGEP(
+          hdrTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)}, "slice_data_gep");
+      llvm::Value *dataPtr =
+          ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtrGep, "slice_data_ptr");
+      elemPtr = ctx.Builder->CreateGEP(elemTy, dataPtr, indexVal, "slice_elem_ptr");
+    } else {
+      ctx.Error.fatal("index_read: unrecognised container kind '" + std::string(kind) + "'", stmt);
+      return;
+    }
+
+    llvm::Value *loadedVal = ctx.Builder->CreateLoad(elemTy, elemPtr, "elem_load");
+    ctx.SymbolEnv.back()[dst] = loadedVal;
+    return;
+  }
+
+  if (op == "call_inst") {
+    std::string dst = stmt["dst"].get<std::string>();
+    llvm::Value *callee = nullptr;
+    std::string funcName;
+    std::string_view functionNodeType = "unknown";
+
+    if (stmt["function"].contains("op")) {
+      functionNodeType = stmt["function"]["op"].get<std::string_view>();
+    }
+
+    if (functionNodeType == "ident") {
+      funcName = stmt["function"]["value"].get<std::string>();
+      callee = ctx.Module->getFunction(funcName);
+      if (!callee) {
+        callee = ctx.resolveSymbol(funcName);
+      }
+    } else {
+      callee = evaluateExpression(ctx, stmt["function"]);
+    }
+
+    if (!callee) {
+      ctx.Error.fatal("Could not resolve function for call", stmt);
+      return;
+    }
+
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(callee)) {
+      callee = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca, "fn_ptr_load");
+    }
+
+    llvm::FunctionType *FT = nullptr;
+    if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
+      FT = F->getFunctionType();
+    }
+
+    std::vector<llvm::Value *> args;
+    size_t i = 0;
+    for (const auto &argWrapper : stmt["arguments"]) {
+      llvm::Value *argVal = evaluateExpression(ctx, argWrapper["argument"]);
+      if (!argVal) return;
+
+      if (FT && i < FT->getNumParams()) {
+        llvm::Type *expectedTy = FT->getParamType(i);
+        llvm::Type *actualTy = argVal->getType();
+
+        if (expectedTy != actualTy) {
+          if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
+            argVal = ctx.Builder->CreateExtractValue(argVal, {0}, "fat_ptr_unwrap");
+          } else if (expectedTy->isIntegerTy() && actualTy->isIntegerTy()) {
+            argVal = ctx.Builder->CreateIntCast(argVal, expectedTy, true, "arg_cast");
+          } else if (expectedTy->isPointerTy() && actualTy->isPointerTy()) {
+            argVal = ctx.Builder->CreatePointerCast(argVal, expectedTy, "ptr_cast");
+          }
+        }
+      }
+      args.push_back(argVal);
+      i++;
+    }
+
+    llvm::CallInst *callResult = ctx.Builder->CreateCall(FT, callee, args, "calltmp");
+
+    // Only bind to the Symbol Environment if the function actually returns a value
+    if (!callResult->getType()->isVoidTy()) {
+      ctx.SymbolEnv.back()[dst] = callResult;
+    }
     return;
   }
 

@@ -1,4 +1,9 @@
+
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/GlobalVariable.h>
+
 #include "ExprGenerator.h"
+#include "RuntimeConstants.h"
 
 namespace maml {
 
@@ -21,6 +26,41 @@ llvm::Value *compileIdentifier(CodegenContext &ctx, const nlohmann::json &expr) 
   return val;
 }
 
+llvm::Value *compileStringLiteral(CodegenContext &ctx, const nlohmann::json &expr) {
+  auto &Builder = ctx.Builder;
+  std::string_view strVal = expr["value"].get<std::string_view>();
+
+  llvm::Type *strTy = llvm::StructType::get(
+      ctx.Context, {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)});
+
+  llvm::Constant *strConst = llvm::ConstantDataArray::getString(ctx.Context, strVal, true);
+  llvm::GlobalVariable *globalStr = new llvm::GlobalVariable(*ctx.Module, strConst->getType(), true,
+                                                             llvm::GlobalValue::PrivateLinkage, strConst, "str_lit");
+
+  llvm::Function *allocFn = ctx.Module->getFunction(rt::ALLOC);
+  const size_t dataSize = strVal.length() + 1;
+
+  llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), dataSize);
+  llvm::Value *heapPtr = Builder->CreateCall(allocFn, {sizeVal}, "str_heap_alloc");
+
+  // Copy the string data
+  Builder->CreateMemCpy(heapPtr, llvm::MaybeAlign(1), globalStr, llvm::MaybeAlign(1), dataSize);
+
+  // Create the fat pointer on stack
+  llvm::AllocaInst *headerAlloca = Builder->CreateAlloca(strTy, nullptr, "str_header");
+
+  // Store data pointer
+  llvm::Value *dataGep = Builder->CreateGEP(strTy, headerAlloca, {Builder->getInt32(0), Builder->getInt32(0)});
+  Builder->CreateStore(heapPtr, dataGep);
+
+  // Store length (excluding null)
+  llvm::Value *lenGep = Builder->CreateGEP(strTy, headerAlloca, {Builder->getInt32(0), Builder->getInt32(1)});
+  Builder->CreateStore(Builder->getInt32(strVal.length()), lenGep);
+
+  // Return the loaded struct value
+  return ctx.Builder->CreateLoad(strTy, headerAlloca, "str_literal_val");
+}
+
 llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr) {
   if (expr.is_null()) return nullptr;
   auto &Context = ctx.Context;
@@ -30,47 +70,16 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
     op = expr["op"].get<std::string_view>();
   }
 
-  // Primitive Literals
+  // Because the MIR is flat, we ONLY handle atomic operands here.
   if (op == "const_int") return llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), expr["value"].get<int64_t>());
   if (op == "const_bool")
     return llvm::ConstantInt::get(llvm::Type::getInt1Ty(Context), expr["value"].get<bool>() ? 1 : 0);
   if (op == "const_string") return compileStringLiteral(ctx, expr);
-
-  // Core Evaluators
   if (op == "ident") return compileIdentifier(ctx, expr);
-  if (op == "prefix") return compilePrefixExpr(ctx, expr);
-  if (op == "infix") return compileInfixExpr(ctx, expr);
-  if (op == "call") return compileCallExpr(ctx, expr);
 
-  // Complex Types
-  if (op == "index_read") return compileIndexExpr(ctx, expr);
-
-  // -------------------------------------------------------------------------
-  // alloc_composite — Map / Vec / SumType pass-through literal.
-  //
-  // Named struct literals are never seen here: they are fully decomposed into
-  // temp_decl + struct_init instructions by the MIR flatten pass and never
-  // appear as an expression operand at codegen time.
-  //
-  // Map and Vec literals still arrive as alloc_composite because they delegate
-  // to runtime constructors rather than GEP sequences.
-  // -------------------------------------------------------------------------
-  if (op == "alloc_composite") return compileZeroAllocExpr(ctx, expr);
-
-  // -------------------------------------------------------------------------
-  // field_access — safety net for any FieldAccess node that bypassed the MIR
-  // flatten pass (should not occur in normal compilation, but kept to avoid a
-  // cryptic "unknown op" error if something regresses upstream).
-  //
-  // NOTE: The canonical path for field access after the MIR rewrite is the
-  // field_read STATEMENT instruction handled in StmtGenerator.cpp, not this
-  // expression evaluator.  field_access as an expression no longer carries a
-  // "maml_type" annotation on the object, so compileFieldAccess will fatal if
-  // it is reached — which is intentional: it surfaces the upstream issue.
-  // -------------------------------------------------------------------------
-  if (op == "field_access") return compileFieldAccess(ctx, expr);
-
-  ctx.Error.fatal("Unknown expression op: " + std::string(op), expr);
+  // If we reach this, the frontend failed to flatten an expression and leaked it to the backend.
+  ctx.Error.fatal("CRITICAL ERROR: Unflattened AST expression node reached backend! Operator: " + std::string(op),
+                  expr);
   return nullptr;
 }
 

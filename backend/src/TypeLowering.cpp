@@ -33,7 +33,7 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
       ctx.Error.fatal("Unknown primitive type: " + std::string(kind), typeJson);
     }
   }
-  
+
   // 2. Handle compound types (structs, sum types, etc.)
   else if (typeJson.is_object()) {
     if (!typeJson.contains("kind")) {
@@ -99,10 +99,8 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
       }
 
     } else if (kind == "sum_type") {
-      // Sum types are passed as opaque pointers; the discriminant and payload
-      // are managed by the variant-constructor path in ExprCalls.cpp.
-      // resultType = llvm::PointerType::getUnqual(ctx.Context);
-
+      // Sum types are structurally lowered as a tagged union.
+      // Layout: { i32 discriminant, [payloadSize x i8] max_payload_buffer }
       std::string structName = typeJson.value("name", "__anon_sum_type");
 
       // Check if we've already defined this SumType in the LLVM Context
@@ -114,7 +112,6 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
         int totalSize = typeJson.value("size", 8);  // Fallback to 8 if missing
         int payloadSize = totalSize > 4 ? totalSize - 4 : 0;
 
-        // Base layout: { i32 discriminant, [payloadSize x i8] max_payload_buffer }
         llvm::Type *discrimTy = llvm::Type::getInt32Ty(ctx.Context);
         llvm::Type *payloadTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(ctx.Context), payloadSize);
 

@@ -75,7 +75,7 @@ func (a *Analyzer) buildDeclareStmt(s *ast.DeclareStmt) *tast.DeclareStmt {
 	}
 
 	tastValue := a.buildExpr(s.Value)
-	exprType := typeOf(tastValue)
+	exprType := tast.TypeOf(tastValue)
 
 	if exprType.Equals(types.UnitType{}) {
 		a.errorf(s.Pos_, "cannot assign the result of a function that returns 'unit'")
@@ -101,8 +101,8 @@ func (a *Analyzer) buildAssignStmt(s *ast.AssignStmt) *tast.AssignStmt {
 	tastLValue := a.buildExpr(s.LValue)
 	tastRValue := a.buildExpr(s.RValue)
 
-	lvalType := typeOf(tastLValue)
-	rvalType := typeOf(tastRValue)
+	lvalType := tast.TypeOf(tastLValue)
+	rvalType := tast.TypeOf(tastRValue)
 
 	// 1. Static Capability Check: Extract the root symbol and verify mutability
 	rootSym := a.getRootSymbol(tastLValue)
@@ -134,7 +134,7 @@ func (a *Analyzer) buildReturnStmt(s *ast.ReturnStmt) *tast.ReturnStmt {
 
 	if s.Value != nil {
 		tastValue = a.buildExpr(s.Value)
-		retType = typeOf(tastValue)
+		retType = tast.TypeOf(tastValue)
 	}
 
 	expected := a.expectedReturn
@@ -168,7 +168,7 @@ func (a *Analyzer) buildForStmt(s *ast.ForStmt) *tast.ForStmt {
 	var condExpr tast.Expr
 	if s.Condition != nil {
 		condExpr = a.buildExpr(s.Condition)
-		condType := typeOf(condExpr)
+		condType := tast.TypeOf(condExpr)
 		if !condType.Equals(types.BoolType{}) && !types.IsUnknown(condType) {
 			a.errorf(s.Condition.Pos(), "condition must be of type 'bool'")
 		}

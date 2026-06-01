@@ -13,9 +13,125 @@ type Instruction interface {
 	String() string
 }
 
-// =============================================================================
-// Structural Instructions
-// =============================================================================
+type MIRCallArg struct {
+	Argument tast.Operand
+	Mut      bool
+	Own      bool
+}
+
+type AssignInst struct {
+	Dst    string
+	RValue tast.Operand
+}
+
+type IndexAssignInst struct {
+	Target     string
+	TargetType types.Type
+	Index      tast.Operand
+	Value      tast.Operand
+}
+
+type StructInitInst struct {
+	Dst           string
+	FieldName     string
+	FieldIndex    int
+	Value         tast.Operand
+	VariantLayout []types.Type
+}
+
+type FieldReadInst struct {
+	Dst           string
+	Object        tast.Operand
+	FieldName     string
+	FieldIndex    int
+	Type          types.Type
+	VariantLayout []types.Type
+}
+
+type ArrayInitInst struct {
+	Dst   string
+	Index int
+	Value tast.Operand
+}
+
+type SliceInst struct {
+	Dst           string
+	Left          tast.Operand
+	ContainerType types.Type
+	Low           tast.Operand
+	High          tast.Operand
+	ResultType    types.Type
+}
+
+type BinaryOpInst struct {
+	Dst      string
+	Operator string
+	Left     tast.Operand
+	Right    tast.Operand
+	Type     types.Type
+}
+
+type UnaryOpInst struct {
+	Dst      string
+	Operator string
+	Operand  tast.Operand
+	Type     types.Type
+}
+
+type IndexReadInst struct {
+	Dst        string
+	Source     tast.Operand
+	SourceType types.Type
+	Index      tast.Operand
+	Type       types.Type
+}
+
+type CallInst struct {
+	Dst       string
+	Function  tast.Operand
+	Arguments []MIRCallArg // Use the new decoupled struct!
+	Type      types.Type
+}
+
+type VariantInitInst struct {
+	Dst          string
+	VariantName  string
+	Discriminant int
+	Payloads     []tast.Operand
+	Type         types.Type
+}
+
+type VariantReadInst struct {
+	Dst          string
+	Object       tast.Operand
+	VariantName  string
+	PayloadIndex int
+	Type         types.Type
+}
+
+type VariantDiscriminantInst struct {
+	Dst    string
+	Object tast.Operand
+	Type   types.Type
+}
+
+type CastInst struct {
+	Dst  string
+	Src  tast.Operand
+	Type types.Type
+}
+
+type LoadPtrInst struct {
+	Dst  string
+	Ptr  tast.Operand
+	Type types.Type
+}
+
+type StoreInst struct {
+	DstPtr string
+	Value  tast.Operand
+	Type   types.Type
+}
 
 // TempDeclInst declares a new explicit temporary variable to hold an intermediate value.
 type TempDeclInst struct {
@@ -26,81 +142,17 @@ type TempDeclInst struct {
 func (TempDeclInst) isInstruction()    {}
 func (i *TempDeclInst) String() string { return fmt.Sprintf("let %s: %s", i.Name, i.Type.String()) }
 
-// AssignInst assigns an evaluated, flattened expression to a destination.
-type AssignInst struct {
-	Dst    string
-	RValue tast.Expr `json:"expr"`
-}
-
 func (AssignInst) isInstruction() {}
 func (i *AssignInst) String() string {
 	return fmt.Sprintf("%s = %s", i.Dst, i.RValue.String())
 }
 
-type IndexAssignInst struct {
-	Target     string
-	TargetType types.Type
-	Index      tast.Expr
-	Value      tast.Expr
-}
-
 func (i *IndexAssignInst) isInstruction() {}
 func (i *IndexAssignInst) String() string { return "index_set " + i.Target }
-
-// StructInitInst initializes a single named field of an already-declared struct
-// temporary by writing a flat expression value into the field slot.
-//
-// The backend lowers this into a getelementptr + store pair:
-//
-//	%ptr = getelementptr inbounds %StructType, ptr %dst, i32 0, i32 FieldIndex
-//	store <FieldType> <value>, ptr %ptr
-//
-// One StructInitInst is emitted per field of every struct literal.  Emitting
-// per-field instructions (rather than one monolithic AssignInst wrapping the
-// entire StructLiteral) keeps all MIR instructions uniform and backend-agnostic.
-type StructInitInst struct {
-	// Dst is the name of the temporary that holds the struct being initialized.
-	Dst string
-	// FieldName is the source-level identifier (preserved for debug info).
-	FieldName string
-	// FieldIndex is the zero-based declaration-order index into the struct's
-	// field list, consumed by the backend to compute the GEP constant offset.
-	FieldIndex int
-	// Value is a fully-flattened expression — always an *tast.Identifier or a
-	// primitive literal after flattenExpr processing.
-	Value         tast.Expr
-	VariantLayout []types.Type
-}
 
 func (s *StructInitInst) isInstruction() {}
 func (s *StructInitInst) String() string {
 	return fmt.Sprintf("%s.%s[%d] = %s", s.Dst, s.FieldName, s.FieldIndex, s.Value.String())
-}
-
-// FieldReadInst reads a single field out of a struct value and stores the
-// result in a new temporary.
-//
-// The backend lowers this into a getelementptr + load pair:
-//
-//	%ptr = getelementptr inbounds %StructType, ptr %object, i32 0, i32 FieldIndex
-//	%dst = load <FieldType>, ptr %ptr
-//
-// Using a dedicated FieldReadInst (rather than embedding a raw FieldAccess in
-// an AssignInst) means the backend never needs to inspect tast nodes directly;
-// all structural information is present on the instruction itself.
-type FieldReadInst struct {
-	// Dst is the temporary that receives the loaded field value.
-	Dst string
-	// Object is the flat (already-declared) expression whose struct field is
-	// being read — always an *tast.Identifier after flattenExpr processing.
-	Object tast.Expr
-	// FieldName is the source-level identifier (preserved for debug info).
-	FieldName string
-	// FieldIndex is the zero-based declaration-order index used for GEP.
-	FieldIndex int
-	// Type is the type of the field being read (used for the LLVM load type).
-	Type          types.Type
-	VariantLayout []types.Type
 }
 
 func (f *FieldReadInst) isInstruction() {}
@@ -108,45 +160,9 @@ func (f *FieldReadInst) String() string {
 	return fmt.Sprintf("%s = %s.%s[%d]", f.Dst, f.Object.String(), f.FieldName, f.FieldIndex)
 }
 
-// ArrayInitInst initializes a single element of an already-declared array
-// temporary by writing a flat expression value into the element slot.
-//
-// The backend lowers this into a getelementptr + store pair:
-//
-//	%ptr = getelementptr inbounds [N x ElemType], ptr %dst, i32 0, i32 Index
-//	store <ElemType> <value>, ptr %ptr
-//
-// One ArrayInitInst is emitted per element of every array literal.
-type ArrayInitInst struct {
-	// Dst is the name of the temporary that holds the array being initialized.
-	Dst string
-	// Index is the zero-based element position.
-	Index int
-	// Value is a fully-flattened expression — always an *tast.Identifier or a
-	// primitive literal after flattenExpr processing.
-	Value tast.Expr
-}
-
 func (a *ArrayInitInst) isInstruction() {}
 func (a *ArrayInitInst) String() string {
 	return fmt.Sprintf("%s[%d] = %s", a.Dst, a.Index, a.Value.String())
-}
-
-// SliceInst creates a new slice header from a contiguous region of an existing
-// container. The backend lowers this differently per container kind:
-//   - array  → GEP to element 0+Low, compute len/cap from High-Low / Size-Low
-//   - slice/vector → load the data pointer, offset by Low
-//   - string → load the char pointer, offset by Low
-//
-// Left is always a flat *tast.Identifier after flattenExpr processing.
-// Low and High are flat expressions or nil (meaning 0 and full-length respectively).
-type SliceInst struct {
-	Dst           string
-	Left          tast.Expr  // flat identifier, Type = container type
-	ContainerType types.Type // the type of Left (Array/Slice/Vector/String)
-	Low           tast.Expr  // nil means 0
-	High          tast.Expr  // nil means full length
-	ResultType    types.Type // always SliceType, VectorType, or StringType
 }
 
 func (s *SliceInst) isInstruction() {}
@@ -161,9 +177,40 @@ func (s *SliceInst) String() string {
 	return fmt.Sprintf("%s = %s[%s:%s]", s.Dst, s.Left.String(), low, high)
 }
 
-// =============================================================================
-// Explicit Memory Instructions (The 3-Layer Model)
-// =============================================================================
+func (BinaryOpInst) isInstruction() {}
+func (i *BinaryOpInst) String() string {
+	return fmt.Sprintf("%s = %s %s %s", i.Dst, i.Left.String(), i.Operator, i.Right.String())
+}
+
+func (UnaryOpInst) isInstruction() {}
+func (i *UnaryOpInst) String() string {
+	return fmt.Sprintf("%s = %s%s", i.Dst, i.Operator, i.Operand.String())
+}
+
+func (IndexReadInst) isInstruction() {}
+func (i *IndexReadInst) String() string {
+	return fmt.Sprintf("%s = %s[%s]", i.Dst, i.Source.String(), i.Index.String())
+}
+
+func (CallInst) isInstruction() {}
+func (i *CallInst) String() string {
+	return fmt.Sprintf("%s = call %s(...)", i.Dst, i.Function.String())
+}
+
+func (v *VariantInitInst) isInstruction() {}
+func (v *VariantInitInst) String() string {
+	return fmt.Sprintf("%s = init_variant %s (disc: %d)", v.Dst, v.VariantName, v.Discriminant)
+}
+
+func (v *VariantReadInst) isInstruction() {}
+func (v *VariantReadInst) String() string {
+	return fmt.Sprintf("%s = read_variant %s as %s[%d]", v.Dst, v.Object.String(), v.VariantName, v.PayloadIndex)
+}
+
+func (v *VariantDiscriminantInst) isInstruction() {}
+func (v *VariantDiscriminantInst) String() string {
+	return fmt.Sprintf("%s = read_discriminant %s", v.Dst, v.Object.String())
+}
 
 // CopyInst explicitly duplicates a primitive value.
 type CopyInst struct {
@@ -217,6 +264,21 @@ type MutBorrowInst struct {
 
 func (MutBorrowInst) isInstruction()    {}
 func (i *MutBorrowInst) String() string { return fmt.Sprintf("mut_borrow %s", i.Src) }
+
+func (CastInst) isInstruction() {}
+func (i *CastInst) String() string {
+	return fmt.Sprintf("%s = cast %s to %s", i.Dst, i.Src.String(), i.Type.String())
+}
+
+func (LoadPtrInst) isInstruction() {}
+func (i *LoadPtrInst) String() string {
+	return fmt.Sprintf("%s = load_ptr %s as %s", i.Dst, i.Ptr.String(), i.Type.String())
+}
+
+func (StoreInst) isInstruction() {}
+func (i *StoreInst) String() string {
+	return fmt.Sprintf("store %s -> %s", i.Value.String(), i.DstPtr)
+}
 
 // =============================================================================
 // Explicit Coroutine Instructions

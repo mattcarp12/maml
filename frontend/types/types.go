@@ -433,3 +433,20 @@ func IsAny(other Type) bool {
 	_, ok := other.(AnyType)
 	return ok
 }
+
+func MergeTypes(t1, t2 Type) Type {
+	if t1 == nil || t2 == nil {
+		return nil
+	}
+	if t1.Equals(t2) {
+		return t1
+	}
+	if !IsUnknown(t1) && !IsUnknown(t2) {
+		// They conflict
+		return UnknownType{}
+	}
+	if IsUnknown(t1) {
+		return t2
+	}
+	return t1
+}

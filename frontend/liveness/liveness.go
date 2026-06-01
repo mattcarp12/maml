@@ -127,13 +127,14 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 	}
 
 	// Terminators also USE variables (e.g., branching on a condition)
-	switch t := block.Terminator.(type) {
-	case *mir.BranchTerminator:
-		for _, u := range extractUses(t.Condition) {
-			if !defSet[u] {
-				useSet[u] = true
-			}
-		}
+	switch block.Terminator.(type) {
+	// TODO - Fix this!
+	// case *mir.BranchTerminator:
+	// 	for _, u := range extractUses(t.Condition) {
+	// 		if !defSet[u] {
+	// 			useSet[u] = true
+	// 		}
+	// 	}
 	case *mir.ReturnTerminator:
 		// Functions always return via _ret
 		if !defSet["_ret"] {
@@ -168,8 +169,6 @@ func extractUses(expr tast.Expr) []string {
 		uses = append(uses, extractUses(e.Index)...)
 	case *tast.FieldAccess:
 		uses = append(uses, extractUses(e.Object)...)
-		// default:
-		// 	panic(fmt.Sprintf("liveness: unhandled expression type %T in extractUses", e))
 	}
 	return uses
 }

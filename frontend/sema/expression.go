@@ -66,6 +66,7 @@ func (a *Analyzer) buildIdentifier(e *ast.Identifier) tast.Expr {
 		a.errorf(e.Pos(), "undefined name '%s'", e.Value)
 		return &tast.Identifier{Pos_: e.Pos_, Value: e.Value, Type: types.UnknownType{}}
 	}
+
 	if sym.Kind == types.VariantSymbol {
 		isUnit := sym.Variant != nil &&
 			len(sym.Variant.TupleTypes) == 0 &&
@@ -73,7 +74,6 @@ func (a *Analyzer) buildIdentifier(e *ast.Identifier) tast.Expr {
 
 		if isUnit {
 			sumType := sym.SumType
-
 			// Generic Inference for Unit Variants (e.g., bare `None`)
 			if sumType.BaseName == "Option" && sym.Variant.Name == "None" {
 				if exp, ok := a.expectedReturn.(*types.SumType); ok && exp.BaseName == "Option" {
@@ -81,15 +81,12 @@ func (a *Analyzer) buildIdentifier(e *ast.Identifier) tast.Expr {
 				}
 			}
 
-			return &tast.StructLiteral{
-				Pos_: e.Pos_,
-				Type: sumType,
-				Fields: []tast.StructField{
-					{
-						Key:   &tast.Identifier{Pos_: e.Pos_, Value: "__discriminant", Type: types.StringType{}},
-						Value: &tast.IntLiteral{Pos_: e.Pos_, Value: int64(sym.Variant.Discriminant), Type: types.IntType{}},
-					},
-				},
+			return &tast.VariantLiteral{
+				Pos_:      e.Pos_,
+				Variant:   sym.Variant,
+				Arguments: nil,
+				Fields:    nil,
+				Type:      sumType,
 			}
 		}
 	}
@@ -106,8 +103,8 @@ func (a *Analyzer) buildInfixExpr(e *ast.InfixExpr) *tast.InfixExpr {
 	leftNode := a.buildExpr(e.Left)
 	rightNode := a.buildExpr(e.Right)
 
-	leftType := typeOf(leftNode)
-	rightType := typeOf(rightNode)
+	leftType := tast.TypeOf(leftNode)
+	rightType := tast.TypeOf(rightNode)
 
 	// Math and Logic Rules
 	var resultType types.Type = types.UnknownType{}
@@ -143,7 +140,7 @@ func (a *Analyzer) buildInfixExpr(e *ast.InfixExpr) *tast.InfixExpr {
 
 func (a *Analyzer) buildPrefixExpr(e *ast.PrefixExpr) *tast.PrefixExpr {
 	rightNode := a.buildExpr(e.Right)
-	rightType := typeOf(rightNode)
+	rightType := tast.TypeOf(rightNode)
 
 	var resultType types.Type = types.UnknownType{}
 	switch e.Operator {
@@ -175,24 +172,24 @@ func (a *Analyzer) buildPrefixExpr(e *ast.PrefixExpr) *tast.PrefixExpr {
 
 func (a *Analyzer) buildIfExpr(e *ast.IfExpr) *tast.IfExpr {
 	condNode := a.buildExpr(e.Condition)
-	condType := typeOf(condNode)
+	condType := tast.TypeOf(condNode)
 
 	if !condType.Equals(types.BoolType{}) && !types.IsUnknown(condType) {
 		a.errorf(e.Pos(), "IF condition must be a boolean")
 	}
 
 	consBlock := a.buildBlockStmt(e.Consequence)
-	consYield := TypeOfBlock(consBlock)
+	consYield := tast.TypeOfBlock(consBlock)
 
 	var altBlock *tast.BlockStmt
 	altYield := types.Type(types.UnitType{})
 
 	if e.Alternative != nil {
 		altBlock = a.buildBlockStmt(e.Alternative)
-		altYield = TypeOfBlock(altBlock)
+		altYield = tast.TypeOfBlock(altBlock)
 	}
 
-	resultType := mergeTypes(consYield, altYield)
+	resultType := types.MergeTypes(consYield, altYield)
 
 	return &tast.IfExpr{
 		Pos_:        e.Pos_,
@@ -220,9 +217,9 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 
 	// 3. STANDARD FUNCTION CALL HANDLING
 	// Only proceed here if it is NOT a variant.
-	ft, ok := typeOf(funcNode).(*types.FunctionType)
+	ft, ok := tast.TypeOf(funcNode).(*types.FunctionType)
 	if !ok {
-		a.errorf(e.Pos(), "cannot call non-function type '%s'", typeOf(funcNode).String())
+		a.errorf(e.Pos(), "cannot call non-function type '%s'", tast.TypeOf(funcNode).String())
 		return &tast.CallExpr{
 			Pos_:      e.Pos_,
 			Function:  funcNode,
@@ -249,7 +246,7 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 		// Validate parameter type and mode if within bounds
 		if i < len(ft.Params) {
 			expected := ft.Params[i]
-			got := typeOf(valNode)
+			got := tast.TypeOf(valNode)
 			if !got.Equals(expected) && !types.IsUnknown(got) && !types.IsUnknown(expected) {
 				a.errorf(arg.Pos_, "argument %d type mismatch: expected '%s', got '%s'", i+1, expected.String(), got.String())
 			}
@@ -288,7 +285,7 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 
 func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.MethodCallExpr {
 	objNode := a.buildExpr(e.Object)
-	objType := typeOf(objNode)
+	objType := tast.TypeOf(objNode)
 	methodName := e.Method.Value
 
 	var resultType types.Type = types.UnknownType{}
@@ -353,7 +350,7 @@ func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.MethodCallEx
 	var tastArgs []tast.CallArg
 	for i, arg := range e.Arguments {
 		argNode := a.buildExpr(arg.Argument)
-		argType := typeOf(argNode)
+		argType := tast.TypeOf(argNode)
 
 		if expectedParams != nil && i < len(expectedParams) {
 			if !argType.Equals(expectedParams[i]) && !types.IsUnknown(argType) {
@@ -392,7 +389,7 @@ func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 	}
 
 	valNode := a.buildExpr(e.Value)
-	valType := typeOf(valNode)
+	valType := tast.TypeOf(valNode)
 
 	var resultType types.Type = types.UnknownType{}
 	if taskTy, ok := valType.(types.TaskType); ok {
@@ -423,7 +420,7 @@ func (a *Analyzer) buildArrayLiteral(e *ast.ArrayLiteral) *tast.ArrayLiteral {
 
 	for i, el := range e.Elements {
 		elNode := a.buildExpr(el)
-		elType := typeOf(elNode)
+		elType := tast.TypeOf(elNode)
 		elems = append(elems, elNode)
 
 		if i == 0 {
@@ -445,8 +442,8 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 	leftNode := a.buildExpr(e.Left)
 	idxNode := a.buildExpr(e.Index)
 
-	leftType := typeOf(leftNode)
-	idxType := typeOf(idxNode)
+	leftType := tast.TypeOf(leftNode)
+	idxType := tast.TypeOf(idxNode)
 
 	if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
 		a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", idxType.String())
@@ -478,19 +475,19 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 
 func (a *Analyzer) buildSliceExpr(e *ast.SliceExpr) *tast.SliceExpr {
 	leftNode := a.buildExpr(e.Left)
-	leftType := typeOf(leftNode)
+	leftType := tast.TypeOf(leftNode)
 
 	var lowNode, highNode tast.Expr
 
 	if e.Low != nil {
 		lowNode = a.buildExpr(e.Low)
-		if t := typeOf(lowNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+		if t := tast.TypeOf(lowNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
 			a.errorf(e.Low.Pos(), "slice low index must be an integer")
 		}
 	}
 	if e.High != nil {
 		highNode = a.buildExpr(e.High)
-		if t := typeOf(highNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+		if t := tast.TypeOf(highNode); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
 			a.errorf(e.High.Pos(), "slice high index must be an integer")
 		}
 	}
@@ -557,7 +554,7 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) tast.Expr {
 			seen[fieldName] = true
 
 			valNode := a.buildExpr(field.Value)
-			valType := typeOf(valNode)
+			valType := tast.TypeOf(valNode)
 
 			expectedIdx := structDef.GetFieldIndex(fieldName)
 			if expectedIdx != -1 {
@@ -611,11 +608,11 @@ func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) tast.Expr {
 	}
 }
 
-func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.StructLiteral {
+func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.VariantLiteral {
 	variant := sym.Variant
 	sumType := sym.SumType
 
-	var tastFields []tast.StructField
+	var tastFields []tast.VariantField
 	seen := make(map[string]bool)
 
 	for _, field := range e.Fields {
@@ -636,7 +633,7 @@ func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Sy
 		seen[fieldName] = true
 
 		valNode := a.buildExpr(field.Value)
-		valType := typeOf(valNode)
+		valType := tast.TypeOf(valNode)
 
 		// 3. Find the expected type from the variant's definition
 		var expectedType types.Type
@@ -653,10 +650,8 @@ func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Sy
 			a.errorf(field.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'", fieldName, expectedType.String(), valType.String())
 		}
 
-		tastFields = append(tastFields, tast.StructField{
-			Pos_:  field.Pos_,
-			End_:  field.End_,
-			Key:   &tast.Identifier{Pos_: field.Key.Pos(), Value: fieldName, Type: types.StringType{}},
+		tastFields = append(tastFields, tast.VariantField{
+			Name:  fieldName,
 			Value: valNode,
 		})
 	}
@@ -668,11 +663,13 @@ func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Sy
 		}
 	}
 
-	return &tast.StructLiteral{
-		Pos_:   e.Pos_,
-		End_:   e.End_,
-		Fields: tastFields,
-		Type:   sumType,
+	return &tast.VariantLiteral{
+		Pos_:      e.Pos_,
+		End_:      e.End_,
+		Variant:   variant,
+		Arguments: nil,
+		Fields:    tastFields,
+		Type:      sumType,
 	}
 }
 
@@ -686,8 +683,8 @@ func (a *Analyzer) buildTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) 
 	case "Option":
 		if variant.Name == "Some" && len(e.Arguments) == 1 {
 			valNode := a.buildExpr(e.Arguments[0].Argument)
-			// Unify: Option<T> where T = typeOf(valNode)
-			sumType = types.NewOptionType(typeOf(valNode))
+			// Unify: Option<T> where T = tast.TypeOf(valNode)
+			sumType = types.NewOptionType(tast.TypeOf(valNode))
 			variant = sumType.GetVariant("Some")
 		} else if variant.Name == "None" {
 			// None carries no arguments, so infer T from the surrounding expected return type.
@@ -702,9 +699,9 @@ func (a *Analyzer) buildTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) 
 		var vType, eType types.Type = types.UnknownType{}, types.UnknownType{}
 
 		if variant.Name == "Ok" && len(e.Arguments) == 1 {
-			vType = typeOf(a.buildExpr(e.Arguments[0].Argument))
+			vType = tast.TypeOf(a.buildExpr(e.Arguments[0].Argument))
 		} else if variant.Name == "Err" && len(e.Arguments) == 1 {
-			eType = typeOf(a.buildExpr(e.Arguments[0].Argument))
+			eType = tast.TypeOf(a.buildExpr(e.Arguments[0].Argument))
 		}
 
 		// If we still have unknowns, try to infer from expected return type
@@ -735,7 +732,7 @@ func (a *Analyzer) buildTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) 
 		valNode := a.buildExpr(arg.Argument)
 		// Basic type validation against inferred tuple types
 		if i < len(variant.TupleTypes) {
-			if !typeOf(valNode).Equals(variant.TupleTypes[i]) {
+			if !tast.TypeOf(valNode).Equals(variant.TupleTypes[i]) {
 				a.errorf(arg.Pos_, "type mismatch for variant arg %d", i)
 			}
 		}
@@ -753,7 +750,7 @@ func (a *Analyzer) buildTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) 
 
 func (a *Analyzer) buildFieldAccess(e *ast.FieldAccess) *tast.FieldAccess {
 	objNode := a.buildExpr(e.Object)
-	objType := typeOf(objNode)
+	objType := tast.TypeOf(objNode)
 
 	var resultType types.Type = types.UnknownType{}
 
@@ -833,89 +830,6 @@ func mangleMethodName(method string, receiver types.Type) string {
 		}
 	}
 	return method // fallback: use name as-is
-}
-
-// =============================================================================
-// Helper Methods & Stub
-// =============================================================================
-
-// typeOf cleanly extracts the bound type from any TAST expression interface.
-func typeOf(expr tast.Expr) types.Type {
-	if expr == nil {
-		return types.UnknownType{}
-	}
-	switch e := expr.(type) {
-	case *tast.IntLiteral:
-		return e.Type
-	case *tast.BoolLiteral:
-		return e.Type
-	case *tast.StringLiteral:
-		return e.Type
-	case *tast.Identifier:
-		return e.Type
-	case *tast.InfixExpr:
-		return e.Type
-	case *tast.PrefixExpr:
-		return e.Type
-	case *tast.IfExpr:
-		return e.Type
-	case *tast.CallExpr:
-		return e.Type
-	case *tast.FieldAccess:
-		return e.Type
-	case *tast.IndexExpr:
-		return e.Type
-	case *tast.SliceExpr:
-		return e.Type
-	case *tast.StructLiteral:
-		return e.Type
-	case *tast.ArrayLiteral:
-		return e.Type
-	case *tast.VariantLiteral:
-		return e.Type
-	case *tast.AwaitExpr:
-		return e.Type
-	case *tast.MatchExpr:
-		return e.Type
-	case *tast.MethodCallExpr:
-		return e.Type
-	case *tast.MapLiteral:
-		return e.Type
-	case *tast.VecLiteral:
-		return e.Type
-	case *tast.BlockStmt:
-		return TypeOfBlock(e)
-	}
-	return types.UnknownType{}
-}
-
-// TypeOfBlock evaluates the unified return type of a block by checking its final Yield statement.
-func TypeOfBlock(block *tast.BlockStmt) types.Type {
-	if block == nil || len(block.Statements) == 0 {
-		return types.UnitType{}
-	}
-	last := block.Statements[len(block.Statements)-1]
-	if yield, ok := last.(*tast.YieldStmt); ok {
-		return typeOf(yield.Value)
-	}
-	return types.UnitType{}
-}
-
-func mergeTypes(t1, t2 types.Type) types.Type {
-	if t1 == nil || t2 == nil {
-		return nil
-	}
-	if t1.Equals(t2) {
-		return t1
-	}
-	if !types.IsUnknown(t1) && !types.IsUnknown(t2) {
-		// They conflict
-		return types.UnknownType{}
-	}
-	if types.IsUnknown(t1) {
-		return t2
-	}
-	return t1
 }
 
 func (a *Analyzer) lookupStruct(name string) *types.StructType {

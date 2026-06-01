@@ -58,9 +58,7 @@ var builtinGenerics = map[string]builtinGeneric{
 	},
 }
 
-func (a *Analyzer) resolveBuiltinGeneric(
-	expr *ast.GenericTypeExpr,
-) types.Type {
+func (a *Analyzer) resolveBuiltinGeneric(expr *ast.GenericTypeExpr) types.Type {
 
 	builtin, ok := builtinGenerics[expr.Name.Value]
 
@@ -106,7 +104,7 @@ func (a *Analyzer) buildMapLiteral(e *ast.StructLiteral, mapTy types.MapType) *t
 
 		// 1. Evaluate and check the Key
 		keyNode := a.buildExpr(field.Key)
-		keyType := typeOf(keyNode)
+		keyType := tast.TypeOf(keyNode)
 
 		if !keyType.Equals(mapTy.Key) && !types.IsUnknown(keyType) {
 			a.errorf(field.Key.Pos(), "map key type mismatch: expected '%s', got '%s'", mapTy.Key.String(), keyType.String())
@@ -114,7 +112,7 @@ func (a *Analyzer) buildMapLiteral(e *ast.StructLiteral, mapTy types.MapType) *t
 
 		// 2. Evaluate and check the Value
 		valNode := a.buildExpr(field.Value)
-		valType := typeOf(valNode)
+		valType := tast.TypeOf(valNode)
 
 		if !valType.Equals(mapTy.Value) && !types.IsUnknown(valType) {
 			a.errorf(field.Value.Pos(), "map value type mismatch: expected '%s', got '%s'", mapTy.Value.String(), valType.String())
@@ -144,7 +142,7 @@ func (a *Analyzer) buildVecLiteral(e *ast.StructLiteral, vecTy types.VectorType)
 		}
 
 		valNode := a.buildExpr(field.Value)
-		valType := typeOf(valNode)
+		valType := tast.TypeOf(valNode)
 
 		if !valType.Equals(vecTy.Base) && !types.IsUnknown(valType) {
 			a.errorf(field.Value.Pos(), "vector element type mismatch: expected '%s', got '%s'", vecTy.Base.String(), valType.String())

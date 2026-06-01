@@ -15,7 +15,7 @@ import (
 func (a *Analyzer) buildMatchExpr(e *ast.MatchExpr) *tast.MatchExpr {
 	// 1. Evaluate the subject
 	tastSubject := a.buildExpr(e.Subject)
-	subjectType := typeOf(tastSubject)
+	subjectType := tast.TypeOf(tastSubject)
 
 	// 2. Validate that all cases are covered
 	a.checkMatchExhaustiveness(e, subjectType)
@@ -28,11 +28,11 @@ func (a *Analyzer) buildMatchExpr(e *ast.MatchExpr) *tast.MatchExpr {
 		tastArm := a.buildMatchArm(arm, subjectType)
 		tastArms = append(tastArms, tastArm)
 
-		armType := typeOf(tastArm.Body)
+		armType := tast.TypeOf(tastArm.Body)
 		if i == 0 {
 			resultType = armType
 		} else {
-			resultType = mergeTypes(resultType, armType)
+			resultType = types.MergeTypes(resultType, armType)
 		}
 	}
 
@@ -77,7 +77,7 @@ func (a *Analyzer) buildPattern(pat ast.Pattern, subjectType types.Type) tast.Pa
 
 	case *ast.LiteralPattern:
 		tastVal := a.buildExpr(p.Value)
-		valType := typeOf(tastVal)
+		valType := tast.TypeOf(tastVal)
 
 		if !valType.Equals(subjectType) && !types.IsUnknown(valType) && !types.IsUnknown(subjectType) {
 			a.errorf(p.Pos(), "pattern type mismatch: expected '%s', got '%s'", subjectType.String(), valType.String())

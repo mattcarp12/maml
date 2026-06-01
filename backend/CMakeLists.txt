@@ -44,9 +44,6 @@ set(BACKEND_SOURCES
     src/CodegenContext.cpp
     src/TypeLowering.cpp
     src/ExprCore.cpp
-    src/ExprOperators.cpp
-    src/ExprContainers.cpp
-    src/ExprCalls.cpp
     src/StmtGenerator.cpp
     src/ProgramGenerator.cpp
     src/ErrorHandler.cpp
