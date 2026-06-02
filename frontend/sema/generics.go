@@ -44,7 +44,7 @@ var builtinGenerics = map[string]builtinGeneric{
 			)
 		},
 	},
-	"Task": {
+	"Task": { // TODO - Rename to Future
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
 			return types.TaskType{
@@ -60,6 +60,15 @@ var builtinGenerics = map[string]builtinGeneric{
 			}
 		},
 	},
+	
+	// "Ref": {
+	// 	Arity: 1,
+	// 	Build: func(args []types.Type) types.Type {
+	// 		return types.RefType{
+	// 			Base: args[0],
+	// 		}
+	// 	},
+	// },
 }
 
 func (a *Analyzer) resolveBuiltinGeneric(expr *ast.GenericTypeExpr) types.Type {
