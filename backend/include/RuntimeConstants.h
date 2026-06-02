@@ -23,6 +23,7 @@ constexpr const char *RUN_EXECUTOR = "maml_run_executor";
 
 // --- Container Constants ---
 constexpr const char *VEC_GROW = "maml_vec_grow";
+constexpr const char *VEC_PUSH = "maml_vec_push";
 constexpr const char *MAP_CREATE = "maml_map_create";
 constexpr const char *MAP_PUT = "maml_map_put";
 constexpr const char *MAP_GET = "maml_map_get";

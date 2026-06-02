@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend"
+	"github.com/mattcarp12/maml/frontend/desugar"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -191,6 +192,30 @@ func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
 	return jsonBytes, nil
 }
 
+// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+func (p *Pipeline) DumpDTAST(srcPath string) ([]byte, error) {
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
+	}
+
+	comp := frontend.New()
+	tastProgram, err := comp.CompileTAST(string(content))
+	if err != nil {
+		return nil, err
+	}
+
+	desugarer := desugar.New()
+	desugarer.DesugarProgram(tastProgram)
+
+	jsonBytes, err := json.Marshal(tastProgram)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
+	}
+
+	return jsonBytes, nil
+}
+
 // DumpMIR translates the target file and returns its pretty-printed JSON MIR representation.
 func (p *Pipeline) DumpMIR(srcPath string) ([]byte, error) {
 	comp := frontend.New()
@@ -265,6 +290,11 @@ func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
 		return fmt.Errorf("failed to dump TAST: %w", err)
 	}
 
+	dtastBytes, err := p.DumpDTAST(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to dump DTAST: %w", err)
+	}
+
 	mirBytes, err := p.DumpMIR(srcPath)
 	if err != nil {
 		return fmt.Errorf("failed to dump MIR: %w", err)
@@ -279,9 +309,9 @@ func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
 	var buf bytes.Buffer
 
 	writeSection := func(title string, content []byte) {
-		buf.WriteString(fmt.Sprintf("// %s\n", strings.Repeat("=", 76)))
-		buf.WriteString(fmt.Sprintf("// %s\n", title))
-		buf.WriteString(fmt.Sprintf("// %s\n\n", strings.Repeat("=", 76)))
+		fmt.Fprintf(&buf, "// %s\n", strings.Repeat("=", 76))
+		fmt.Fprintf(&buf, "// %s\n", title)
+		fmt.Fprintf(&buf, "// %s\n\n", strings.Repeat("=", 76))
 		buf.Write(content)
 		buf.WriteString("\n\n")
 	}
@@ -289,6 +319,7 @@ func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
 	writeSection(fmt.Sprintf("PHASE 0: SOURCE CODE (%s)", srcPath), srcBytes)
 	writeSection("PHASE 1: ABSTRACT SYNTAX TREE (AST)", astBytes)
 	writeSection("PHASE 2: TYPED ABSTRACT SYNTAX TREE (TAST)", tastBytes)
+	writeSection("PHASE 2.5: DESUGARED TAST (DTAST)", dtastBytes)
 	writeSection("PHASE 3: MID-LEVEL IR (MIR)", mirBytes)
 	writeSection("PHASE 4: LLVM IR", llvmBytes)
 

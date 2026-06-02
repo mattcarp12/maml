@@ -26,6 +26,8 @@ func main() {
 		dumpAstCmd(os.Args[2:])
 	case "dump-tast":
 		dumpTastCmd(os.Args[2:])
+	case "dump-dtast":
+		dumpDTastCmd(os.Args[2:])
 	case "dump-mir":
 		dumpMirCmd(os.Args[2:])
 	case "dump-llvm":
@@ -137,6 +139,23 @@ func dumpTastCmd(args []string) {
 	jsonBytes, err := pipeline.DumpTAST(args[0])
 	if err != nil {
 		fmt.Printf("❌ TAST Generation failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print directly to standard output so users can redirect it to a file
+	fmt.Println(string(jsonBytes))
+}
+
+func dumpDTastCmd(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: maml dump-tast <file.maml>")
+		os.Exit(1)
+	}
+
+	pipeline := driver.New(driver.Config{})
+	jsonBytes, err := pipeline.DumpDTAST(args[0])
+	if err != nil {
+		fmt.Printf("❌ DTAST Generation failed: %v\n", err)
 		os.Exit(1)
 	}
 

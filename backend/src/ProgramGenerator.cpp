@@ -58,6 +58,7 @@ void declareRuntimeFunctions(CodegenContext &ctx) {
   Module->getOrInsertFunction(rt::RELEASE, llvm::FunctionType::get(voidTy, {ptrTy}, false));
   // maml_vec_grow: ptr (ptr, i32, ptr, i32)
   Module->getOrInsertFunction(rt::VEC_GROW, llvm::FunctionType::get(ptrTy, {ptrTy, i32Ty, ptrTy, i32Ty}, false));
+  Module->getOrInsertFunction(rt::VEC_PUSH, llvm::FunctionType::get(voidTy, {ptrTy, ptrTy}, false));
   // maml_map_create: ptr (i32, i8)
   Module->getOrInsertFunction(rt::MAP_CREATE, llvm::FunctionType::get(ptrTy, {i32Ty, i8Ty}, false));
   // maml_map_put: void (ptr, i64, ptr, ptr, i32)
@@ -136,33 +137,51 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
 
   // 7. Setup Basic Blocks (Flattened MIR)
   if (fn.contains("blocks") && !fn["blocks"].is_null()) {
-    for (auto &[idStr, blockJson] : fn["blocks"].items()) {
+    // 1. Create all basic blocks (Fixed for Array iteration!)
+    for (const auto &blockJson : fn["blocks"]) {
+      std::string idStr = blockJson["id"].get<std::string>();
       int blockId = std::stoi(idStr);
       llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "bb" + idStr, F);
       ctx.Blocks[blockId] = BB;
     }
 
+    // 🌟 2. THE ALLOCA PASS (Hoisting)
+    // Point the builder at your dedicated allocation block at the top of the function
+    Builder->SetInsertPoint(allocBB);
+
+    // Scan all blocks and compile ONLY 'temp_decl' memory allocations into this entry block.
+    // This populates the SymbolEnv globally before any logic runs.
+    for (const auto &blockJson : fn["blocks"]) {
+      for (const auto &instJson : blockJson["instructions"]) {
+        if (instJson["op"] == "temp_decl") {
+          compileStatement(ctx, instJson);
+        }
+      }
+    }
+
+    // 3. Terminate the allocation block by branching into the actual MIR control flow
     if (fn.contains("entry_block")) {
       std::string entryStr = fn["entry_block"].get<std::string>();
       int entryId = std::stoi(entryStr);
-      Builder->SetInsertPoint(allocBB);
       Builder->CreateBr(ctx.Blocks[entryId]);
     } else {
       ctx.Error.fatal("Function missing 'entry_block'", fn);
     }
 
-    for (auto &[idStr, blockJson] : fn["blocks"].items()) {
-      int blockId = std::stoi(idStr);
-      Builder->SetInsertPoint(ctx.Blocks[blockId]);
+    // 🌟 4. THE LOGIC PASS
+    // Now that all variables exist in memory, iterate through again to emit the math,
+    // assignments, branches, and function calls into their respective blocks.
+    for (const auto &blockJson : fn["blocks"]) {
+      int id = std::stoi(blockJson["id"].get<std::string>());
+      ctx.Builder->SetInsertPoint(ctx.Blocks[id]);
 
-      if (blockJson.contains("instructions")) {
-        for (const auto &inst : blockJson["instructions"]) {
-          compileStatement(ctx, inst);
+      for (const auto &instJson : blockJson["instructions"]) {
+        // Skip temp_decl because we already hoisted them!
+        if (instJson["op"] != "temp_decl") {
+          compileStatement(ctx, instJson);
         }
       }
-      if (blockJson.contains("terminator")) {
-        compileTerminator(ctx, blockJson["terminator"]);
-      }
+      compileTerminator(ctx, blockJson["terminator"]);
     }
   } else {
     Builder->CreateRetVoid();

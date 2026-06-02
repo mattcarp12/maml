@@ -56,22 +56,6 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
-  // -------------------------------------------------------------------------
-  // struct_init  — initializes one field of an already-declared struct alloca.
-  //
-  // JSON shape (from export.go):
-  //   { "op": "struct_init",
-  //     "dst": "_t1",          // name of the struct temporary
-  //     "field_name": "x",     // source-level field name (for diagnostics)
-  //     "field_index": 0,      // declaration-order GEP index
-  //     "value": { ... }       // flat value expression
-  //   }
-  //
-  // We resolve the struct alloca from the symbol table, GEP to the field
-  // using the pre-resolved "field_index", evaluate the value expression, and
-  // store the result.  This is the write side of the struct layout pair;
-  // field_read (below) is the read side.
-  // -------------------------------------------------------------------------
   if (op == "struct_init") {
     std::string dst = stmt.value("dst", "");
     int field_index = stmt.value("field_index", 0);
@@ -561,6 +545,7 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
 
     // 6. Map the value to the destination register name
     ctx.SymbolEnv.back()[dst] = loadedVal;
+    return;
   }
 
   if (op == "variant_init") {
@@ -612,6 +597,7 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
       // Safely commit the value directly into the variant allocation
       ctx.Builder->CreateStore(payloadVal, payloadGep);
     }
+    return;
   }
 
   if (op == "coro_prologue") {
@@ -704,7 +690,9 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
 
     const auto &leftTypeJson = stmt["source_type"];
     std::string_view kind = "unknown";
-    if (leftTypeJson.is_object() && leftTypeJson.contains("kind")) {
+    if (leftTypeJson.is_string()) {
+      kind = leftTypeJson.get<std::string_view>();
+    } else if (leftTypeJson.is_object() && leftTypeJson.contains("kind")) {
       kind = leftTypeJson["kind"].get<std::string_view>();
     }
 
@@ -787,6 +775,23 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
             argVal = ctx.Builder->CreateIntCast(argVal, expectedTy, true, "arg_cast");
           } else if (expectedTy->isPointerTy() && actualTy->isPointerTy()) {
             argVal = ctx.Builder->CreatePointerCast(argVal, expectedTy, "ptr_cast");
+
+            // 🌟 DIRECT FIX: Implement the missing Auto-Spilling and Null coercion
+          } else if (expectedTy->isPointerTy() && !actualTy->isPointerTy()) {
+            // Case A: The frontend sent `0` as a fake null pointer (e.g., for empty string keys)
+            if (auto *cInt = llvm::dyn_cast<llvm::ConstantInt>(argVal); cInt && cInt->isZero()) {
+              argVal = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(expectedTy));
+            }
+            // Case B: The frontend sent a raw primitive (like `100`). Auto-spill it to the stack.
+            else {
+              // Allocate in the entry block to prevent stack overflows in loops
+              llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+              llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
+
+              llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_spill");
+              ctx.Builder->CreateStore(argVal, spill);
+              argVal = spill;  // Now we pass the pointer to the spilled value!
+            }
           }
         }
       }
@@ -794,10 +799,26 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
       i++;
     }
 
-    llvm::CallInst *callResult = ctx.Builder->CreateCall(FT, callee, args, "calltmp");
+    llvm::CallInst *callResult;
+    if (FT && FT->getReturnType()->isVoidTy()) {
+      // Pass no name for void functions
+      callResult = ctx.Builder->CreateCall(FT, callee, args);
+    } else {
+      // Safely name functions that return a value
+      callResult = ctx.Builder->CreateCall(FT, callee, args, "calltmp");
+    }
 
     // Only bind to the Symbol Environment if the function actually returns a value
     if (!callResult->getType()->isVoidTy()) {
+      // 🛡️ GUARD 2: Return Type Boundary Verification
+      llvm::Type *expectedRetTy = llvmTypeFor(ctx, stmt["type"]);
+      if (callResult->getType() != expectedRetTy) {
+        ctx.Error.fatal("Return type violation in call to '" + funcName +
+                            "'. MIR expected a different LLVM type than the ABI returned.",
+                        stmt);
+        return;
+      }
+
       ctx.SymbolEnv.back()[dst] = callResult;
     }
     return;
