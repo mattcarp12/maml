@@ -54,10 +54,6 @@ func arrayTypeExpr(base ast.TypeExpr, size int) *ast.ArrayTypeExpr {
 	return &ast.ArrayTypeExpr{Base: base, Size: size}
 }
 
-func sliceTypeExpr(base ast.TypeExpr) *ast.SliceTypeExpr {
-	return &ast.SliceTypeExpr{Base: base}
-}
-
 // =============================================================================
 // AST statement constructors
 // =============================================================================
@@ -1443,13 +1439,6 @@ func TestTypeDecl_ResolveBuiltinTypes(t *testing.T) {
 
 func TestTypeDecl_ResolveArrayType(t *testing.T) {
 	fn := makeFn("f", arrayTypeExpr(intTypeExpr(), 3), blockStmt())
-	program := makeProgram(fn)
-	_, errs := analyze(t, program)
-	assertNoErrors(t, errs)
-}
-
-func TestTypeDecl_ResolveSliceType(t *testing.T) {
-	fn := makeFn("f", sliceTypeExpr(intTypeExpr()), blockStmt())
 	program := makeProgram(fn)
 	_, errs := analyze(t, program)
 	assertNoErrors(t, errs)

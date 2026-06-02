@@ -292,23 +292,13 @@ func (p *Parser) parseProductType() *ast.StructTypeExpr {
 	return pt
 }
 
-// parseTypeExpr parses a type signature (e.g., int, []int, [5]int)
+// parseTypeExpr parses a type signature (e.g., int, [5]int)
 func (p *Parser) parseTypeExpr() ast.TypeExpr {
 	startPos := p.curPos()
 
 	// Case 1: Slice or Array types starting with '['
 	if p.peekToken.Type == token.LBRACKET {
 		p.nextToken() // Step onto '['
-
-		// Is it a slice? `[]T`
-		if p.peekToken.Type == token.RBRACKET {
-			p.nextToken()                 // Step onto ']'
-			baseType := p.parseTypeExpr() // Recursively parse the base type
-			if baseType == nil {
-				return nil
-			}
-			return &ast.SliceTypeExpr{Base: baseType, Pos_: startPos}
-		}
 
 		// Or is it a fixed-size array? `[5]T`
 		if !p.expectPeek(token.INT) {

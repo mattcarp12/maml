@@ -453,7 +453,7 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 	switch ty := leftType.(type) {
 	case types.ArrayType:
 		resultType = ty.Base
-	case types.SliceType:
+	case types.ViewType:
 		resultType = ty.Base
 	case types.VectorType:
 		resultType = ty.Base
@@ -495,14 +495,16 @@ func (a *Analyzer) buildSliceExpr(e *ast.SliceExpr) *tast.SliceExpr {
 	var resultType types.Type = types.UnknownType{}
 	switch ty := leftType.(type) {
 	case types.ArrayType:
-		resultType = types.SliceType{Base: ty.Base}
-	case types.SliceType, types.VectorType:
-		resultType = leftType
+		resultType = types.ViewType{Base: ty.Base}
+	case types.VectorType:
+		resultType = types.ViewType{Base: ty.Base}
+	case types.ViewType:
+		resultType = types.ViewType{Base: ty.Base}
 	case types.StringType:
 		resultType = types.StringType{}
 	default:
 		if !types.IsUnknown(leftType) {
-			a.errorf(e.Left.Pos(), "cannot slice non-array/slice type '%s'", leftType.String())
+			a.errorf(e.Left.Pos(), "cannot slice non-array/vector/view type '%s'", leftType.String())
 		}
 	}
 
@@ -821,10 +823,10 @@ func mangleMethodName(method string, receiver types.Type) string {
 		}
 	case types.MapType:
 		switch method {
-		case "put":
-			return "maml_map_put"
-		case "get":
-			return "maml_map_get"
+		// case "put":
+		// 	return "maml_map_put"
+		// case "get":
+		// 	return "maml_map_get"
 		case "remove":
 			return "maml_map_remove"
 		}

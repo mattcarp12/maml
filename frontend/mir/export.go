@@ -388,9 +388,9 @@ func lowerType(t types.Type) any {
 			"size":      v.Size,
 			"elem_type": lowerType(v.Base),
 		}
-	case types.SliceType:
+	case types.ViewType:
 		return map[string]any{
-			"kind":      "slice",
+			"kind":      "view",
 			"elem_type": lowerType(v.Base),
 		}
 	case types.VectorType:

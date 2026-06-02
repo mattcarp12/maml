@@ -38,10 +38,6 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 			Base: a.resolveAstType(e.Base),
 			Size: int(e.Size),
 		}
-	case *ast.SliceTypeExpr:
-		return types.SliceType{
-			Base: a.resolveAstType(e.Base),
-		}
 	case *ast.GenericTypeExpr:
 		return a.resolveBuiltinGeneric(e)
 	}

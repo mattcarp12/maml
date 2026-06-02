@@ -165,24 +165,24 @@ func (t ArrayType) Alignment() int {
 	return t.Base.Alignment()
 }
 
-// --- SLICE ---
-type SliceType struct {
+// --- VIEW ---
+type ViewType struct {
 	Base Type
 }
 
-func (t SliceType) String() string { return "[]" + t.Base.String() }
-func (t SliceType) Equals(other Type) bool {
+func (t ViewType) String() string { return "[]" + t.Base.String() }
+func (t ViewType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
 	}
-	o, ok := other.(SliceType)
+	o, ok := other.(ViewType)
 	return ok && t.Base.Equals(o.Base)
 }
 
-// Slices are dynamic, meaning they are just lightweight headers pointing to a heap array.
-func (t SliceType) IsReferenceType() bool { return true }
-func (t SliceType) SizeInBytes() int      { return 24 } // 8 + 8 + 4 + 4 = 24
-func (t SliceType) Alignment() int        { return 8 }  // Largest field is a pointer
+// Views are just lightweight headers pointing to a heap array.
+func (t ViewType) IsReferenceType() bool { return true }
+func (t ViewType) SizeInBytes() int      { return 24 } // 8 + 8 + 4 + 4 = 24
+func (t ViewType) Alignment() int        { return 8 }  // Largest field is a pointer
 
 // --- VECTOR ---
 type VectorType struct {

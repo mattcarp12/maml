@@ -330,7 +330,7 @@ type VariantPattern struct {
 }
 
 // ==========================================================================
-// New Desugaring Helper Nodes
+// Desugaring Helper Nodes
 // ==========================================================================
 
 // VariantDiscriminantExpr reads the discriminant integer from a sum type value.
