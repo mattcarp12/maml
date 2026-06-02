@@ -482,10 +482,19 @@ func (b *Builder) flattenVariantLiteral(e *tast.VariantLiteral, current *BasicBl
 	}
 
 	// 2. Flatten struct fields (using the new VariantField slice from Step 1)
-	for _, field := range e.Fields {
-		flatVal, next := b.flattenExpr(field.Value, current)
-		current = next
-		flatPayloads = append(flatPayloads, flatVal)
+	if len(e.Fields) > 0 {
+		// Evaluate fields in the order the user wrote them (preserves side-effect order)
+		evaluatedFields := make(map[string]tast.Operand)
+		for _, field := range e.Fields {
+			flatVal, next := b.flattenExpr(field.Value, current)
+			current = next
+			evaluatedFields[field.Name] = flatVal
+		}
+
+		// Pack them into the MIR payloads array in STRICT declaration order
+		for _, declField := range variant.Fields {
+			flatPayloads = append(flatPayloads, evaluatedFields[declField.Name])
+		}
 	}
 
 	// 3. Emit the dedicated Variant instruction
@@ -536,6 +545,18 @@ func (b *Builder) flattenMapLiteral(e *tast.MapLiteral, current *BasicBlock) (ta
 	tmp := b.newTemp()
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+
+	// Add creation initializer
+	createFn := &tast.Identifier{Value: "maml_map_create", Type: types.UnknownType{}}
+	current.Statements = append(current.Statements, &CallInst{
+		Dst:      tmp,
+		Function: createFn,
+		Arguments: []MIRCallArg{
+			{Argument: &tast.IntLiteral{Value: 0, Type: types.IntType{}}},
+			{Argument: &tast.IntLiteral{Value: 0, Type: types.IntType{}}},
+		},
+		Type: t,
+	})
 
 	for _, kv := range e.Elements {
 		var flatKey, flatVal tast.Operand

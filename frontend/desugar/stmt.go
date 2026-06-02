@@ -90,7 +90,6 @@ func (d *Desugar) desugarExprStmt(s *tast.ExprStmt) tast.Stmt {
 	return s
 }
 
-// === STEP 6: Desugar ForStmt → While form ===
 func (d *Desugar) desugarForStmt(forStmt *tast.ForStmt) tast.Stmt {
 	if forStmt == nil {
 		return nil

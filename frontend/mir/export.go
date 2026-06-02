@@ -18,12 +18,12 @@ type exportProgram struct {
 }
 
 type exportFunction struct {
-	Name       string                 `json:"name"`
-	ReturnType any                    `json:"return_type"`
-	Params     []exportParam          `json:"params"`
-	IsAsync    bool                   `json:"is_async"`
-	Entry      string                 `json:"entry_block"`
-	Blocks     map[string]exportBlock `json:"blocks"`
+	Name       string        `json:"name"`
+	ReturnType any           `json:"return_type"`
+	Params     []exportParam `json:"params"`
+	IsAsync    bool          `json:"is_async"`
+	Entry      string        `json:"entry_block"`
+	Blocks     []exportBlock `json:"blocks"`
 }
 
 type exportParam struct {
@@ -32,6 +32,7 @@ type exportParam struct {
 }
 
 type exportBlock struct {
+	ID           string           `json:"id"`
 	Instructions []map[string]any `json:"instructions"`
 	Terminator   map[string]any   `json:"terminator"`
 }
@@ -63,13 +64,13 @@ func MarshalProgram(p *Program) ([]byte, error) {
 }
 
 func buildFunctionDTO(fn *Function) exportFunction {
-	blocks := make(map[string]exportBlock)
+	blocks := []exportBlock{}
 	var entry string
 
 	if fn.Graph != nil {
 		entry = fmt.Sprintf("%d", fn.Graph.Entry)
-		for id, block := range fn.Graph.Blocks {
-			blocks[fmt.Sprintf("%d", id)] = buildBlockDTO(block)
+		for _, block := range fn.Graph.Blocks {
+			blocks = append(blocks, buildBlockDTO(block))
 		}
 	}
 
@@ -98,6 +99,7 @@ func buildBlockDTO(block *BasicBlock) exportBlock {
 	}
 
 	return exportBlock{
+		ID:           fmt.Sprintf("%d", block.ID),
 		Instructions: insts,
 		Terminator:   buildTerminatorDTO(block.Terminator),
 	}
@@ -157,7 +159,6 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 			"arguments": args,
 			"type":      lowerType(i.Type),
 		}
-
 	case *StructInitInst:
 
 		m := map[string]any{
@@ -295,11 +296,12 @@ func buildTerminatorDTO(term Terminator) map[string]any {
 	case *BranchTerminator:
 		// Determine if the condition is a literal or a temporary variable/identifier
 		var condDTO map[string]any
-		if t.Condition == "true" {
+		switch t.Condition {
+		case "true":
 			condDTO = map[string]any{"op": "const_bool", "value": true}
-		} else if t.Condition == "false" {
+		case "false":
 			condDTO = map[string]any{"op": "const_bool", "value": false}
-		} else {
+		default:
 			condDTO = map[string]any{"op": "ident", "value": t.Condition}
 		}
 
@@ -328,18 +330,16 @@ func buildExprDTO(expr tast.Operand) any {
 	if expr == nil {
 		return nil
 	}
-
 	switch e := expr.(type) {
 	case *tast.Identifier:
-		return map[string]any{"op": "ident", "value": e.Value}
+		return map[string]any{"op": "ident", "value": e.Value, "type": lowerType(e.Type)}
 	case *tast.IntLiteral:
-		return map[string]any{"op": "const_int", "value": e.Value}
+		return map[string]any{"op": "const_int", "value": e.Value, "type": lowerType(e.Type)}
 	case *tast.BoolLiteral:
-		return map[string]any{"op": "const_bool", "value": e.Value}
+		return map[string]any{"op": "const_bool", "value": e.Value, "type": lowerType(e.Type)}
 	case *tast.StringLiteral:
-		return map[string]any{"op": "const_string", "value": e.Value}
+		return map[string]any{"op": "const_string", "value": e.Value, "type": lowerType(e.Type)}
 	default:
-		// If this fires, our type system boundary failed.
 		panic(fmt.Sprintf("MIR Exporter Error: Illegal unflattened expression type reached backend: %T", expr))
 	}
 }
