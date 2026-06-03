@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,8 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	exitCodeRegex    = regexp.MustCompile(`//\s*EXIT_CODE:\s*(\d+)`)
+	expectedOutRegex = regexp.MustCompile(`//\s*EXPECTED_OUTPUT:\s*(.+)`)
+	expectedErrRegex = regexp.MustCompile(`//\s*EXPECTED_ERROR:\s*(.+)`)
+)
+
 func TestEndToEnd(t *testing.T) {
-	matches, err := filepath.Glob("../programs/*/*.maml")
+	matches, err := filepath.Glob("../programs/*.maml") // Flat directory
 
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
@@ -23,26 +30,17 @@ func TestEndToEnd(t *testing.T) {
 	d := driver.New(driver.Config{})
 
 	for _, srcPath := range matches {
-		testName := strings.TrimSuffix(
-			filepath.Base(srcPath),
-			".maml",
-		)
-
-		dir := filepath.Dir(srcPath)
+		testName := strings.TrimSuffix(filepath.Base(srcPath), ".maml")
 
 		t.Run(testName, func(t *testing.T) {
-			expectedExit := readIntFile(
-				filepath.Join(dir, testName+".exitcode.txt"),
-				0,
-			)
+			content, err := os.ReadFile(srcPath)
+			require.NoError(t, err)
 
-			expectedOut := readFile(
-				filepath.Join(dir, testName+".expected.txt"),
-			)
+			src := string(content)
 
-			expectedErr := readFile(
-				filepath.Join(dir, testName+".expected_err.txt"),
-			)
+			expectedExit := parseExitCode(src)
+			expectedOut := parseExpectedOutput(src)
+			expectedErr := parseExpectedError(src)
 
 			// -----------------------------------------------------------------
 			// Build executable through the driver pipeline
@@ -52,18 +50,11 @@ func TestEndToEnd(t *testing.T) {
 
 			if expectedErr != "" {
 				require.Error(t, compileErr)
-
-				assert.Contains(
-					t,
-					compileErr.Error(),
-					strings.TrimSpace(expectedErr),
-				)
-
+				assert.Contains(t, compileErr.Error(), strings.TrimSpace(expectedErr))
 				return
 			}
 
 			require.NoError(t, compileErr)
-
 			defer os.Remove(binPath)
 
 			// -----------------------------------------------------------------
@@ -75,8 +66,7 @@ func TestEndToEnd(t *testing.T) {
 			assert.Equal(t, expectedExit, actualExit)
 
 			if expectedOut != "" {
-				assert.Equal(
-					t,
+				assert.Equal(t,
 					strings.TrimSpace(expectedOut),
 					strings.TrimSpace(actualOut),
 				)
@@ -85,18 +75,41 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
+func parseExitCode(src string) int {
+	matches := exitCodeRegex.FindStringSubmatch(src)
+	if len(matches) < 2 {
+		return 0 // default
+	}
+	val, _ := strconv.Atoi(strings.TrimSpace(matches[1]))
+	return val
+}
+
+func parseExpectedOutput(src string) string {
+	matches := expectedOutRegex.FindStringSubmatch(src)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
+}
+
+func parseExpectedError(src string) string {
+	matches := expectedErrRegex.FindStringSubmatch(src)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(matches[1])
+}
+
 func runBinary(t *testing.T, binPath string) (int, string) {
 	var stdout bytes.Buffer
 
 	cmd := exec.Command(binPath)
-
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
 
 	exitCode := 0
-
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	} else if err != nil {
@@ -104,28 +117,4 @@ func runBinary(t *testing.T, binPath string) (int, string) {
 	}
 
 	return exitCode, stdout.String()
-}
-
-func readFile(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-
-	return string(b)
-}
-
-func readIntFile(path string, defaultVal int) int {
-	str := readFile(path)
-
-	if str == "" {
-		return defaultVal
-	}
-
-	val, err := strconv.Atoi(strings.TrimSpace(str))
-	if err != nil {
-		return defaultVal
-	}
-
-	return val
 }

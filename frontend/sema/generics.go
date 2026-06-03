@@ -60,7 +60,7 @@ var builtinGenerics = map[string]builtinGeneric{
 			}
 		},
 	},
-	
+
 	// "Ref": {
 	// 	Arity: 1,
 	// 	Build: func(args []types.Type) types.Type {
@@ -100,26 +100,26 @@ func (a *Analyzer) resolveBuiltinGeneric(expr *ast.GenericTypeExpr) types.Type {
 	return builtin.Build(args)
 }
 
-func (a *Analyzer) buildMapLiteral(e *ast.StructLiteral, mapTy types.MapType) *tast.MapLiteral {
+func (a *Analyzer) buildMapLiteral(e *ast.CompositeLiteral, mapTy types.MapType) *tast.MapLiteral {
 	var tastElements []tast.MapElement
-	for _, field := range e.Fields {
-		if field.Key == nil {
-			a.errorf(field.Pos_, "map literals require explicit key-value pairs")
+	for _, elems := range e.Elements {
+		if elems.Key == nil {
+			a.errorf(elems.Pos_, "map literals require explicit key-value pairs")
 			continue
 		}
 
 		// 1. Evaluate and check the Key
-		keyNode := a.buildExpr(field.Key)
+		keyNode := a.buildExpr(elems.Key)
 		keyType := tast.TypeOf(keyNode)
 		if !keyType.Equals(mapTy.Key) && !types.IsUnknown(keyType) {
-			a.errorf(field.Key.Pos(), "map key type mismatch: expected '%s', got '%s'", mapTy.Key.String(), keyType.String())
+			a.errorf(elems.Key.Pos(), "map key type mismatch: expected '%s', got '%s'", mapTy.Key.String(), keyType.String())
 		}
 
 		// 2. Evaluate and check the Value
-		valNode := a.buildExpr(field.Value)
+		valNode := a.buildExpr(elems.Value)
 		valType := tast.TypeOf(valNode)
 		if !valType.Equals(mapTy.Value) && !types.IsUnknown(valType) {
-			a.errorf(field.Value.Pos(), "map value type mismatch: expected '%s', got '%s'", mapTy.Value.String(), valType.String())
+			a.errorf(elems.Value.Pos(), "map value type mismatch: expected '%s', got '%s'", mapTy.Value.String(), valType.String())
 		}
 		tastElements = append(tastElements, tast.MapElement{
 			Key:   keyNode,
@@ -134,17 +134,17 @@ func (a *Analyzer) buildMapLiteral(e *ast.StructLiteral, mapTy types.MapType) *t
 	}
 }
 
-func (a *Analyzer) buildVecLiteral(e *ast.StructLiteral, vecTy types.VectorType) *tast.VecLiteral {
+func (a *Analyzer) buildVecLiteral(e *ast.CompositeLiteral, vecTy types.VectorType) *tast.VecLiteral {
 	var tastElements []tast.Expr
-	for _, field := range e.Fields {
+	for _, elems := range e.Elements {
 		// Vectors shouldn't have named keys, just values.
-		if field.Key != nil {
-			a.errorf(field.Key.Pos(), "vector literals should only contain values, not key-value pairs")
+		if elems.Key != nil {
+			a.errorf(elems.Key.Pos(), "vector literals should only contain values, not key-value pairs")
 		}
-		valNode := a.buildExpr(field.Value)
+		valNode := a.buildExpr(elems.Value)
 		valType := tast.TypeOf(valNode)
 		if !valType.Equals(vecTy.Base) && !types.IsUnknown(valType) {
-			a.errorf(field.Value.Pos(), "vector element type mismatch: expected '%s', got '%s'", vecTy.Base.String(), valType.String())
+			a.errorf(elems.Value.Pos(), "vector element type mismatch: expected '%s', got '%s'", vecTy.Base.String(), valType.String())
 		}
 		tastElements = append(tastElements, valNode)
 	}

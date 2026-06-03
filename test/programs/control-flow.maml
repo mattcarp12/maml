@@ -1,0 +1,26 @@
+// EXIT_CODE: 35
+
+fn main() int {
+    mut sum := 0
+    for mut i := 1; i <= 5; i = i + 1 {
+        sum = sum + i
+    }
+
+    mut score := 0
+    if (true || false) { score = score + 10 }
+    if (!false && true) { score = score + 5 }
+    if (false && true) {
+        score = score - 100
+    } else {
+        score = score - 5
+    }
+
+    x := 10
+    match x {
+        case 0: { return 0 }
+        case 10: { score = score + 10 }
+        case _: { score = score + 100 }
+    }
+
+    return sum + score
+}

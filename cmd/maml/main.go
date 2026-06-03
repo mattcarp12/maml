@@ -153,7 +153,7 @@ func dumpDTastCmd(args []string) {
 	}
 
 	pipeline := driver.New(driver.Config{})
-	jsonBytes, err := pipeline.DumpDTAST(args[0])
+	jsonBytes, err := pipeline.DumpHIR(args[0])
 	if err != nil {
 		fmt.Printf("❌ DTAST Generation failed: %v\n", err)
 		os.Exit(1)

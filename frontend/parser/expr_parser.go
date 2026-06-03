@@ -48,15 +48,23 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	name := p.curToken.Literal
 	startPos := p.curPos()
 
-	// Generic instantiation: Vec<int>{}, Map<string, int>{}, etc.
-	// When peek is '<' and the lookahead confirms a generic type arg list
-	// followed by '{' or '(', consume the '<TypeArgs>' here and return a
-	// GenericTypeExpr so the '{' infix handler can build the struct literal.
+	// If followed by '<', it's a generic literal configuration (e.g., Vec<int>{)
 	if p.peekToken.Type == token.LT && p.looksLikeGenericInstantiation() {
-		p.nextToken() // step onto '<'
-		return p.parseGenericTypeExpr(name, startPos)
+		p.nextToken() // Step onto '<'
+		typeExpr := p.parseGenericTypeExpr(name, startPos)
+		return &ast.TypeExprWrapper{Pos_: startPos, TypeExpr: typeExpr}
 	}
 
+	// If followed by '{', it's a standard named composite type (e.g., User{)
+	if p.peekToken.Type == token.LBRACE && p.allowStructLiterals{
+		typeExpr := &ast.NamedTypeExpr{
+			Name: &ast.Identifier{Value: name, Pos_: startPos},
+			Pos_: startPos,
+		}
+		return &ast.TypeExprWrapper{Pos_: startPos, TypeExpr: typeExpr}
+	}
+
+	// Fallback: Just a standard variable/constant identifier lookup expression
 	return &ast.Identifier{Value: name, Pos_: startPos}
 }
 
@@ -111,14 +119,11 @@ func (p *Parser) parsePrefixExpression() ast.Expr {
 		Operator: p.curToken.Literal,
 		Pos_:     p.curPos(),
 	}
-
 	p.nextToken()
 	expression.Right = p.parseExpression(PREFIX)
-
 	if expression.Right == nil {
 		return nil
 	}
-
 	return expression
 }
 
@@ -216,19 +221,6 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 	return callExpr
 }
 
-// parseExpressionList reads a comma-separated list of generic expressions.
-func (p *Parser) parseExpressionList(end token.TokenType) []ast.Expr {
-	list := []ast.Expr{}
-
-	p.parseCommaSeparatedList(end, func() {
-		if elem := p.parseExpression(LOWEST); elem != nil {
-			list = append(list, elem)
-		}
-	})
-
-	return list
-}
-
 // parseCallArguments reads a comma-separated list of function arguments,
 // preserving 'mut' and 'own' modifiers.
 func (p *Parser) parseCallArguments(end token.TokenType) []ast.CallArg {
@@ -261,69 +253,83 @@ func (p *Parser) parseCallArg() ast.CallArg {
 	return arg
 }
 
-func (p *Parser) parseStructLiteral(left ast.Expr) ast.Expr {
-	// Validate that the left side is a valid type for instantiation
-	switch left.(type) {
-	case *ast.Identifier, *ast.GenericTypeExpr:
-		// Valid types for struct/map literals!
-	default:
-		p.addError(fmt.Sprintf(
-			"expected identifier, Map, or Vec before '{' in literal, got %T at line %d",
-			left, p.curToken.Line,
-		))
+func (p *Parser) parseArrayTypePrefix() ast.Expr {
+	typeExpr := p.parseTypeExpr()
+	if typeExpr == nil {
 		return nil
 	}
+	return &ast.TypeExprWrapper{
+		TypeExpr: typeExpr,
+		Pos_:     typeExpr.Pos(),
+	}
+}
 
-	sl := &ast.StructLiteral{
-		Type: left, // Assign the generic Expr directly
-		Pos_: left.Pos(),
+func (p *Parser) parseCompositeLiteral(left ast.Expr) ast.Expr {
+	cl := &ast.CompositeLiteral{
+		TypeExpr: extractTypeExpr(left),
+		Pos_:     left.Pos(),
 	}
 
 	success := p.parseCommaSeparatedList(token.RBRACE, func() {
-		if field := p.parseStructField(); field != nil {
-			sl.Fields = append(sl.Fields, *field)
+		startPos := p.curPos()
+		firstExpr := p.parseExpression(LOWEST)
+		if firstExpr == nil {
+			return
 		}
+
+		var element ast.CompositeElement
+
+		// If it's followed by a colon, it's a keyed field (e.g., Struct or Map)
+		if p.peekToken.Type == token.COLON {
+			p.nextToken() // step onto ':' and move past it to the value
+			p.nextToken() // Now step onto the value expression after the colon
+
+			valueExpr := p.parseExpression(LOWEST)
+			if valueExpr == nil {
+				return
+			}
+
+			element = ast.CompositeElement{
+				Pos_:  startPos,
+				Key:   firstExpr,
+				Value: valueExpr,
+				End_:  p.curPos(),
+			}
+		} else {
+			// Otherwise, it's a purely positional element (e.g., Array or Vector)
+			element = ast.CompositeElement{
+				Pos_:  startPos,
+				Key:   nil,
+				Value: firstExpr,
+				End_:  p.curPos(),
+			}
+		}
+
+		cl.Elements = append(cl.Elements, element)
 	})
 
 	if !success {
 		return nil
 	}
 
-	sl.End_ = p.curPos()
-	return sl
+	cl.End_ = p.curPos()
+	return cl
 }
 
-func (p *Parser) parseStructField() *ast.StructField {
-	// 1. Parse the first expression (could be a Key or an unkeyed Value)
-	firstExpr := p.parseExpression(LOWEST)
-	if firstExpr == nil {
-		return nil
+// Unwraps the type node from our Pratt helper if necessary
+func extractTypeExpr(expr ast.Expr) ast.TypeExpr {
+	if wrapper, ok := expr.(*ast.TypeExprWrapper); ok {
+		return wrapper.TypeExpr
 	}
-
-	sf := &ast.StructField{Pos_: firstExpr.Pos()}
-
-	// 2. Is there a colon? If so, it's a Key: Value pair! (Structs & Maps)
-	if p.peekToken.Type == token.COLON {
-		p.nextToken() // step onto ':'
-		p.nextToken() // step onto the Value expression
-
-		sf.Key = firstExpr // The first thing we parsed was the key
-
-		valExpr := p.parseExpression(LOWEST)
-		if valExpr == nil {
-			return nil
+	// If it's a standard identifier like 'User', treat it as a NamedTypeExpr
+	if id, ok := expr.(*ast.Identifier); ok {
+		return &ast.NamedTypeExpr{
+			Name: id,
+			Pos_: id.Pos(),
 		}
-		sf.Value = valExpr
-		sf.End_ = valExpr.End()
-
-	} else {
-		// 3. No colon! It's an unkeyed element! (Vectors)
-		sf.Key = nil
-		sf.Value = firstExpr
-		sf.End_ = firstExpr.End()
 	}
-
-	return sf
+	// Fallback or pass-through for other type shapes (like GenericTypeExpr)
+	return expr.(ast.TypeExpr)
 }
 
 func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
@@ -348,20 +354,6 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 
 func (p *Parser) parseStringLiteral() ast.Expr {
 	return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
-}
-
-func (p *Parser) parseArrayLiteral() ast.Expr {
-	start := p.curPos() // position of the '['
-	elems := p.parseExpressionList(token.RBRACKET)
-
-	// Always return a node — even on a parse error the partial element list
-	// is more useful to callers than nil.  The missing ']' error was already
-	// recorded by parseExpressionList → expectPeek.
-	return &ast.ArrayLiteral{
-		Elements: elems,
-		Pos_:     start,
-		End_:     p.curPos(),
-	}
 }
 
 func (p *Parser) parseIndexExpression(left ast.Expr) ast.Expr {

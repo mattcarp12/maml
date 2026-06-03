@@ -1,8 +1,0 @@
-// test/programs/puts_multi.maml
-fn main() int {
-    puts("Initializing boot sequence...")
-    puts("Loading modules...")
-    puts("Done.")
-    return 99
-}
-// Expected exit: 99

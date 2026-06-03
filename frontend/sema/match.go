@@ -84,20 +84,68 @@ func (a *Analyzer) buildPattern(pat ast.Pattern, subjectType types.Type) tast.Pa
 		}
 		return &tast.LiteralPattern{Pos_: p.Pos_, End_: p.End_, Value: tastVal}
 
-	case *ast.VariantPattern:
+	case *ast.CompositePattern:
 		return a.buildVariantPattern(p, subjectType)
+
+	case *ast.IdentifierPattern:
+		// 1. Check if the bare identifier matches a Unit Variant on the Sum Type
+		if sumType, ok := subjectType.(*types.SumType); ok {
+			if variant := sumType.GetVariant(p.Name); variant != nil {
+				// It's a Unit Variant! Make sure it doesn't expect a payload
+				if len(variant.TupleTypes) > 0 || len(variant.Fields) > 0 {
+					a.errorf(p.Pos_, "variant '%s' requires a payload layout constructor", p.Name)
+				}
+
+				variantIdent := &tast.Identifier{Pos_: p.Pos_, Value: p.Name, Type: sumType}
+				sym := &types.Symbol{
+					Kind:    types.VariantSymbol,
+					Name:    variant.Name,
+					Type:    sumType,
+					SumType: sumType,
+					Variant: variant,
+				}
+				variantIdent.Symbol = sym
+
+				return &tast.VariantPattern{
+					Pos_:    p.Pos_,
+					End_:    p.Pos_,
+					Variant: variantIdent,
+					Type:    sumType,
+					Symbol:  sym,
+				}
+			}
+		}
+
+		// 2. If it's not a unit variant, it falls through to a catch-all variable binding assignment!
+		if _, exists := a.scope.symbols[p.Name]; exists {
+			a.errorf(p.Pos_, "variable '%s' is already bound in this pattern", p.Name)
+		}
+
+		bindingSym := &types.Symbol{
+			Kind:    types.VarSymbol,
+			Name:    p.Name,
+			Type:    subjectType, // The variable captures the whole outer type
+			Mutable: false,
+		}
+		a.scope.symbols[p.Name] = bindingSym
+
+		return &tast.IdentifierPattern{Pos_: p.Pos_, Name: p.Name}
 	}
 
 	return nil
 }
 
-func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.Type) *tast.VariantPattern {
+func (a *Analyzer) buildVariantPattern(p *ast.CompositePattern, subjectType types.Type) *tast.VariantPattern {
 	if p == nil {
 		return nil
 	}
 
-	// 1. FIX THE BUG: Look up the variant using the PATTERN NAME, not the variable binding!
-	variantName := p.Name
+	namedType, ok := p.TypeExpr.(*ast.NamedTypeExpr)
+	if !ok {
+		a.errorf(p.Pos_, "invalid type layout in composite pattern")
+		return nil
+	}
+	variantName := namedType.Name.Value
 	variantIdent := &tast.Identifier{Pos_: p.Pos_, Value: variantName}
 
 	sumType, ok := subjectType.(*types.SumType)
@@ -126,85 +174,110 @@ func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.
 	variantIdent.Symbol = sym
 	variantIdent.Type = sumType
 
-	// 2. Handle Tuple Destructuring (NEW!)
 	var tastTupleBindings []*tast.Identifier
-	if len(p.TupleBindings) > 0 {
-		// Arity Check: Did they provide the right number of variables?
-		if len(p.TupleBindings) != len(variant.TupleTypes) {
-			a.errorf(p.Pos_, "wrong number of bindings for tuple variant '%s': expected %d, got %d",
-				variantName, len(variant.TupleTypes), len(p.TupleBindings))
-		}
+	var tastFields []tast.VariantPatternField
 
-		for i, bindingAST := range p.TupleBindings {
-			bindingName := bindingAST.Value
+	tupleIdx := 0
+
+	for _, elem := range p.Elements {
+		if elem.Key == nil {
+			// --- Tuple Variant Payload Destructuring ---
 			var fieldType types.Type = types.UnknownType{}
-
-			if i < len(variant.TupleTypes) {
-				fieldType = variant.TupleTypes[i]
+			if tupleIdx < len(variant.TupleTypes) {
+				fieldType = variant.TupleTypes[tupleIdx]
+			} else {
+				a.errorf(elem.Pos_, "extra positional argument in tuple variant '%s'", variantName)
 			}
 
-			// Register the destructured variable into the local scope so the match body can use it!
-			bindingSym := &types.Symbol{
-				Kind:    types.VarSymbol,
-				Name:    bindingName,
-				Type:    fieldType,
-				Mutable: false, // Pattern bindings are immutable by default in Rust/MAML
-			}
-			a.scope.symbols[bindingName] = bindingSym
+			if identPat, isIdent := elem.Pattern.(*ast.IdentifierPattern); isIdent {
+				bindingName := identPat.Name
 
-			tastTupleBindings = append(tastTupleBindings, &tast.Identifier{
-				Pos_:   bindingAST.Pos(),
-				Value:  bindingName,
-				Type:   fieldType,
-				Symbol: bindingSym,
+				if _, exists := a.scope.symbols[bindingName]; exists {
+					a.errorf(elem.Pos_, "variable '%s' is already bound in this pattern", bindingName)
+				}
+
+				bindingSym := &types.Symbol{
+					Kind:    types.VarSymbol,
+					Name:    bindingName,
+					Type:    fieldType,
+					Mutable: false,
+				}
+				a.scope.symbols[bindingName] = bindingSym
+
+				tastTupleBindings = append(tastTupleBindings, &tast.Identifier{
+					Pos_:   elem.Pos_,
+					Value:  bindingName,
+					Type:   fieldType,
+					Symbol: bindingSym,
+				})
+			} else {
+				a.errorf(elem.Pos_, "nested complex sub-patterns are currently unsupported inside tuple variants")
+			}
+			tupleIdx++
+		} else {
+			// --- Struct Variant Payload Destructuring ---
+			keyIdent, ok := elem.Key.(*ast.Identifier)
+			if !ok {
+				a.errorf(elem.Pos_, "struct pattern key must be a valid identifier")
+				continue
+			}
+			fieldName := keyIdent.Value
+
+			var fieldType types.Type = types.UnknownType{}
+			for _, vf := range variant.Fields {
+				if vf.Name == fieldName {
+					fieldType = vf.Type
+					break
+				}
+			}
+
+			if types.IsUnknown(fieldType) {
+				a.errorf(elem.Pos_, "field '%s' does not exist on variant '%s'", fieldName, variant.Name)
+			}
+
+			var fieldBindingIdent *tast.Identifier
+			if identPat, isIdent := elem.Pattern.(*ast.IdentifierPattern); isIdent {
+				bindingName := identPat.Name
+
+				if _, exists := a.scope.symbols[bindingName]; exists {
+					a.errorf(elem.Pos_, "variable '%s' is already bound in this pattern", bindingName)
+				}
+
+				bindingSym := &types.Symbol{
+					Kind:    types.VarSymbol,
+					Name:    bindingName,
+					Type:    fieldType,
+					Mutable: false,
+				}
+				a.scope.symbols[bindingName] = bindingSym
+
+				fieldBindingIdent = &tast.Identifier{
+					Pos_:   elem.Pos_,
+					Value:  bindingName,
+					Type:   fieldType,
+					Symbol: bindingSym,
+				}
+			} else {
+				a.errorf(elem.Pos_, "nested complex sub-patterns are currently unsupported inside struct fields")
+			}
+
+			tastFields = append(tastFields, tast.VariantPatternField{
+				Field:   fieldName,
+				Binding: fieldBindingIdent,
 			})
 		}
 	}
 
-	// 3. Handle Struct Destructuring (Existing code, updated slightly)
-	var tastFields []tast.VariantPatternField
-	for _, f := range p.Fields {
-		var fieldType types.Type = types.UnknownType{}
-		for _, vf := range variant.Fields {
-			if vf.Name == f.Field {
-				fieldType = vf.Type
-				break
-			}
-		}
-
-		if types.IsUnknown(fieldType) {
-			a.errorf(p.Pos_, "field '%s' does not exist on variant '%s'", f.Field, variant.Name)
-		}
-
-		var fieldBindingIdent *tast.Identifier
-		if f.Binding != nil {
-			bindingName := f.Binding.Value
-			bindingSym := &types.Symbol{
-				Kind:    types.VarSymbol,
-				Name:    bindingName,
-				Type:    fieldType,
-				Mutable: false,
-			}
-			a.scope.symbols[bindingName] = bindingSym
-			fieldBindingIdent = &tast.Identifier{
-				Pos_:   f.Binding.Pos_,
-				Value:  bindingName,
-				Type:   fieldType,
-				Symbol: bindingSym,
-			}
-		}
-
-		tastFields = append(tastFields, tast.VariantPatternField{
-			Field:   f.Field,
-			Binding: fieldBindingIdent,
-		})
+	if len(variant.TupleTypes) > 0 && tupleIdx != len(variant.TupleTypes) {
+		a.errorf(p.Pos_, "wrong number of bindings for tuple variant '%s': expected %d, got %d",
+			variantName, len(variant.TupleTypes), tupleIdx)
 	}
 
 	return &tast.VariantPattern{
 		Pos_:          p.Pos_,
 		End_:          p.End_,
 		Variant:       variantIdent,
-		TupleBindings: tastTupleBindings, // Attached to TAST!
+		TupleBindings: tastTupleBindings,
 		Fields:        tastFields,
 		Type:          sumType,
 		Symbol:        sym,
@@ -216,7 +289,6 @@ func (a *Analyzer) buildVariantPattern(p *ast.VariantPattern, subjectType types.
 // =============================================================================
 
 func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType types.Type) {
-	// A wildcard gracefully covers all remaining variants or arbitrary types.
 	for _, arm := range e.Arms {
 		if _, isWild := arm.Pattern.(*ast.WildcardPattern); isWild {
 			return
@@ -233,9 +305,22 @@ func (a *Analyzer) checkMatchExhaustiveness(e *ast.MatchExpr, subjectType types.
 
 	seen := make(map[string]bool)
 	for _, arm := range e.Arms {
-		if vp, ok := arm.Pattern.(*ast.VariantPattern); ok && vp != nil {
-			if vp.Name != "" {
-				seen[vp.Name] = true
+		switch pat := arm.Pattern.(type) {
+
+		case *ast.CompositePattern:
+			namedType, ok := pat.TypeExpr.(*ast.NamedTypeExpr)
+			if !ok {
+				continue
+			}
+			if variantName := namedType.Name.Value; variantName != "" {
+				seen[variantName] = true
+			}
+
+		case *ast.IdentifierPattern:
+			if sumTy.GetVariant(pat.Name) != nil {
+				seen[pat.Name] = true
+			} else {
+				return // catch-all binding covers all remaining variants
 			}
 		}
 	}

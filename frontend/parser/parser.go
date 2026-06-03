@@ -60,10 +60,10 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.IF] = p.parseIfExpression
 	p.prefixParseFns[token.STRING] = p.parseStringLiteral
 	p.prefixParseFns[token.NOT] = p.parsePrefixExpression
-	p.prefixParseFns[token.MINUS] = p.parsePrefixExpression // unary minus (was missing)
-	p.prefixParseFns[token.LBRACKET] = p.parseArrayLiteral
+	p.prefixParseFns[token.MINUS] = p.parsePrefixExpression
 	p.prefixParseFns[token.MATCH] = p.parseMatchExpression
 	p.prefixParseFns[token.AWAIT] = p.parseAwaitExpression
+	p.prefixParseFns[token.LBRACKET] = p.parseArrayTypePrefix
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression
@@ -78,7 +78,7 @@ func (p *Parser) setParseFns() {
 	p.infixParseFns[token.DIVIDE] = p.parseInfixExpression
 	p.infixParseFns[token.MODULO] = p.parseInfixExpression
 	p.infixParseFns[token.LPAREN] = p.parseCallExpression
-	p.infixParseFns[token.LBRACE] = p.parseStructLiteral
+	p.infixParseFns[token.LBRACE] = p.parseCompositeLiteral
 	p.infixParseFns[token.DOT] = p.parseFieldAccess
 	p.infixParseFns[token.AND] = p.parseInfixExpression
 	p.infixParseFns[token.OR] = p.parseInfixExpression

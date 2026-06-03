@@ -128,13 +128,6 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
     }
   }
 
-  if (!retType->isVoidTy()) {
-    llvm::AllocaInst *retAlloca = Builder->CreateAlloca(retType, nullptr, "_ret");
-    // Zero-initialize to prevent undefined behavior on early returns
-    Builder->CreateStore(llvm::Constant::getNullValue(retType), retAlloca);
-    ctx.SymbolEnv.back()["_ret"] = retAlloca;
-  }
-
   // 7. Setup Basic Blocks (Flattened MIR)
   if (fn.contains("blocks") && !fn["blocks"].is_null()) {
     // 1. Create all basic blocks (Fixed for Array iteration!)

@@ -1,9 +1,0 @@
-fn main() int {
-    s := "hello"
-    
-    // 'e' is ASCII 101, 'o' is ASCII 111
-    x := s[1] 
-    y := s[4]
-    
-    return x + y // Should return 212
-}

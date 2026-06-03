@@ -10,10 +10,9 @@ import (
 
 func (p *Parser) parseMatchExpression() ast.Expr {
 	pos := p.curPos()
-	p.nextToken()
+	p.nextToken() // Step past 'match'
 
-	// FIX: Use LOWEST precedence so math/logic operators work,
-	// but disable struct literals to protect the '{'
+	// Protect the match expression's opening brace from being misread
 	prevAllow := p.allowStructLiterals
 	p.allowStructLiterals = false
 	subject := p.parseExpression(LOWEST)
@@ -23,19 +22,24 @@ func (p *Parser) parseMatchExpression() ast.Expr {
 		return nil
 	}
 
-	for p.peekToken.Type == token.NEWLINE {
-		p.nextToken()
-	}
+	p.skipNewlines()
 
 	if !p.expectPeek(token.LBRACE) {
 		return nil
 	}
-
-	p.nextToken() // step inside '{'
+	p.nextToken() // Step onto the first token inside '{' (ideally 'case')
 	p.skipNewlines()
 
 	var arms []ast.MatchArm
 	for p.curToken.Type != token.RBRACE && p.curToken.Type != token.EOF {
+		// Cleanly skip any leading layout newlines between match arms
+		p.skipNewlines()
+
+		// Double check we haven't hit the closing brace after skipping newlines
+		if p.curToken.Type == token.RBRACE {
+			break
+		}
+
 		arm := p.parseMatchArm()
 		if arm == nil {
 			p.synchronize()
@@ -43,6 +47,8 @@ func (p *Parser) parseMatchExpression() ast.Expr {
 			continue
 		}
 		arms = append(arms, *arm)
+		p.nextToken()
+		p.skipNewlines()
 	}
 
 	end := p.curPos()
@@ -66,27 +72,25 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 	}
 	pos := p.curPos()
 
-	p.nextToken() // step onto the pattern
+	p.nextToken() // Step onto the first token of the pattern
 	pat := p.parsePattern()
 	if pat == nil {
 		return nil
 	}
 
+	// Consume the required colon ':' separating pattern from arm body
 	if !p.expectPeek(token.COLON) {
 		return nil
 	}
-
-	for p.peekToken.Type == token.NEWLINE {
-		p.nextToken()
-	}
+	p.nextToken() // Step onto the token immediately following the colon
+	p.skipNewlines()
 
 	var body *ast.BlockStmt
 
-	if p.peekToken.Type == token.YIELD {
-		p.nextToken() // step onto '=>'
+	switch p.curToken.Type {
+	case token.YIELD:
 		yieldPos := p.curPos()
-		p.nextToken() // step onto expression
-
+		p.nextToken()
 		expr := p.parseExpression(LOWEST)
 		if expr == nil {
 			return nil
@@ -98,16 +102,12 @@ func (p *Parser) parseMatchArm() *ast.MatchArm {
 			Pos_:       yieldPos,
 			End_:       p.curPos(),
 		}
-
-	} else if p.expectPeek(token.LBRACE) {
+	case token.LBRACE:
 		body = p.parseBlockStmt()
-		p.nextToken() // NEW: Step past the block's closing '}' so we sit correctly for skipNewlines!
-	} else {
-		p.addError(fmt.Sprintf("expected '{' or '=>' after match arm colon, got %s", p.peekToken.Type))
+	default:
+		p.addError(fmt.Sprintf("expected '{' or '=>' after match arm colon, got %s", p.curToken.Type))
 		return nil
 	}
-
-	p.skipNewlines()
 
 	return &ast.MatchArm{
 		Pattern: pat,
@@ -123,86 +123,110 @@ func (p *Parser) parsePattern() ast.Pattern {
 	case token.IDENT:
 		name := p.curToken.Literal
 
+		// Catch wildcards immediately
 		if name == "_" {
 			return &ast.WildcardPattern{Pos_: pos}
 		}
 
-		// case Tuple(x, y) — tuple destructuring
-		if p.peekToken.Type == token.LPAREN {
-			p.nextToken() // onto '('
-
-			var bindings []*ast.Identifier
-
-			// Parse comma-separated bindings if it's not empty ()
-			if p.peekToken.Type != token.RPAREN {
-				p.nextToken() // onto first binding
-				if p.curToken.Type != token.IDENT {
-					p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
-					return nil
-				}
-				bindings = append(bindings, &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()})
-
-				for p.peekToken.Type == token.COMMA {
-					p.nextToken() // onto ','
-					p.nextToken() // onto next binding name
-					if p.curToken.Type != token.IDENT {
-						p.addError(fmt.Sprintf("expected binding name, got %s", p.curToken.Type))
-						return nil
-					}
-					bindings = append(bindings, &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()})
-				}
-			}
-
-			if !p.expectPeek(token.RPAREN) {
-				return nil
-			}
-			return &ast.VariantPattern{Name: name, TupleBindings: bindings, Pos_: pos}
+		// Create a clean NamedTypeExpr for the pattern's type head
+		typeExpr := &ast.NamedTypeExpr{
+			Name: &ast.Identifier{Value: name, Pos_: pos},
+			Pos_: pos,
 		}
 
-		// case Circle{radius: r} — field destructuring.
-		// Distinguish from arm body '{...}' by checking that inside '{' there's
-		// 'IDENT COLON', which is the field-binding syntax.
-		if p.peekToken.Type == token.LBRACE && p.peek2Token.Type == token.IDENT {
-			// Step inside and verify it really is 'field: binding'
-			p.nextToken() // curToken = '{'
-			p.nextToken() // curToken = first token inside (the IDENT we peeked)
+		// Case A: Tuple Variant Pattern -> Circle(x, y)
+		if p.peekToken.Type == token.LPAREN {
+			p.nextToken() // step onto '('
+			cp := &ast.CompositePattern{TypeExpr: typeExpr, Pos_: pos}
 
-			if p.peekToken.Type == token.COLON {
-				// Confirmed field destructuring — parse all field bindings
-				fieldBindings := []ast.VariantPatternField{}
+			if p.peekToken.Type != token.RPAREN {
 				for {
-					if p.curToken.Type != token.IDENT {
-						p.addError(fmt.Sprintf("expected field name, got %s", p.curToken.Type))
+					p.nextToken() // step onto the binding identifier
+					startPos := p.curPos()
+
+					// Recursively parse the pattern (allows nested variant matching!)
+					innerPat := p.parsePattern()
+					if innerPat == nil {
 						return nil
 					}
-					fieldName := p.curToken.Literal
-					if !p.expectPeek(token.COLON) {
-						return nil
-					}
-					if !p.expectPeek(token.IDENT) {
-						return nil
-					}
-					bindingName := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
-					fieldBindings = append(fieldBindings, ast.VariantPatternField{
-						Field:   fieldName,
-						Binding: bindingName,
+
+					cp.Elements = append(cp.Elements, ast.CompositePatternElement{
+						Pos_:    startPos,
+						Key:     nil, // Positional fields have no key name
+						Pattern: innerPat,
+						End_:    p.curPos(),
 					})
+
 					if p.peekToken.Type == token.COMMA {
-						p.nextToken() // onto ','
-						p.nextToken() // onto next field name
+						p.nextToken() // step onto ','
+						if p.peekToken.Type == token.RPAREN {
+							break // Handle trailing comma safely
+						}
 					} else {
 						break
 					}
 				}
-				if !p.expectPeek(token.RBRACE) {
-					return nil
-				}
-				return &ast.VariantPattern{Name: name, Fields: fieldBindings, Pos_: pos}
 			}
+
+			if p.curToken.Type != token.RPAREN && !p.expectPeek(token.RPAREN) {
+				return nil
+			}
+			cp.End_ = p.curPos()
+			return cp
 		}
 
-		// Unit variant: case Point
-		return &ast.VariantPattern{Name: name, TupleBindings: nil, Pos_: pos}
+		// Case B: Struct Variant Pattern -> Circle{radius: r}
+		if p.peekToken.Type == token.LBRACE {
+			p.nextToken() // step onto '{'
+			cp := &ast.CompositePattern{TypeExpr: typeExpr, Pos_: pos}
+
+			if p.peekToken.Type != token.RBRACE {
+				for {
+					if !p.expectPeek(token.IDENT) {
+						return nil
+					}
+					keyIdent := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+
+					if !p.expectPeek(token.COLON) {
+						return nil
+					}
+					p.nextToken() // step past ':' onto the binding/sub-pattern
+					startPos := p.curPos()
+
+					innerPat := p.parsePattern()
+					if innerPat == nil {
+						return nil
+					}
+
+					cp.Elements = append(cp.Elements, ast.CompositePatternElement{
+						Pos_:    startPos,
+						Key:     keyIdent,
+						Pattern: innerPat,
+						End_:    p.curPos(),
+					})
+
+					if p.peekToken.Type == token.COMMA {
+						p.nextToken() // step onto ','
+						if p.peekToken.Type == token.RBRACE {
+							break // Handle trailing comma safely
+						}
+					} else {
+						break
+					}
+				}
+			}
+
+			if !p.expectPeek(token.RBRACE) {
+				return nil
+			}
+			cp.End_ = p.curPos()
+			return cp
+		}
+
+		// Case C: Unit Variant Pattern or plain variable identifier binding capture
+		// Returns an empty CompositePattern representing an instantiation with 0 elements
+		return &ast.IdentifierPattern{Name: name, Pos_: pos}
+
 	case token.INT:
 		intVal, _ := strconv.ParseInt(p.curToken.Literal, 10, 64)
 		lit := &ast.IntLiteral{Value: intVal, Pos_: pos}

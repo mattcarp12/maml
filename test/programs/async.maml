@@ -1,0 +1,12 @@
+// EXIT_CODE: 42
+
+async fn fetch_user_data() int {
+    puts("Fetching data...")
+    return 42
+}
+
+fn main() int {
+    root_task := fetch_user_data()
+    spawn(root_task)
+    return run_executor()
+}

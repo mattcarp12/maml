@@ -1,0 +1,13 @@
+// EXIT_CODE: 99
+// EXPECTED_OUTPUT: Initializing boot sequence...
+// Loading modules...
+// Done.
+// Hello from consolidated test suite!
+
+fn main() int {
+    puts("Initializing boot sequence...")
+    puts("Loading modules...")
+    puts("Done.")
+    puts("Hello from consolidated test suite!")
+    return 99
+}

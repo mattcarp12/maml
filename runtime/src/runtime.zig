@@ -85,6 +85,24 @@ export fn maml_vec_grow(
     return new_raw;
 }
 
+const VecHeader = extern struct {
+    raw_ptr: ?*anyopaque,
+    data_ptr: ?*anyopaque,
+    len: u32,
+    cap: u32,
+};
+
+fn maml_vec_destructor(data_ptr: ?*anyopaque) void {
+    if (data_ptr == null) return;
+    const header = @as(*VecHeader, @ptrCast(@alignCast(data_ptr.?)));
+
+    // If the vector contains reference types, we must release them all!
+    // (You will need to add an `is_ref_type: u8` field to VecHeader just like MapHeader)
+    if (header.raw_ptr) |buffer| {
+        mi_free(buffer);
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Map runtime
 // -----------------------------------------------------------------------------
@@ -242,8 +260,13 @@ export fn maml_map_put(
             var match = true;
             if (is_str) {
                 const len = entryKeyStringLen(entry).*;
-                if (len != str_key_len or !std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..str_key_len])) {
+                if (len != str_key_len) {
                     match = false;
+                } else if (len > 0) {
+                    // CRITICAL FIX: Only unwrap and compare memory if length > 0
+                    if (!std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..len])) {
+                        match = false;
+                    }
                 }
             }
             if (match) {
@@ -284,8 +307,13 @@ export fn maml_map_get(
             var match = true;
             if (is_str) {
                 const len = entryKeyStringLen(entry).*;
-                if (len != str_key_len or !std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..str_key_len])) {
+                if (len != str_key_len) {
                     match = false;
+                } else if (len > 0) {
+                    // CRITICAL FIX: Only unwrap and compare memory if length > 0
+                    if (!std.mem.eql(u8, entryKeyStringPtr(entry).*[0..len], str_key_ptr.?[0..len])) {
+                        match = false;
+                    }
                 }
             }
             if (match) {

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -290,31 +290,29 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 func buildTerminatorDTO(term Terminator) map[string]any {
 	switch t := term.(type) {
 	case *ReturnTerminator:
-		return map[string]any{"op": "ret"}
+		m := map[string]any{"op": "ret"}
+		if t.Value != nil {
+			m["value"] = buildExprDTO(t.Value) // Safely serialize the return operand!
+		}
+		return m
 	case *JumpTerminator:
 		return map[string]any{"op": "br", "target": fmt.Sprintf("%d", t.Target)}
 	case *BranchTerminator:
-		// Determine if the condition is a literal or a temporary variable/identifier
-		var condDTO map[string]any
-		switch t.Condition {
-		case "true":
-			condDTO = map[string]any{"op": "const_bool", "value": true}
-		case "false":
-			condDTO = map[string]any{"op": "const_bool", "value": false}
-		default:
-			condDTO = map[string]any{"op": "ident", "value": t.Condition}
-		}
-
 		return map[string]any{
 			"op":           "cond_br",
-			"condition":    condDTO,
+			"condition":    buildExprDTO(t.Condition), // buildExprDTO already perfectly handles literals and identifiers!
 			"true_target":  fmt.Sprintf("%d", t.TrueTarget),
 			"false_target": fmt.Sprintf("%d", t.FalseTarget),
 		}
 	case *UnreachableTerminator:
 		return map[string]any{"op": "unreachable"}
 	case *CoroSuspendTerminator:
-		return map[string]any{"op": "coro_suspend", "resume": fmt.Sprintf("%d", t.ResumeBlock), "cleanup": fmt.Sprintf("%d", t.CleanupBlock), "suspend": fmt.Sprintf("%d", t.SuspendBlock)}
+		return map[string]any{
+			"op":      "coro_suspend",
+			"resume":  fmt.Sprintf("%d", t.ResumeBlock),
+			"cleanup": fmt.Sprintf("%d", t.CleanupBlock),
+			"suspend": fmt.Sprintf("%d", t.SuspendBlock),
+		}
 	default:
 		return map[string]any{"op": "unknown_term"}
 	}
@@ -326,24 +324,26 @@ func buildTerminatorDTO(term Terminator) map[string]any {
 
 // buildExprDTO strips away frontend TAST node types and translates
 // strictly flattened operands into simple opcode objects for the backend.
-func buildExprDTO(expr tast.Operand) any {
+func buildExprDTO(expr hir.Operand) any {
 	if expr == nil {
 		return nil
 	}
 	switch e := expr.(type) {
-	case *tast.Identifier:
+	case *hir.Identifier:
 		return map[string]any{"op": "ident", "value": e.Value, "type": lowerType(e.Type)}
-	case *tast.IntLiteral:
+	case *hir.IntLiteral:
 		return map[string]any{"op": "const_int", "value": e.Value, "type": lowerType(e.Type)}
-	case *tast.BoolLiteral:
+	case *hir.BoolLiteral:
 		return map[string]any{"op": "const_bool", "value": e.Value, "type": lowerType(e.Type)}
-	case *tast.StringLiteral:
+	case *hir.StringLiteral:
 		return map[string]any{"op": "const_string", "value": e.Value, "type": lowerType(e.Type)}
 	default:
 		panic(fmt.Sprintf("MIR Exporter Error: Illegal unflattened expression type reached backend: %T", expr))
 	}
 }
 
+// lowerType handles the critical task of stripping frontend Type interfaces
+// (like types.IntType) and emitting low-level primitive strings (like "i32")
 // lowerType handles the critical task of stripping frontend Type interfaces
 // (like types.IntType) and emitting low-level primitive strings (like "i32")
 func lowerType(t types.Type) any {
@@ -398,6 +398,21 @@ func lowerType(t types.Type) any {
 			"kind":      "vector",
 			"elem_type": lowerType(v.Base),
 		}
+	case types.MapType: // NEW: Explicit Map serialization
+		return map[string]any{
+			"kind":       "map",
+			"key_type":   lowerType(v.Key),
+			"value_type": lowerType(v.Value),
+		}
+	case types.TaskType: // NEW: Explicit Task serialization
+		return map[string]any{
+			"kind":      "task",
+			"base_type": lowerType(v.Base),
+		}
+	case types.UnknownType:
+		return "unknown"
+	case types.AnyType:
+		return "any"
 	default:
 		if t.IsReferenceType() {
 			return "ptr"

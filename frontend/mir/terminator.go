@@ -1,10 +1,14 @@
 package mir
 
+import "github.com/mattcarp12/maml/frontend/hir"
+
 type Terminator interface {
 	isTerminator()
 }
 
-type ReturnTerminator struct{}
+type ReturnTerminator struct {
+	Value hir.Operand
+}
 
 func (ReturnTerminator) isTerminator() {}
 
@@ -15,7 +19,7 @@ type JumpTerminator struct {
 func (JumpTerminator) isTerminator() {}
 
 type BranchTerminator struct {
-	Condition   string
+	Condition   hir.Operand
 	TrueTarget  BlockID
 	FalseTarget BlockID
 }

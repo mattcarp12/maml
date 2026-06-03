@@ -203,22 +203,7 @@ func (ce *CallExpr) String() string {
 	}
 	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
 }
-func (ce *CallExpr) exprNode()          {}
-func (m *MethodCallExpr) Pos() Position { return m.Pos_ }
-func (m *MethodCallExpr) End() Position {
-	if len(m.Arguments) == 0 {
-		return m.Method.End()
-	}
-	return m.Arguments[len(m.Arguments)-1].Argument.End()
-}
-func (m *MethodCallExpr) String() string {
-	var args []string
-	for _, a := range m.Arguments {
-		args = append(args, a.Argument.String())
-	}
-	return fmt.Sprintf("%s.%s(%s)", m.Object.String(), m.Method.String(), strings.Join(args, ", "))
-}
-func (m *MethodCallExpr) exprNode()   {}
+func (ce *CallExpr) exprNode()        {}
 func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
 func (fa *FieldAccess) End() Position { return fa.Field.End() }
 func (fa *FieldAccess) String() string {
@@ -309,6 +294,11 @@ func (l *LiteralPattern) Pos() Position  { return l.Pos_ }
 func (l *LiteralPattern) End() Position  { return l.End_ }
 func (l *LiteralPattern) String() string { return l.Value.String() }
 func (l *LiteralPattern) patternNode()   {}
+
+func (i *IdentifierPattern) Pos() Position  { return i.Pos_ }
+func (i *IdentifierPattern) End() Position  { return i.End_ }
+func (i *IdentifierPattern) String() string { return i.Name }
+func (i *IdentifierPattern) patternNode()   {}
 
 func (v *VariantPattern) Pos() Position { return v.Pos_ }
 func (v *VariantPattern) End() Position { return v.End_ }
@@ -412,40 +402,12 @@ func (f *ForStmt) String() string {
 	}
 	return fmt.Sprintf("for (%s; %s; %s) %s", initStr, condStr, postStr, f.Body.String())
 }
-func (f *ForStmt) stmtNode()                     {}
-func (s *BreakStmt) Pos() Position               { return s.Pos_ }
-func (s *BreakStmt) End() Position               { return s.End_ }
-func (s *BreakStmt) String() string              { return "break" }
-func (s *BreakStmt) stmtNode()                   {}
-func (s *ContinueStmt) Pos() Position            { return s.Pos_ }
-func (s *ContinueStmt) End() Position            { return s.End_ }
-func (s *ContinueStmt) String() string           { return "continue" }
-func (s *ContinueStmt) stmtNode()                {}
-func (e *VariantDiscriminantExpr) exprNode()     {}
-func (e *VariantDiscriminantExpr) Pos() Position { return e.Pos_ }
-func (e *VariantDiscriminantExpr) End() Position { return e.Pos_ } // approximate
-func (e *VariantDiscriminantExpr) String() string {
-	return fmt.Sprintf("discriminant(%s)", e.Object.String())
-}
-func (e *VariantReadExpr) exprNode()     {}
-func (e *VariantReadExpr) Pos() Position { return e.Pos_ }
-func (e *VariantReadExpr) End() Position { return e.Pos_ }
-func (e *VariantReadExpr) String() string {
-	return fmt.Sprintf("%s.%s[%d]", e.Object.String(), e.VariantName, e.PayloadIndex)
-}
-func (e *MapReadExpr) exprNode()     {}
-func (e *MapReadExpr) Pos() Position { return e.Pos_ }
-func (e *MapReadExpr) End() Position { return e.Pos_ }
-func (e *MapReadExpr) String() string {
-	return fmt.Sprintf("%s[%s]", e.Map.String(), e.Key.String())
-}
-func (e *VecReadExpr) exprNode()     {}
-func (e *VecReadExpr) Pos() Position { return e.Pos_ }
-func (e *VecReadExpr) End() Position { return e.Pos_ }
-func (e *VecReadExpr) String() string {
-	return fmt.Sprintf("%s[%s]", e.Vec.String(), e.Index.String())
-}
-func (m *MapInsertStmt) stmtNode()      {}
-func (m *MapInsertStmt) Pos() Position  { return m.Pos_ }
-func (m *MapInsertStmt) End() Position  { return m.Pos_ }
-func (m *MapInsertStmt) String() string { return "MapInsertStmt" }
+func (f *ForStmt) stmtNode()           {}
+func (s *BreakStmt) Pos() Position     { return s.Pos_ }
+func (s *BreakStmt) End() Position     { return s.End_ }
+func (s *BreakStmt) String() string    { return "break" }
+func (s *BreakStmt) stmtNode()         {}
+func (s *ContinueStmt) Pos() Position  { return s.Pos_ }
+func (s *ContinueStmt) End() Position  { return s.End_ }
+func (s *ContinueStmt) String() string { return "continue" }
+func (s *ContinueStmt) stmtNode()      {}

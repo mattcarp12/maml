@@ -134,6 +134,7 @@ type ContinueStmt struct {
 
 type Identifier struct {
 	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
 	Value  string
 	Type   types.Type
 	Symbol *types.Symbol
@@ -236,15 +237,8 @@ type CallArg struct {
 
 type CallExpr struct {
 	Pos_      Position `json:"-"`
+	End_      Position `json:"-"`
 	Function  Expr
-	Arguments []CallArg
-	Type      types.Type
-}
-
-type MethodCallExpr struct {
-	Pos_      Position `json:"-"`
-	Object    Expr
-	Method    *Identifier
 	Arguments []CallArg
 	Type      types.Type
 }
@@ -314,6 +308,12 @@ type LiteralPattern struct {
 	Value Expr
 }
 
+type IdentifierPattern struct {
+	Pos_ Position `json:"-"`
+	End_ Position `json:"-"`
+	Name string   `json:"name"`
+}
+
 type VariantPatternField struct {
 	Field   string
 	Binding *Identifier
@@ -330,55 +330,12 @@ type VariantPattern struct {
 }
 
 // ==========================================================================
-// Desugaring Helper Nodes
-// ==========================================================================
-
-// VariantDiscriminantExpr reads the discriminant integer from a sum type value.
-type VariantDiscriminantExpr struct {
-	Pos_   Position `json:"-"`
-	Object Expr
-	Type   types.Type
-}
-
-// VariantReadExpr extracts a payload field from a specific variant.
-type VariantReadExpr struct {
-	Pos_         Position `json:"-"`
-	Object       Expr
-	VariantName  string
-	PayloadIndex int
-	Type         types.Type
-}
-
-// MapReadExpr desugars map[key] into a runtime call (maml_map_get)
-type MapReadExpr struct {
-	Pos_ Position `json:"-"`
-	Map  Expr
-	Key  Expr
-	Type types.Type
-}
-
-// MapInsertStmt desugars map[key] = value into a runtime call (maml_map_put).
-type MapInsertStmt struct {
-	Pos_  Position `json:"-"`
-	Map   Expr
-	Key   Expr
-	Value Expr
-}
-
-// VecReadExpr desugars vec[i] into a runtime call (maml_vec_get)
-type VecReadExpr struct {
-	Pos_  Position `json:"-"`
-	Vec   Expr
-	Index Expr
-	Type  types.Type
-}
-
-// ==========================================================================
 // Operand Type
 // ==========================================================================
 
-// Operand represents a fully flattened, atomic expression that can be safely
-// consumed by a MIR instruction (e.g., identifiers and primitive literals).
+// Operand represents a fully flattened, atomic expression — an identifier or
+// primitive literal with no sub-expressions. The HIR lowering pass uses this
+// marker to identify leaves that need no further decomposition.
 type Operand interface {
 	Expr
 	isOperand()
@@ -394,7 +351,8 @@ func (*StringLiteral) isOperand() {}
 // Helper Methods
 // =============================================================================
 
-// TypeOf cleanly extracts the bound type from any TAST expression interface.
+// TypeOf extracts the resolved type from any TAST expression node.
+// Returns UnknownType for nil or unrecognised nodes.
 func TypeOf(expr Expr) types.Type {
 	if expr == nil {
 		return types.UnknownType{}
@@ -432,15 +390,9 @@ func TypeOf(expr Expr) types.Type {
 		return e.Type
 	case *MatchExpr:
 		return e.Type
-	case *MethodCallExpr:
-		return e.Type
 	case *MapLiteral:
 		return e.Type
 	case *VecLiteral:
-		return e.Type
-	case *MapReadExpr:
-		return e.Type
-	case *VecReadExpr:
 		return e.Type
 	case *BlockStmt:
 		return TypeOfBlock(e)

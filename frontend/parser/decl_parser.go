@@ -91,6 +91,7 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 
 	var returnType ast.TypeExpr
 	if p.peekToken.Type == token.IDENT || p.peekToken.Type == token.LBRACKET {
+		p.nextToken() // step onto the return type
 		returnType = p.parseTypeExpr()
 	}
 
@@ -147,7 +148,7 @@ func (p *Parser) parseParam() *ast.Param {
 	}
 	param.Name = p.curToken.Literal
 
-	// REPLACED: Hand off to parseTypeExpr
+	p.nextToken() // step off the parameter name
 	param.Type = p.parseTypeExpr()
 
 	return param
@@ -171,7 +172,7 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	switch p.curToken.Type {
 	case token.LBRACE:
 		td.Rhs = p.parseProductType()
-	case token.SEPARATOR: // '|'
+	case token.SEPARATOR, token.IDENT: // '|'
 		td.Rhs = p.parseSumType()
 	default:
 		p.addError(fmt.Sprintf("expected '{' or '|' in type declaration, got %s", p.curToken.Type))
@@ -183,33 +184,62 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 }
 
 func (p *Parser) parseSumType() *ast.SumTypeExpr {
-	st := &ast.SumTypeExpr{Pos_: p.curPos()}
+    st := &ast.SumTypeExpr{Pos_: p.curPos()}
+    p.skipNewlines()
 
-	for p.curToken.Type == token.SEPARATOR {
-		variant := p.parseSumVariant()
-		if variant == nil {
-			return nil
-		}
-		st.Variants = append(st.Variants, *variant)
-		p.skipNewlines()
-	}
+    // Handle optional leading '|'
+    if p.curToken.Type == token.SEPARATOR {
+        p.nextToken()
+        p.skipNewlines()
+    }
 
-	st.End_ = p.curPos()
-	return st
+    for {
+        if p.curToken.Type != token.IDENT {
+            p.addError("expected variant name identifier in sum type declaration")
+            return nil
+        }
+
+        variant := p.parseSumVariant()
+        if variant == nil {
+            return nil
+        }
+        st.Variants = append(st.Variants, *variant)
+
+        // After a variant, we must advance past it.
+        // parseSumVariant leaves curToken ON the last token of the variant
+        // (the IDENT for unit, ')' for tuple, '}' for struct).
+        // We need to move forward to see what comes next.
+        p.nextToken()    // ← THIS is the missing step
+        p.skipNewlines()
+
+        if p.curToken.Type == token.SEPARATOR {
+            p.nextToken()
+            p.skipNewlines()
+        } else {
+            break
+        }
+    }
+
+    st.End_ = p.curPos()
+    return st
 }
 
 func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
-	if !p.expectPeek(token.IDENT) {
+	if p.curToken.Type != token.IDENT {
+		p.addError(fmt.Sprintf("expected variant name identifier, got %s", p.curToken.Type))
 		return nil
 	}
+
 	name := p.curToken.Literal
+	startPos := p.curPos()
 
 	variant := &ast.VariantTypeExpr{
-		Name:        name,                    // Or build your ast.Name here
-		TupleFields: make([]ast.TypeExpr, 0), // Initialize empty slice!
+		Name:        name,
+		TupleFields: make([]ast.TypeExpr, 0),
+		Pos_:        startPos,
 	}
 
-	// Optional Struct payload: { field type, ... }
+	// Case 1: Struct Variant -> Enum{x string}
 	if p.peekToken.Type == token.LBRACE {
 		p.nextToken() // step onto '{'
 		pt := p.parseProductType()
@@ -217,30 +247,46 @@ func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
 			return nil
 		}
 		variant.Fields = pt.Fields
+		// Assumes parseProductType ends with curToken on '}'
+
+		// Case 2: Tuple Variant -> Enum(int, string)
 	} else if p.peekToken.Type == token.LPAREN {
-		// NEW: Optional Tuple payload: (type, type, ...)
 		p.nextToken() // step onto '('
 
-		// If it's not empty (), parse the list of types
+		// If it's not an empty tuple '()', parse the types
 		if p.peekToken.Type != token.RPAREN {
-			p.nextToken() // step onto first type
-			variant.TupleFields = append(variant.TupleFields, p.parseTypeExpr())
+			for {
+				p.nextToken() // Step onto the start of the TypeExpr
+				typeExpr := p.parseTypeExpr()
+				if typeExpr == nil {
+					return nil
+				}
+				variant.TupleFields = append(variant.TupleFields, typeExpr)
 
-			for p.peekToken.Type == token.COMMA {
-				p.nextToken() // step onto ','
-				p.nextToken() // step onto next type
-				variant.TupleFields = append(variant.TupleFields, p.parseTypeExpr())
+				// If the next token is a comma, consume it and keep going
+				if p.peekToken.Type == token.COMMA {
+					p.nextToken() // step onto ','
+
+					// Allow optional trailing comma: if ')' is after the comma, stop
+					if p.peekToken.Type == token.RPAREN {
+						break
+					}
+				} else {
+					break
+				}
 			}
 		}
 
-		if !p.expectPeek(token.RPAREN) {
+		// Ensure the parenthetical parameter wrapper closes cleanly
+		if !p.expectPeek(token.RPAREN) { // Moves curToken to ')'
 			return nil
 		}
 	}
 
-	p.nextToken() // step past variant (onto next '|' or end)
-	p.skipNewlines()
+	// Case 3: Unit Variant -> Enum (No payload)
+	// If neither block runs, curToken remains safely on the variant IDENT.
 
+	variant.End_ = p.curPos()
 	return variant
 }
 
@@ -292,15 +338,11 @@ func (p *Parser) parseProductType() *ast.StructTypeExpr {
 	return pt
 }
 
-// parseTypeExpr parses a type signature (e.g., int, [5]int)
 func (p *Parser) parseTypeExpr() ast.TypeExpr {
 	startPos := p.curPos()
 
-	// Case 1: Slice or Array types starting with '['
-	if p.peekToken.Type == token.LBRACKET {
-		p.nextToken() // Step onto '['
-
-		// Or is it a fixed-size array? `[5]T`
+	// Case 1: Fixed-size array types starting with '[' (e.g., [5]int)
+	if p.curToken.Type == token.LBRACKET {
 		if !p.expectPeek(token.INT) {
 			return nil
 		}
@@ -310,6 +352,7 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 			return nil
 		}
 
+		p.nextToken()                 // Step onto the first token of the base type
 		baseType := p.parseTypeExpr() // Recursively parse the base type
 		if baseType == nil {
 			return nil
@@ -318,24 +361,22 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 	}
 
 	// Case 2: Standard Named Types like 'int', 'string', 'User'
-	if p.peekToken.Type == token.IDENT {
-		p.nextToken() // Step onto the identifier
+	if p.curToken.Type == token.IDENT {
 		name := p.curToken.Literal
 
-		// If followed by '<', it's a compiler-known generic type!
+		// If followed by '<', it's a generic type argument block
 		if p.peekToken.Type == token.LT {
 			p.nextToken() // Step onto '<'
 			return p.parseGenericTypeExpr(name, startPos)
 		}
 
-		// Standard named type (int, string, etc.)
 		return &ast.NamedTypeExpr{
-			Name: &ast.Identifier{Value: name},
+			Name: &ast.Identifier{Value: name, Pos_: startPos},
 			Pos_: startPos,
 		}
 	}
 
-	p.addError(fmt.Sprintf("expected a type, got %s", p.peekToken.Type))
+	p.addError(fmt.Sprintf("expected a type, got %s", p.curToken.Type))
 	return nil
 }
 
@@ -343,8 +384,8 @@ func (p *Parser) parseGenericTypeExpr(name string, pos ast.Position) *ast.Generi
 	args := []ast.TypeExpr{}
 
 	// We arrive here with curToken sitting on '<'
-	// peekToken is the start of the first type argument.
-	// parseTypeExpr will call nextToken() immediately, stepping onto it.
+	p.nextToken() // Step onto the start of the first type argument!
+
 	arg := p.parseTypeExpr()
 	if arg == nil {
 		return nil
@@ -353,9 +394,10 @@ func (p *Parser) parseGenericTypeExpr(name string, pos ast.Position) *ast.Generi
 
 	// Loop for remaining comma-separated type arguments
 	for p.peekToken.Type == token.COMMA {
-		p.nextToken() // Step onto ','. Now peekToken is the start of the NEXT type argument.
+		p.nextToken() // Step onto ','
+		p.nextToken() // Step onto the start of the NEXT type argument!
 
-		arg := p.parseTypeExpr() // This will call nextToken(), stepping onto the type argument.
+		arg := p.parseTypeExpr()
 		if arg == nil {
 			return nil
 		}
@@ -368,10 +410,7 @@ func (p *Parser) parseGenericTypeExpr(name string, pos ast.Position) *ast.Generi
 	}
 
 	return &ast.GenericTypeExpr{
-		Name: &ast.Identifier{
-			Value: name,
-			Pos_:  pos,
-		},
+		Name: &ast.Identifier{Value: name, Pos_: pos},
 		Args: args,
 		Pos_: pos,
 	}

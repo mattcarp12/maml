@@ -1,0 +1,15 @@
+// EXIT_CODE: 1209
+
+fn main() int {
+    mut m := Map<string, int>{}
+    m.put("hello", 50)
+    m.put("world", 60)
+    m.put("hello", 999)
+
+    mut v := Vec<int>{}
+    for mut i := 0; i < 20; i = i + 1 {
+        v.push(i * 10)
+    }
+
+    return m.get("hello") + m.get("world") + v[15]
+}

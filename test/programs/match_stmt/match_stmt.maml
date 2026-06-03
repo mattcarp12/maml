@@ -1,9 +1,0 @@
-fn main() int {
-    x := 10
-    match x {
-        case 0: {return 0}
-        case 10: {return 10}
-        case 20: {return 20}
-        case _: {break}
-    }
-}

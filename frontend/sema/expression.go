@@ -36,12 +36,10 @@ func (a *Analyzer) buildExpr(expr ast.Expr) tast.Expr {
 		return a.buildCallExpr(e)
 	case *ast.MethodCallExpr:
 		return a.buildMethodCallExpr(e)
-	case *ast.StructLiteral:
-		return a.buildStructLiteral(e)
+	case *ast.CompositeLiteral:
+		return a.buildCompositeLiteral(e)
 	case *ast.FieldAccess:
 		return a.buildFieldAccess(e)
-	case *ast.ArrayLiteral:
-		return a.buildArrayLiteral(e)
 	case *ast.IndexExpr:
 		return a.buildIndexExpr(e)
 	case *ast.SliceExpr:
@@ -283,103 +281,113 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 	}
 }
 
-func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.MethodCallExpr {
-	objNode := a.buildExpr(e.Object)
-	objType := tast.TypeOf(objNode)
-	methodName := e.Method.Value
+func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.CallExpr {
+	// 1. Resolve the receiver expression and its type
+	tastObject := a.buildExpr(e.Object)
+	objType := tast.TypeOf(tastObject)
 
-	var resultType types.Type = types.UnknownType{}
-	var expectedParams []types.Type
-	mutating := false
-
-	// 1. Resolve Method Signature based on the Object's Type
-	switch ty := objType.(type) {
-	case types.MapType:
-		switch methodName {
-		case "put":
-			expectedParams = []types.Type{ty.Key, ty.Value}
-			resultType = types.UnitType{}
-			mutating = true
-		case "get":
-			expectedParams = []types.Type{ty.Key}
-			resultType = ty.Value // Returns V. (If you add Option later, this would return Option<V>)
-		case "remove":
-			expectedParams = []types.Type{ty.Key}
-			resultType = types.UnitType{}
-			mutating = true
-		default:
-			a.errorf(e.Method.Pos(), "method '%s' does not exist on type '%s'", methodName, objType.String())
-		}
-	case types.VectorType:
-		switch methodName {
-		case "push":
-			expectedParams = []types.Type{ty.Base}
-			resultType = types.UnitType{}
-			mutating = true
-		case "pop":
-			expectedParams = []types.Type{}
-			resultType = ty.Base
-			mutating = true
-		case "len":
-			expectedParams = []types.Type{}
-			resultType = types.IntType{}
-		default:
-			a.errorf(e.Method.Pos(), "method '%s' does not exist on type '%s'", methodName, objType.String())
-		}
-	default:
-		if !types.IsUnknown(objType) {
-			a.errorf(e.Method.Pos(), "type '%s' has no methods", objType.String())
+	// 2. Delegate to our reflection-free registry to get the synthesized method symbol
+	methodSym, err := a.resolveBuiltinMethod(objType, e.Method.Value)
+	if err != nil {
+		a.errorf(e.Pos_, "%s", err.Error())
+		return &tast.CallExpr{
+			Pos_: e.Pos_,
+			End_: e.End_,
+			Type: types.UnknownType{},
 		}
 	}
 
-	// 2. Enforce Mutability limits!
-	if mutating {
-		rootSym := a.getRootSymbol(objNode)
+	fnType, ok := methodSym.Type.(*types.FunctionType)
+	if !ok {
+		a.errorf(e.Pos_, "internal error: method symbol for '%s' is not a function type", e.Method)
+		return &tast.CallExpr{
+			Pos_: e.Pos_,
+			End_: e.End_,
+			Type: types.UnknownType{},
+		}
+	}
+
+	// 3. Mutability Check on the Receiver
+	// Since the method itself modifies the object, a mutating method treats the receiver
+	// as an implicit 'mut' parameter. The root variable bound to it must be mutable.
+	if methodSym.Mutable {
+		rootSym := a.getRootSymbol(tastObject)
+		// If it's a bound variable/field tracking back to a symbol, ensure it's mutable
 		if rootSym != nil && !rootSym.Mutable {
-			a.errorf(e.Method.Pos(), "cannot call mutating method '%s' on immutable variable '%s'", methodName, rootSym.Name)
+			a.errorf(e.Pos_, "cannot call mutating method '%s' on immutable object '%s'", e.Method, rootSym.Name)
 		}
 	}
 
-	// 3. Arity Check
-	if expectedParams != nil && len(e.Arguments) != len(expectedParams) {
-		a.errorf(e.Pos(), "wrong number of arguments for method '%s': expected %d, got %d",
-			methodName, len(expectedParams), len(e.Arguments))
+	// 4. Type check the explicit arguments against the function signature parameters
+	if len(e.Arguments) != len(fnType.Params) {
+		a.errorf(e.Pos_, "method '%s' expects %d arguments, got %d", e.Method.Value, len(fnType.Params), len(e.Arguments))
 	}
 
-	// 4. Type Check Arguments
 	var tastArgs []tast.CallArg
-	for i, arg := range e.Arguments {
-		argNode := a.buildExpr(arg.Argument)
-		argType := tast.TypeOf(argNode)
+	maxArgs := min(len(fnType.Params), len(e.Arguments))
 
-		if expectedParams != nil && i < len(expectedParams) {
-			if !argType.Equals(expectedParams[i]) && !types.IsUnknown(argType) {
-				a.errorf(arg.Pos_, "argument %d type mismatch: expected '%s', got '%s'",
-					i+1, expectedParams[i].String(), argType.String())
+	for i := 0; i < maxArgs; i++ {
+		argExpr := a.buildExpr(e.Arguments[i].Argument)
+		argType := tast.TypeOf(argExpr)
+		expectedType := fnType.Params[i]
+
+		// Type matching check
+		if !argType.Equals(expectedType) && !types.IsUnknown(argType) {
+			a.errorf(e.Arguments[i].Pos(), "type mismatch in method '%s' argument %d: expected '%s', got '%s'",
+				e.Method.Value, i+1, expectedType.String(), argType.String())
+		}
+
+		// Mutability validation for arguments matching ParamMutBorrow
+		if i < len(fnType.ParamModes) && fnType.ParamModes[i] == types.ParamMutBorrow {
+			argRootSym := a.getRootSymbol(argExpr)
+			if argRootSym != nil && !argRootSym.Mutable {
+				a.errorf(e.Arguments[i].Pos(), "cannot pass immutable variable '%s' as a mutable parameter to method '%s'", argRootSym.Name, e.Method.Value)
 			}
 		}
 
 		tastArgs = append(tastArgs, tast.CallArg{
-			Pos_:     arg.Pos_,
-			Argument: argNode,
-			Mut:      arg.Mut,
-			Own:      arg.Own,
+			Pos_:     e.Arguments[i].Pos(),
+			Argument: argExpr,
+			Mut:      e.Arguments[i].Mut,
+			Own:      e.Arguments[i].Own,
 		})
 	}
 
-	// After:
-	methodSym := a.buildMethodSymbol(methodName, objType, resultType, expectedParams, mutating)
-	return &tast.MethodCallExpr{
+	// Pad any extra unmatched arguments if user provided more than the signature expected
+	for i := len(tastArgs); i < len(e.Arguments); i++ {
+		tastArgs = append(tastArgs, tast.CallArg{
+			Pos_:     e.Arguments[i].Pos(),
+			Argument: a.buildExpr(e.Arguments[i].Argument),
+			Mut:      e.Arguments[i].Mut,
+			Own:      e.Arguments[i].Own,
+		})
+	}
+
+	// 5. Build clean TAST identifier representing the method symbol
+	calleeIdent := &tast.Identifier{
 		Pos_:   e.Pos_,
-		Object: objNode,
-		Method: &tast.Identifier{
-			Pos_:   e.Method.Pos_,
-			Value:  methodSym.Name, // mangled name for codegen, e.g. "maml_vec_push"
-			Type:   methodSym.Type,
-			Symbol: methodSym,
+		Value:  e.Method.Value,
+		Type:   fnType,
+		Symbol: methodSym,
+	}
+
+	// Package up the arguments cleanly, prepending the receiver as the implicit first argument.
+	// This matches downstream expectations where the receiver becomes parameter 0.
+	allArgs := append([]tast.CallArg{
+		{
+			Pos_:     e.Pos_,
+			Argument: tastObject,
+			Mut:      false,
+			Own:      false,
 		},
-		Arguments: tastArgs,
-		Type:      resultType,
+	}, tastArgs...)
+
+	return &tast.CallExpr{
+		Pos_:      e.Pos_,
+		End_:      e.End_,
+		Function:  calleeIdent,
+		Arguments: allArgs,
+		Type:      fnType.Return,
 	}
 }
 
@@ -409,32 +417,48 @@ func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 // Container Expressions
 // =============================================================================
 
-func (a *Analyzer) buildArrayLiteral(e *ast.ArrayLiteral) *tast.ArrayLiteral {
-	if len(e.Elements) == 0 {
-		a.errorf(e.Pos(), "cannot infer type of empty array literal")
+func (a *Analyzer) buildArrayFromComposite(e *ast.CompositeLiteral, ty types.ArrayType) *tast.ArrayLiteral {
+	var elems []tast.Expr
+
+	// 1. Guard against broken or unresolvable base types from previous analyzer errors
+	if ty.Base == nil || types.IsUnknown(ty.Base) {
 		return &tast.ArrayLiteral{Pos_: e.Pos_, Elements: nil, Type: types.UnknownType{}}
 	}
 
-	var elems []tast.Expr
-	var baseType types.Type
+	// 2. Fixed-Size Bounds Checking
+	// Ensure the user hasn't provided more elements than the array can physically hold
+	if len(e.Elements) > ty.Size {
+		a.errorf(e.Pos(), "too many elements in array literal: declared size is %d, got %d", ty.Size, len(e.Elements))
+		return &tast.ArrayLiteral{Pos_: e.Pos_, Elements: nil, Type: types.UnknownType{}}
+	}
 
+	// 3. Element Validation Loop
 	for i, el := range e.Elements {
-		elNode := a.buildExpr(el)
+		// Securely reject key-value colons inside fixed array literals
+		if el.Key != nil {
+			a.errorf(el.Key.Pos(), "array literals cannot have keyed elements")
+			continue
+		}
+
+		elNode := a.buildExpr(el.Value)
 		elType := tast.TypeOf(elNode)
 		elems = append(elems, elNode)
 
-		if i == 0 {
-			baseType = elType
-		} else if !elType.Equals(baseType) && !types.IsUnknown(elType) {
-			a.errorf(el.Pos(), "array element %d type mismatch: expected '%s', got '%s'", i, baseType.String(), elType.String())
+		// Validate every individual item directly against the explicit declared target base type
+		if !elType.Equals(ty.Base) && !types.IsUnknown(elType) {
+			a.errorf(el.Value.Pos(), "array element %d type mismatch: expected '%s', got '%s'", i, ty.Base.String(), elType.String())
 		}
 	}
+
+	// Note on Partial Initialization:
+	// If len(elems) < ty.Size, your code generator should handle filling the remaining
+	// slots up to ty.Size with the base type's default zero-value (e.g., 0, false, null).
 
 	return &tast.ArrayLiteral{
 		Pos_:     e.Pos_,
 		End_:     e.End_,
 		Elements: elems,
-		Type:     types.ArrayType{Base: baseType, Size: len(elems)},
+		Type:     ty, // Safely preserve the exact user-declared ArrayType configuration
 	}
 }
 
@@ -521,107 +545,115 @@ func (a *Analyzer) buildSliceExpr(e *ast.SliceExpr) *tast.SliceExpr {
 // Structs & Variants
 // =============================================================================
 
-func (a *Analyzer) buildStructLiteral(e *ast.StructLiteral) tast.Expr {
-	switch typeNode := e.Type.(type) {
+func (a *Analyzer) buildStructFromComposite(e *ast.CompositeLiteral, ty *types.StructType) tast.Expr {
+	structDef := a.lookupStruct(ty.Name)
+	if structDef == nil {
+		a.errorf(e.TypeExpr.Pos(), "undefined struct type '%s'", ty.Name)
+		return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
+	}
 
-	// CASE 1: Standard Structs and Variants (e.g., User{name: "Alice"})
-	case *ast.Identifier:
-		name := typeNode.Value
-		sym := a.resolve(name)
-		if sym != nil && sym.Kind == types.VariantSymbol {
-			return a.buildStructVariantLiteral(e, sym)
+	var tastFields []tast.StructField
+	seen := make(map[string]bool)
+
+	for _, elem := range e.Elements {
+		ident, ok := elem.Key.(*ast.Identifier)
+		if !ok || elem.Key == nil {
+			a.errorf(elem.Value.Pos(), "struct fields must be keyed with identifiers")
+			continue
 		}
 
-		structDef := a.lookupStruct(name)
-		if structDef == nil {
-			a.errorf(e.Type.Pos(), "undefined struct type '%s'", name)
-			return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
+		fieldName := ident.Value
+		if seen[fieldName] {
+			a.errorf(elem.Pos_, "duplicate field '%s' in struct literal", fieldName)
+			continue
 		}
+		seen[fieldName] = true
 
-		var tastFields []tast.StructField
-		seen := make(map[string]bool)
+		valNode := a.buildExpr(elem.Value)
+		valType := tast.TypeOf(valNode)
 
-		for _, field := range e.Fields {
-			ident, ok := field.Key.(*ast.Identifier)
-			if !ok || field.Key == nil {
-				a.errorf(field.Value.Pos(), "struct fields must be keyed with identifiers")
-				continue
+		expectedIdx := structDef.GetFieldIndex(fieldName)
+		if expectedIdx != -1 {
+			expectedType := structDef.Fields[expectedIdx].Type
+			if !valType.Equals(expectedType) && !types.IsUnknown(valType) {
+				a.errorf(elem.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'", fieldName, expectedType.String(), valType.String())
 			}
+		} else {
+			a.errorf(elem.Key.Pos(), "field '%s' does not exist on struct '%s'", fieldName, structDef.Name)
+		}
 
-			fieldName := ident.Value
-			if seen[fieldName] {
-				a.errorf(field.Pos_, "duplicate field '%s' in struct literal", fieldName)
-				continue
+		tastFields = append(tastFields, tast.StructField{
+			Pos_:  elem.Pos_,
+			End_:  elem.End_,
+			Key:   &tast.Identifier{Pos_: elem.Key.Pos(), Value: fieldName, Type: types.StringType{}},
+			Value: valNode,
+		})
+	}
+
+	if missing := a.getMissingFields(structDef, seen); len(missing) > 0 {
+		a.errorf(e.Pos(), "missing field(s) '%v' in struct literal", missing)
+	}
+
+	return &tast.StructLiteral{
+		Pos_:   e.Pos_,
+		End_:   e.End_,
+		Fields: tastFields,
+		Type:   structDef,
+	}
+
+}
+
+func (a *Analyzer) buildCompositeLiteral(e *ast.CompositeLiteral) tast.Expr {
+	// Check if the type name refers to a variant constructor
+	// rather than a top-level named type. Variant constructors live
+	// in the symbol table, not the type table.
+	if named, ok := e.TypeExpr.(*ast.NamedTypeExpr); ok {
+		if sym := a.resolve(named.Name.Value); sym != nil && sym.Kind == types.VariantSymbol {
+			if sym.SumType != nil {
+				return a.buildStructVariantFromComposite(e, sym.SumType)
 			}
-			seen[fieldName] = true
-
-			valNode := a.buildExpr(field.Value)
-			valType := tast.TypeOf(valNode)
-
-			expectedIdx := structDef.GetFieldIndex(fieldName)
-			if expectedIdx != -1 {
-				expectedType := structDef.Fields[expectedIdx].Type
-				if !valType.Equals(expectedType) && !types.IsUnknown(valType) {
-					a.errorf(field.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'", fieldName, expectedType.String(), valType.String())
-				}
-			} else {
-				a.errorf(field.Key.Pos(), "field '%s' does not exist on struct '%s'", fieldName, structDef.Name)
-			}
-
-			tastFields = append(tastFields, tast.StructField{
-				Pos_:  field.Pos_,
-				End_:  field.End_,
-				Key:   &tast.Identifier{Pos_: field.Key.Pos(), Value: fieldName, Type: types.StringType{}},
-				Value: valNode,
-			})
 		}
+	}
 
-		if missing := a.getMissingFields(structDef, seen); len(missing) > 0 {
-			a.errorf(e.Pos(), "missing field(s) '%v' in struct literal", missing)
-		}
-
-		return &tast.StructLiteral{
-			Pos_:   e.Pos_,
-			End_:   e.End_,
-			Fields: tastFields,
-			Type:   structDef,
-		}
-
-	// CASE 2: Generic Type Expressions (e.g., Map<K,V>{...}, Vec<T>{...})
-	case *ast.GenericTypeExpr:
-		resolvedType := a.resolveBuiltinGeneric(typeNode)
-
-		switch ty := resolvedType.(type) {
-		case types.MapType:
-			return a.buildMapLiteral(e, ty)
-		case types.VectorType:
-			return a.buildVecLiteral(e, ty)
-		default:
-			if !types.IsUnknown(resolvedType) {
-				a.errorf(typeNode.Pos(), "type '%s' does not support literal instantiation", resolvedType.String())
-			}
-			return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
-		}
-
-	// DEFAULT: Invalid left-hand side
+	resolvedType := a.resolveAstType(e.TypeExpr)
+	switch ty := resolvedType.(type) {
+	case *types.StructType:
+		return a.buildStructFromComposite(e, ty)
+	case *types.SumType: // struct-style variant literal, e.g. Circle{radius: 5}
+		return a.buildStructVariantFromComposite(e, ty)
+	case types.ArrayType:
+		return a.buildArrayFromComposite(e, ty)
+	case types.VectorType:
+		return a.buildVecLiteral(e, ty)
+	case types.MapType:
+		return a.buildMapLiteral(e, ty)
 	default:
-		a.errorf(e.Type.Pos(), "invalid type for literal instantiation")
+		if !types.IsUnknown(resolvedType) {
+			a.errorf(e.Pos(), "type '%s' does not support literal instantiation", resolvedType.String())
+		}
 		return &tast.StructLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
 	}
 }
 
-func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Symbol) *tast.VariantLiteral {
-	variant := sym.Variant
-	sumType := sym.SumType
+func (a *Analyzer) buildStructVariantFromComposite(e *ast.CompositeLiteral, ty *types.SumType) *tast.VariantLiteral {
+	var variantName string
+	if named, ok := e.TypeExpr.(*ast.NamedTypeExpr); ok {
+		variantName = named.Name.Value
+	} else {
+		a.errorf(e.TypeExpr.Pos(), "invalid type signature for variant instantiation")
+		return nil
+	}
+	variant := ty.GetVariant(variantName)
+	sumType := ty
 
 	var tastFields []tast.VariantField
 	seen := make(map[string]bool)
 
-	for _, field := range e.Fields {
+	for _, elems := range e.Elements {
 		// 1. Variant fields MUST be keyed with identifiers
-		ident, ok := field.Key.(*ast.Identifier)
-		if !ok || field.Key == nil {
-			a.errorf(field.Value.Pos(), "variant fields must be keyed with identifiers (e.g., field: value)")
+		ident, ok := elems.Key.(*ast.Identifier)
+		if !ok || elems.Key == nil {
+			a.errorf(elems.Value.Pos(), "variant fields must be keyed with identifiers (e.g., field: value)")
 			continue
 		}
 
@@ -629,12 +661,12 @@ func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Sy
 
 		// 2. Prevent duplicate fields
 		if seen[fieldName] {
-			a.errorf(field.Pos_, "duplicate field '%s' in variant literal", fieldName)
+			a.errorf(elems.Pos_, "duplicate field '%s' in variant literal", fieldName)
 			continue
 		}
 		seen[fieldName] = true
 
-		valNode := a.buildExpr(field.Value)
+		valNode := a.buildExpr(elems.Value)
 		valType := tast.TypeOf(valNode)
 
 		// 3. Find the expected type from the variant's definition
@@ -647,9 +679,9 @@ func (a *Analyzer) buildStructVariantLiteral(e *ast.StructLiteral, sym *types.Sy
 		}
 
 		if expectedType == nil {
-			a.errorf(field.Key.Pos(), "field '%s' does not exist on variant '%s'", fieldName, variant.Name)
+			a.errorf(elems.Key.Pos(), "field '%s' does not exist on variant '%s'", fieldName, variant.Name)
 		} else if !valType.Equals(expectedType) && !types.IsUnknown(valType) {
-			a.errorf(field.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'", fieldName, expectedType.String(), valType.String())
+			a.errorf(elems.Value.Pos(), "type mismatch for field '%s': expected '%s', got '%s'", fieldName, expectedType.String(), valType.String())
 		}
 
 		tastFields = append(tastFields, tast.VariantField{

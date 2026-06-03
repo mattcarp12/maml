@@ -1,0 +1,46 @@
+// EXIT_CODE: 481255
+
+type Status = Loading | Active(int) | Error{ code int, msg string }
+type Content = Empty | Text(string) | Image{ width int, height int, url string }
+type Action = MarkRead | Delete | Archive{ folder string }
+
+fn inspect_status(s Status) int {
+    return match s {
+        case Loading: { => 1 }
+        case Active(level): { => level * 10 }
+        case Error{code: c}: { => c }
+    }
+}
+
+fn handle_content(c Content) int {
+    return match c {
+        case Empty: { => 0 }
+        case Text(_): { => 100 }
+        case Image{width: w, height: h}: { => w * h }
+    }
+}
+
+fn process_action(act Action) int {
+    return match act {
+        case MarkRead: { => 200 }
+        case Delete: { => 404 }
+        case _: { => 500 }
+    }
+}
+
+fn main() int {
+    s1 := Loading
+    s2 := Active(5)
+    s3 := Error{code: 404, msg: "Not Found"}
+
+    c1 := Empty
+    c2 := Text("Hello")
+    c3 := Image{width: 800, height: 600, url: "x"}
+
+    a1 := MarkRead
+    a2 := Archive{folder: "Inbox"}
+
+    return inspect_status(s1) + inspect_status(s2) + inspect_status(s3) +
+           handle_content(c1) + handle_content(c2) + handle_content(c3) +
+           process_action(a1) + process_action(a2)
+}

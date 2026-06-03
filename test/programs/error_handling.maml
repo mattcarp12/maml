@@ -1,0 +1,28 @@
+// EXIT_CODE: 28
+
+fn divide(a int, b int) Option<int> {
+    return if (b == 0) { => None } else { => Some(a / b) }
+}
+
+fn validate_age(age int) Result<int, string> {
+    return if (age < 0) {
+        => Err("negative")
+    } else if (age < 18) {
+        => Err("underage")
+    } else {
+        => Ok(age)
+    }
+}
+
+fn main() int {
+    r1 := match divide(100, 10) {
+        case Some(v): { => match divide(v, 2) { case Some(x): { => x } case _: { => 0 }} }
+        case _: { => 0 }
+    }
+
+    v1 := match validate_age(20) { case Ok(x): { => x } case _: { => 0 } }
+    v2 := match validate_age(15) { case Ok(x): { => x } case _: { => 1 } }
+    v3 := match validate_age(-5) { case Ok(x): { => x } case _: { => 2 } }
+
+    return r1 + v1 + v2 + v3
+}

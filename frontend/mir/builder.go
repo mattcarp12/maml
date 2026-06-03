@@ -1,44 +1,47 @@
 package mir
 
 import (
-	"github.com/mattcarp12/maml/frontend/tast"
+	"fmt"
+
+	"github.com/mattcarp12/maml/frontend/hir"
 
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
-// =============================================================================
-// State Management
-// =============================================================================
+// ==========================================================================
+// MIR Program and Builder
+// ==========================================================================
 
-type LoopTracker struct {
-	Header BlockID
-	Exit   BlockID
+type Function struct {
+	Name       string
+	Params     []*hir.Param
+	ReturnType types.Type
+	IsAsync    bool
+	Graph      *Graph
 }
 
-type Builder struct {
-	graph     *Graph
-	nextID    BlockID
-	loops     []LoopTracker
-	tempCount int
+type Program struct {
+	TypeDecls []*hir.TypeDecl
+	Functions []Function
 }
 
 // BuildProgram translates an entire HIR program into a flattened MIR program.
-func BuildProgram(hirProg *tast.Program) *Program {
+func BuildProgram(hirProg *hir.Program) *Program {
 	if hirProg == nil {
 		return nil
 	}
 
 	mirProg := &Program{
-		TypeDecls: make([]*tast.TypeDecl, 0),
+		TypeDecls: make([]*hir.TypeDecl, 0),
 		Functions: make([]Function, 0),
 	}
 
 	for _, decl := range hirProg.Decls {
 		switch d := decl.(type) {
-		case *tast.TypeDecl:
+		case *hir.TypeDecl:
 			mirProg.TypeDecls = append(mirProg.TypeDecls, d)
 
-		case *tast.FnDecl:
+		case *hir.FnDecl:
 			// Generate the CFG for the function body
 			graph := buildFn(d)
 
@@ -56,10 +59,39 @@ func BuildProgram(hirProg *tast.Program) *Program {
 	return mirProg
 }
 
+// =============================================================================
+// State Management
+// =============================================================================
+
+type LoopTracker struct {
+	Header BlockID
+	Exit   BlockID
+}
+
+type Builder struct {
+	graph     *Graph
+	nextID    BlockID
+	loops     []LoopTracker
+	tempCount int
+	symNames  map[*types.Symbol]string
+	nameFreq  map[string]int
+}
+
 // buildFn translates a hierarchical HIR function into a flat MIR Control Flow Graph.
-func buildFn(fn *tast.FnDecl) *Graph {
+func buildFn(fn *hir.FnDecl) *Graph {
 	b := &Builder{
-		graph: NewGraph(),
+		graph:    NewGraph(),
+		symNames: make(map[*types.Symbol]string),
+		nameFreq: make(map[string]int),
+	}
+
+	// Register function parameters so they keep their original names
+	// and trigger suffixes only on local variables that try to shadow them.
+	for _, p := range fn.Params {
+		if p.Symbol != nil {
+			b.nameFreq[p.Name] = 1
+			b.symNames[p.Symbol] = p.Name
+		}
 	}
 
 	entry := b.newBlock()
@@ -99,7 +131,7 @@ func (b *Builder) newBlock() *BasicBlock {
 // Traversal and Flattening
 // =============================================================================
 
-func (b *Builder) buildBlockStmt(body *tast.BlockStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildBlockStmt(body *hir.BlockStmt, current *BasicBlock) *BasicBlock {
 	if body == nil {
 		return current
 	}
@@ -114,127 +146,129 @@ func (b *Builder) buildBlockStmt(body *tast.BlockStmt, current *BasicBlock) *Bas
 	return current
 }
 
-func (b *Builder) buildStmt(stmt tast.Stmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
 	switch s := stmt.(type) {
-	case *tast.DeclareStmt:
+	case *hir.DeclareStmt:
 		current = b.buildDeclareStmt(s, current)
 		return current
-	case *tast.AssignStmt:
+	case *hir.AssignStmt:
 		return b.buildAssignStmt(s, current)
-	case *tast.ExprStmt:
+	case *hir.ExprStmt:
 		_, current = b.flattenExpr(s.Value, current)
 		return current
-	case *tast.ReturnStmt:
+	case *hir.ReturnStmt:
 		return b.buildReturnStmt(s, current)
-	case *tast.ForStmt:
-		return b.buildForStmt(s, current)
-	case *tast.BreakStmt:
+	case *hir.LoopStmt:
+		return b.buildLoopStmt(s, current)
+	case *hir.BreakStmt:
 		if len(b.loops) == 0 {
-			// Parser/Sema guarantees we only see breaks inside loops, but guard for safety.
 			return current
 		}
 		activeLoop := b.loops[len(b.loops)-1]
 		current.Terminator = &JumpTerminator{Target: activeLoop.Exit}
-		// Return nil because any statements following a break are dead code
 		return nil
-	case *tast.ContinueStmt:
+	case *hir.ContinueStmt:
 		if len(b.loops) == 0 {
 			return current
 		}
 		activeLoop := b.loops[len(b.loops)-1]
 		current.Terminator = &JumpTerminator{Target: activeLoop.Header}
-		// Return nil because any statements following a continue are dead code
 		return nil
-	case *tast.MapInsertStmt:
+	case *hir.MapInsertStmt:
 		return b.buildMapInsertStmt(s, current)
+	case *hir.VecWriteStmt:
+		return b.buildVecWriteStmt(s, current)
 	}
 	return current
 }
 
-func (b *Builder) buildReturnStmt(stmt *tast.ReturnStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildReturnStmt(stmt *hir.ReturnStmt, current *BasicBlock) *BasicBlock {
+	var flatRet hir.Operand = nil
 	if stmt.Value != nil {
-		var flatRet tast.Operand
 		flatRet, current = b.flattenExpr(stmt.Value, current)
-
-		// Check if the return value is a UnitType
-		isUnit := false
-		if ident, ok := flatRet.(*tast.Identifier); ok {
+		if ident, ok := flatRet.(*hir.Identifier); ok {
 			if _, isU := ident.Type.(types.UnitType); isU {
-				isUnit = true
+				flatRet = nil
 			}
 		}
-
-		// Only store the evaluated return value if it's not unit
-		if !isUnit {
-			current.Statements = append(current.Statements, &AssignInst{Dst: "_ret", RValue: flatRet})
-		}
 	}
-
-	current.Terminator = &ReturnTerminator{}
+	current.Terminator = &ReturnTerminator{Value: flatRet}
 	return nil
 }
 
-func (b *Builder) buildForStmt(stmt *tast.ForStmt, current *BasicBlock) *BasicBlock {
-	// Init is now always outside (in a surrounding block)
-	if stmt.Init != nil {
-		current = b.buildStmt(stmt.Init, current)
-	}
-
+func (b *Builder) buildLoopStmt(stmt *hir.LoopStmt, current *BasicBlock) *BasicBlock {
 	condBlock := b.newBlock()
 	bodyBlock := b.newBlock()
+	postBlock := b.newBlock() // NEW: Dedicated block for the increment step
 	exitBlock := b.newBlock()
 
+	// 1. Enter loop by jumping to condition
 	current.Terminator = &JumpTerminator{Target: condBlock.ID}
 
-	var flatCond tast.Operand
+	// 2. Evaluate Condition
+	var flatCond hir.Operand
 	condEvalBlock := condBlock
 	if stmt.Condition != nil {
 		flatCond, condEvalBlock = b.flattenExpr(stmt.Condition, condBlock)
 	} else {
-		flatCond = &tast.BoolLiteral{Value: true, Type: types.BoolType{}}
+		flatCond = &hir.BoolLiteral{Value: true, Type: types.BoolType{}}
 	}
 
 	condEvalBlock.Terminator = &BranchTerminator{
-		Condition:   getConditionString(flatCond),
+		Condition:   flatCond,
 		TrueTarget:  bodyBlock.ID,
 		FalseTarget: exitBlock.ID,
 	}
 
-	b.loops = append(b.loops, LoopTracker{Header: condBlock.ID, Exit: exitBlock.ID})
+	// 3. Track loop. Header is the 'continue' target (now postBlock!). Exit is the 'break' target.
+	b.loops = append(b.loops, LoopTracker{Header: postBlock.ID, Exit: exitBlock.ID})
 
+	// 4. Build Body
 	bodyEndBlock := b.buildBlockStmt(stmt.Body, bodyBlock)
-
-	// Post is now inside the body (from desugar)
-	if bodyEndBlock.Terminator == nil {
-		bodyEndBlock.Terminator = &JumpTerminator{Target: condBlock.ID}
+	if bodyEndBlock != nil && bodyEndBlock.Terminator == nil {
+		bodyEndBlock.Terminator = &JumpTerminator{Target: postBlock.ID}
 	}
 
+	// 5. Build Post step (the i++)
+	postEndBlock := postBlock
+	if stmt.Post != nil {
+		postEndBlock = b.buildStmt(stmt.Post, postBlock)
+	}
+	if postEndBlock != nil && postEndBlock.Terminator == nil {
+		postEndBlock.Terminator = &JumpTerminator{Target: condBlock.ID}
+	}
+
+	// 6. Pop loop tracker
 	b.loops = b.loops[:len(b.loops)-1]
+
 	return exitBlock
 }
 
-// buildDeclareStmt translates a local variable declaration into explicit memory ops.
-func (b *Builder) buildDeclareStmt(stmt *tast.DeclareStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildDeclareStmt(stmt *hir.DeclareStmt, current *BasicBlock) *BasicBlock {
 	flatRHS, current := b.flattenExpr(stmt.Value, current)
-	b.emitMemoryTransfer(stmt.Symbol.Name, flatRHS, stmt.Symbol, current)
+
+	// Get the collision-free unique name for this specific variable instance
+	uniqueName := b.getSymbolName(stmt.Symbol)
+
+	b.emitMemoryTransfer(uniqueName, flatRHS, stmt.Symbol, current)
 	return current
 }
 
 // buildAssignStmt translates a reassignment into explicit memory ops without re-allocating.
-func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *BasicBlock {
 	// Guard against uninitialized or partially empty statements
 	if stmt == nil || stmt.LValue == nil || stmt.RValue == nil {
 		return current
 	}
 
 	// Intercept array/slice index mutations before they are flattened into read evaluations
-	if idx, ok := stmt.LValue.(*tast.IndexExpr); ok {
+	if idx, ok := stmt.LValue.(*hir.IndexExpr); ok {
 		flatTarget, current := b.flattenExpr(idx.Left, current)
 		flatIdx, current := b.flattenExpr(idx.Index, current)
 		flatRHS, current := b.flattenExpr(stmt.RValue, current)
 
 		targetName := ""
-		if id, isId := flatTarget.(*tast.Identifier); isId {
+		if id, isId := flatTarget.(*hir.Identifier); isId {
 			targetName = id.Value
 		} else {
 			targetName = flatTarget.String()
@@ -242,7 +276,7 @@ func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *B
 
 		current.Statements = append(current.Statements, &IndexAssignInst{
 			Target:     targetName,
-			TargetType: flatTarget.(*tast.Identifier).Type,
+			TargetType: flatTarget.(*hir.Identifier).Type,
 			Index:      flatIdx,
 			Value:      flatRHS,
 		})
@@ -257,7 +291,7 @@ func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *B
 
 	// 1. Extract the true variable name and its type safely
 	if flatLHS != nil {
-		if id, ok := flatLHS.(*tast.Identifier); ok && id != nil {
+		if id, ok := flatLHS.(*hir.Identifier); ok && id != nil {
 			dstName = id.Value
 			dstType = id.Type // Preserves exact structural type (Struct, SumType, etc.)
 		} else {
@@ -272,7 +306,7 @@ func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *B
 	}
 
 	// 2. ABI Routing: Perform direct transfers instead of wrapping in a TempDeclInst
-	if ident, isIdent := flatRHS.(*tast.Identifier); isIdent && ident != nil && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
+	if ident, isIdent := flatRHS.(*hir.Identifier); isIdent && ident != nil && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
 		if dstType != nil && dstType.IsReferenceType() {
 			// Affine transfer of ownership
 			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: ident.Value})
@@ -288,12 +322,12 @@ func (b *Builder) buildAssignStmt(stmt *tast.AssignStmt, current *BasicBlock) *B
 	return current
 }
 
-func (b *Builder) buildMapInsertStmt(stmt *tast.MapInsertStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBlock) *BasicBlock {
 	if stmt == nil {
 		return current
 	}
 
-	var flatMap, flatVal tast.Operand
+	var flatMap, flatVal hir.Operand
 	flatMap, current = b.flattenExpr(stmt.Map, current)
 	flatVal, current = b.flattenExpr(stmt.Value, current)
 
@@ -305,7 +339,7 @@ func (b *Builder) buildMapInsertStmt(stmt *tast.MapInsertStmt, current *BasicBlo
 	// EMIT EXACTLY 5 ARGUMENTS FOR ZIG'S maml_map_put
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      putTmp,
-		Function: &tast.Identifier{Value: "maml_map_put", Type: types.UnknownType{}},
+		Function: &hir.Identifier{Value: "maml_map_put", Type: types.UnknownType{}},
 		Arguments: []MIRCallArg{
 			{Argument: flatMap, Mut: true},
 			{Argument: hashVal},
@@ -319,7 +353,41 @@ func (b *Builder) buildMapInsertStmt(stmt *tast.MapInsertStmt, current *BasicBlo
 	return current
 }
 
-func (b *Builder) emitMemoryTransfer(dst string, flatRHS tast.Operand, dstSym *types.Symbol, current *BasicBlock) {
+func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock) *BasicBlock {
+	if stmt == nil {
+		return current
+	}
+
+	var flatVec, flatIdx, flatVal hir.Operand
+
+	// 1. Flatten the receiver, index, and value into atomic operands
+	flatVec, current = b.flattenExpr(stmt.Vec, current)
+	flatIdx, current = b.flattenExpr(stmt.Index, current)
+	flatVal, current = b.flattenExpr(stmt.Value, current)
+
+	// 2. Create a temporary for the unit return value
+	setTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{
+		Name: setTmp,
+		Type: types.UnitType{},
+	})
+
+	// 3. Emit the runtime call to mutate the vector in-place
+	current.Statements = append(current.Statements, &CallInst{
+		Dst:      setTmp,
+		Function: &hir.Identifier{Value: "maml_vec_set", Type: types.UnknownType{}},
+		Arguments: []MIRCallArg{
+			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
+			{Argument: flatIdx},            // The integer index
+			{Argument: flatVal},            // The value to write
+		},
+		Type: types.UnitType{},
+	})
+
+	return current
+}
+
+func (b *Builder) emitMemoryTransfer(dst string, flatRHS hir.Operand, dstSym *types.Symbol, current *BasicBlock) {
 	// Emit an allocation-agnostic temporary declaration
 	var t types.Type = types.UnknownType{}
 	if dstSym != nil {
@@ -331,7 +399,7 @@ func (b *Builder) emitMemoryTransfer(dst string, flatRHS tast.Operand, dstSym *t
 		Type: t,
 	})
 
-	if ident, isIdent := flatRHS.(*tast.Identifier); isIdent && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
+	if ident, isIdent := flatRHS.(*hir.Identifier); isIdent && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
 		if t.IsReferenceType() {
 			current.Statements = append(current.Statements, &MoveInst{Dst: dst, Src: ident.Value})
 		} else {
@@ -340,4 +408,29 @@ func (b *Builder) emitMemoryTransfer(dst string, flatRHS tast.Operand, dstSym *t
 	} else {
 		current.Statements = append(current.Statements, &AssignInst{Dst: dst, RValue: flatRHS})
 	}
+}
+
+// getSymbolName guarantees a collision-free variable name for the MIR environment.
+func (b *Builder) getSymbolName(sym *types.Symbol) string {
+	if sym == nil {
+		return ""
+	}
+	// If we have already mapped this specific symbol, return its unique name
+	if name, exists := b.symNames[sym]; exists {
+		return name
+	}
+
+	// Otherwise, it's a new declaration. Generate a unique name if shadowed.
+	count := b.nameFreq[sym.Name]
+	b.nameFreq[sym.Name] = count + 1
+
+	var uniqueName string
+	if count == 0 {
+		uniqueName = sym.Name
+	} else {
+		uniqueName = fmt.Sprintf("%s_%d", sym.Name, count)
+	}
+
+	b.symNames[sym] = uniqueName
+	return uniqueName
 }

@@ -132,42 +132,25 @@ func (sl *StringLiteral) End() Position {
 func (sl *StringLiteral) String() string {
 	return fmt.Sprintf(`"%s"`, sl.Value)
 }
-func (sl *StringLiteral) exprNode()     {}
-func (sl *StructLiteral) Pos() Position { return sl.Pos_ }
-func (sl *StructLiteral) End() Position { return sl.End_ }
-func (sl *StructLiteral) String() string {
-	var fields []string
-	for _, f := range sl.Fields {
-		if f.Key != nil {
-			// Keyed field (e.g., Structs or Maps: `x: 10` or `"hello": 20`)
-			fields = append(fields, fmt.Sprintf("%s: %s", f.Key.String(), f.Value.String()))
-		} else {
-			// Unkeyed field (e.g., Vectors: `1`)
-			fields = append(fields, f.Value.String())
-		}
+func (sl *StringLiteral) exprNode() {}
+
+func (ce *CompositeElement) String() string {
+	if ce.Key != nil {
+		return fmt.Sprintf("%s: %s", ce.Key.String(), ce.Value.String())
 	}
-	return fmt.Sprintf("%s{%s}", sl.Type.String(), strings.Join(fields, ", "))
+	return ce.Value.String()
 }
-func (sl *StructLiteral) exprNode()    {}
-func (sf *StructField) Pos() Position  { return sf.Pos_ }
-func (al *ArrayLiteral) Pos() Position { return al.Pos_ }
-func (al *ArrayLiteral) End() Position {
-	if len(al.Elements) == 0 {
-		return Position{
-			Line: al.Pos_.Line,
-			Col:  al.Pos_.Col + 2,
-		}
-	}
-	return al.Elements[len(al.Elements)-1].End()
-}
-func (al *ArrayLiteral) String() string {
+func (cl *CompositeLiteral) Pos() Position { return cl.Pos_ }
+func (cl *CompositeLiteral) End() Position { return cl.End_ }
+func (cl *CompositeLiteral) String() string {
 	var elems []string
-	for _, e := range al.Elements {
+	for _, e := range cl.Elements {
 		elems = append(elems, e.String())
 	}
-	return fmt.Sprintf("[%s]", strings.Join(elems, ", "))
+	return fmt.Sprintf("%s{%s}", cl.TypeExpr.String(), strings.Join(elems, ", "))
 }
-func (al *ArrayLiteral) exprNode() {}
+func (cl *CompositeLiteral) exprNode() {}
+
 func (ce *CallExpr) Pos() Position { return ce.Pos_ }
 func (ce *CallExpr) End() Position {
 	if len(ce.Arguments) == 0 {
@@ -327,47 +310,39 @@ func (w *WildcardPattern) String() string {
 	return "_"
 }
 func (w *WildcardPattern) patternNode() {}
+func (ip *IdentifierPattern) Pos() Position { return ip.Pos_ }
+func (ip *IdentifierPattern) End() Position {
+	return Position{
+		Line: ip.Pos_.Line,
+		Col:  ip.Pos_.Col + len(ip.Name),
+	}
+}
+func (ip *IdentifierPattern) String() string {
+	return ip.Name
+}
+func (ip *IdentifierPattern) patternNode() {}
 func (l *LiteralPattern) Pos() Position { return l.Pos_ }
 func (l *LiteralPattern) End() Position { return l.End_ }
 func (l *LiteralPattern) String() string {
 	return l.Value.String()
 }
 func (l *LiteralPattern) patternNode()  {}
-func (v *VariantPattern) Pos() Position { return v.Pos_ }
-func (v *VariantPattern) End() Position { return v.End_ }
-func (v *VariantPattern) String() string {
-	var out bytes.Buffer
-	out.WriteString(v.Name)
-	if len(v.TupleBindings) > 0 {
-		var bindings []string
-		for _, f := range v.TupleBindings {
-			bindings = append(bindings, f.String())
+
+func (cp *CompositePattern) Pos() Position { return cp.Pos_ }
+func (cp *CompositePattern) End() Position { return cp.End_ }
+func (cp *CompositePattern) String() string {
+	var elems []string
+	for _, e := range cp.Elements {
+		if e.Key != nil {
+			elems = append(elems, fmt.Sprintf("%s: %s", e.Key.String(), e.Pattern.String()))
+		} else {
+			elems = append(elems, e.Pattern.String())
 		}
-		out.WriteString(" ( ")
-		out.WriteString(strings.Join(bindings, ", "))
-		out.WriteString(" )")
 	}
-	if len(v.Fields) > 0 {
-		var fields []string
-		for _, f := range v.Fields {
-			fields = append(fields, f.String())
-		}
-		out.WriteString(" { ")
-		out.WriteString(strings.Join(fields, ", "))
-		out.WriteString(" }")
-	}
-	return out.String()
+	return fmt.Sprintf("%s{%s}", cp.TypeExpr.String(), strings.Join(elems, ", "))
 }
-func (v *VariantPattern) patternNode() {}
-func (v *VariantPatternField) String() string {
-	if v.Binding == nil {
-		return v.Field
-	}
-	if v.Field == v.Binding.Value {
-		return v.Field
-	}
-	return fmt.Sprintf("%s: %s", v.Field, v.Binding.String())
-}
+func (cp *CompositePattern) patternNode() {}
+
 
 func (b *BlockStmt) Pos() Position { return b.Pos_ }
 func (b *BlockStmt) End() Position { return b.End_ }
@@ -486,13 +461,7 @@ func (a *ArrayTypeExpr) String() string {
 		a.Base.String(),
 	)
 }
-func (a *ArrayTypeExpr) typeNode()     {}
-func (s *SliceTypeExpr) Pos() Position { return s.Pos_ }
-func (s *SliceTypeExpr) End() Position { return s.End_ }
-func (s *SliceTypeExpr) String() string {
-	return fmt.Sprintf("[]%s", s.Base.String())
-}
-func (s *SliceTypeExpr) typeNode()      {}
+func (a *ArrayTypeExpr) typeNode()      {}
 func (s *StructTypeExpr) Pos() Position { return s.Pos_ }
 func (s *StructTypeExpr) End() Position { return s.End_ }
 func (s *StructTypeExpr) String() string {
@@ -554,6 +523,14 @@ func (v *VariantTypeExpr) String() string {
 	}
 	return out.String()
 }
+
+func (tew *TypeExprWrapper) Pos() Position { return tew.Pos_ }
+func (tew *TypeExprWrapper) End() Position { return tew.TypeExpr.End() }
+func (tew *TypeExprWrapper) String() string {
+	return tew.TypeExpr.String()
+}
+func (tew *TypeExprWrapper) exprNode() {}
+
 func (g *GenericTypeExpr) Pos() Position { return g.Pos_ }
 func (g *GenericTypeExpr) End() Position { return g.End_ }
 func (g *GenericTypeExpr) String() string {
@@ -567,4 +544,3 @@ func (g *GenericTypeExpr) String() string {
 	)
 }
 func (g *GenericTypeExpr) typeNode() {}
-func (g *GenericTypeExpr) exprNode() {}

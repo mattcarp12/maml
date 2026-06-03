@@ -1,0 +1,31 @@
+// EXIT_CODE: 48
+
+type Point = { x int, y int }
+type Rect = { w int, h int }
+type Nested = { p Point, r Rect }
+
+fn translate(p Point, dx int, dy int) Point {
+    return Point{ x: p.x + dx, y: p.y + dy }
+}
+
+fn area(r Rect) int {
+    return r.w * r.h
+}
+
+fn make_nested() Nested {
+    p := Point{x: 1, y: 2}
+    r := Rect{w: 5, h: 6}
+    return Nested{p: p, r: r}
+}
+
+fn main() int {
+    p := Point{x: 1, y: 2}
+    q := translate(p, 3, 4)
+
+    box := Rect{w: 5, h: 6}
+    a := area(box)
+
+    n := make_nested()
+
+    return q.x + a + n.p.x + n.p.y + n.r.w + n.r.h
+}

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/desugar"
+	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/parser"
@@ -52,14 +52,14 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	// Desugar pass (Modify in-place)
 	// --------------------------------------------------------------------------
 
-	desugarer := desugar.New()
-	desugarer.DesugarProgram(tastProgram)
+	hirLowerer := hir.NewLowerer()
+	hirProgram := hirLowerer.LowerProgram(tastProgram)
 
 	// --------------------------------------------------------------------------
 	// MIR Lowering -> MIR
 	// --------------------------------------------------------------------------
 
-	mirProgram := mir.BuildProgram(tastProgram)
+	mirProgram := mir.BuildProgram(hirProgram)
 
 	// ==========================================================================
 	// COMMENT OUT UNTIL CODEGEN IS WORKING

@@ -195,27 +195,18 @@ type StringLiteral struct {
 	Value string   `json:"value"`
 }
 
-type StructField struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Key   Expr `json:"key"`
-	Value Expr `json:"value"`
+type CompositeElement struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Key   Expr     `json:"key,omitempty"` // Optional for struct/map literals
+	Value Expr     `json:"value"`
 }
 
-type StructLiteral struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Type   Expr          `json:"struct_type"`
-	Fields []StructField `json:"fields"`
-}
-
-type ArrayLiteral struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Elements []Expr `json:"elements"`
+type CompositeLiteral struct {
+	Pos_     Position           `json:"-"`
+	End_     Position           `json:"-"`
+	TypeExpr TypeExpr           `json:"type"`
+	Elements []CompositeElement `json:"elements"`
 }
 
 type CallExpr struct {
@@ -229,7 +220,8 @@ type MethodCallExpr struct {
 	Object    Expr        // e.g., `a.b` in `a.b.foo()`
 	Method    *Identifier // e.g., `foo`
 	Arguments []CallArg
-	Pos_      Position
+	Pos_      Position `json:"-"`
+	End_      Position `json:"-"`
 }
 
 type CallArg struct {
@@ -305,30 +297,45 @@ type MatchArm struct {
 type WildcardPattern struct {
 	Pos_ Position `json:"-"`
 }
+
+type IdentifierPattern struct {
+    Pos_ Position `json:"-"`
+    Name string   `json:"name"`
+}
+
+
+
+
 type LiteralPattern struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 
 	Value Expr `json:"value"`
 }
-type VariantPatternField struct {
-	Field   string      `json:"field"`
-	Binding *Identifier `json:"binding"`
+
+type CompositePatternElement struct {
+	Pos_    Position `json:"-"`
+	End_    Position `json:"-"`
+	Key     Expr     `json:"key,omitempty"` // Optional: field name for struct patterns, nil for tuples
+	Pattern Pattern  `json:"pattern"`       // The variable binding or a sub-pattern
 }
 
-type VariantPattern struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
-	Name          string                `json:"name"`
-	TupleBindings []*Identifier         `json:"binding,omitempty"`
-	Fields        []VariantPatternField `json:"fields,omitempty"`
+type CompositePattern struct {
+	Pos_     Position                  `json:"-"`
+	End_     Position                  `json:"-"`
+	TypeExpr TypeExpr                  `json:"type"` // Holds the Name (e.g., NamedTypeExpr for 'Circle')
+	Elements []CompositePatternElement `json:"elements"`
 }
 
 // ==========================================================================
 // Types
 // ==========================================================================
 
+// TypeExprWrapper is used for parsing literals
+type TypeExprWrapper struct {
+	Pos_     Position
+	TypeExpr TypeExpr
+}
 
 type NamedTypeExpr struct {
 	Pos_ Position `json:"-"`
@@ -342,13 +349,6 @@ type ArrayTypeExpr struct {
 	End_ Position `json:"-"`
 
 	Size int      `json:"size"`
-	Base TypeExpr `json:"base"`
-}
-
-type SliceTypeExpr struct {
-	Pos_ Position `json:"-"`
-	End_ Position `json:"-"`
-
 	Base TypeExpr `json:"base"`
 }
 

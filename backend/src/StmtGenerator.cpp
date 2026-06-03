@@ -756,6 +756,15 @@ void compileStatement(CodegenContext &ctx, const nlohmann::json &stmt) {
     llvm::FunctionType *FT = nullptr;
     if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
       FT = F->getFunctionType();
+    } else {
+      // CRITICAL FIX: Callee is a dynamic function pointer (LoadInst).
+      // We must reconstruct the signature from the MIR types to prevent LLVM crashing!
+      llvm::Type *expectedRetTy = llvmTypeFor(ctx, stmt["type"]);
+      std::vector<llvm::Type *> expectedArgTys;
+      for (const auto &argWrapper : stmt["arguments"]) {
+        expectedArgTys.push_back(llvmTypeFor(ctx, argWrapper["argument"]["type"]));
+      }
+      FT = llvm::FunctionType::get(expectedRetTy, expectedArgTys, false);
     }
 
     std::vector<llvm::Value *> args;
@@ -833,15 +842,12 @@ void compileTerminator(CodegenContext &ctx, const nlohmann::json &term) {
   std::string_view op = term["op"].get<std::string_view>();
 
   if (op == "ret") {
-    // Look for the dedicated _ret temporary allocated by the frontend
-    if (llvm::Value *retTarget = ctx.resolveSymbol("_ret")) {
-      if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(retTarget)) {
-        llvm::Value *retVal = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
-        ctx.Builder->CreateRet(retVal);
-        return;
-      }
+    if (term.contains("value") && !term["value"].is_null()) {
+      llvm::Value *retVal = evaluateExpression(ctx, term["value"]);
+      ctx.Builder->CreateRet(retVal);
+    } else {
+      ctx.Builder->CreateRetVoid();
     }
-    ctx.Builder->CreateRetVoid();
     return;
   }
 

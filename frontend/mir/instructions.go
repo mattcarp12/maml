@@ -3,7 +3,7 @@ package mir
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -14,34 +14,34 @@ type Instruction interface {
 }
 
 type MIRCallArg struct {
-	Argument tast.Operand
+	Argument hir.Operand
 	Mut      bool
 	Own      bool
 }
 
 type AssignInst struct {
 	Dst    string
-	RValue tast.Operand
+	RValue hir.Operand
 }
 
 type IndexAssignInst struct {
 	Target     string
 	TargetType types.Type
-	Index      tast.Operand
-	Value      tast.Operand
+	Index      hir.Operand
+	Value      hir.Operand
 }
 
 type StructInitInst struct {
 	Dst           string
 	FieldName     string
 	FieldIndex    int
-	Value         tast.Operand
+	Value         hir.Operand
 	VariantLayout []types.Type
 }
 
 type FieldReadInst struct {
 	Dst           string
-	Object        tast.Operand
+	Object        hir.Operand
 	FieldName     string
 	FieldIndex    int
 	Type          types.Type
@@ -51,44 +51,44 @@ type FieldReadInst struct {
 type ArrayInitInst struct {
 	Dst   string
 	Index int
-	Value tast.Operand
+	Value hir.Operand
 }
 
 type SliceInst struct {
 	Dst           string
-	Left          tast.Operand
+	Left          hir.Operand
 	ContainerType types.Type
-	Low           tast.Operand
-	High          tast.Operand
+	Low           hir.Operand
+	High          hir.Operand
 	ResultType    types.Type
 }
 
 type BinaryOpInst struct {
 	Dst      string
 	Operator string
-	Left     tast.Operand
-	Right    tast.Operand
+	Left     hir.Operand
+	Right    hir.Operand
 	Type     types.Type
 }
 
 type UnaryOpInst struct {
 	Dst      string
 	Operator string
-	Operand  tast.Operand
+	Operand  hir.Operand
 	Type     types.Type
 }
 
 type IndexReadInst struct {
 	Dst        string
-	Source     tast.Operand
+	Source     hir.Operand
 	SourceType types.Type
-	Index      tast.Operand
+	Index      hir.Operand
 	Type       types.Type
 }
 
 type CallInst struct {
 	Dst       string
-	Function  tast.Operand
+	Function  hir.Operand
 	Arguments []MIRCallArg // Use the new decoupled struct!
 	Type      types.Type
 }
@@ -97,13 +97,13 @@ type VariantInitInst struct {
 	Dst          string
 	VariantName  string
 	Discriminant int
-	Payloads     []tast.Operand
+	Payloads     []hir.Operand
 	Type         types.Type
 }
 
 type VariantReadInst struct {
 	Dst          string
-	Object       tast.Operand
+	Object       hir.Operand
 	VariantName  string
 	PayloadIndex int
 	Type         types.Type
@@ -111,25 +111,25 @@ type VariantReadInst struct {
 
 type VariantDiscriminantInst struct {
 	Dst    string
-	Object tast.Operand
+	Object hir.Operand
 	Type   types.Type
 }
 
 type CastInst struct {
 	Dst  string
-	Src  tast.Operand
+	Src  hir.Operand
 	Type types.Type
 }
 
 type LoadPtrInst struct {
 	Dst  string
-	Ptr  tast.Operand
+	Ptr  hir.Operand
 	Type types.Type
 }
 
 type StoreInst struct {
 	DstPtr string
-	Value  tast.Operand
+	Value  hir.Operand
 	Type   types.Type
 }
 
@@ -260,6 +260,7 @@ func (i *RefDecInst) String() string { return fmt.Sprintf("ref_dec %s", i.Src) }
 // MutBorrowInst explicitly enforces a temporary lexical exclusivity lock in the MIR.
 type MutBorrowInst struct {
 	Src string
+	Dst string
 }
 
 func (MutBorrowInst) isInstruction()    {}

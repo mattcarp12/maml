@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend"
-	"github.com/mattcarp12/maml/frontend/desugar"
+	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -193,7 +193,7 @@ func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
 }
 
 // DumpAST parses the target file and returns its pretty-printed JSON AST representation.
-func (p *Pipeline) DumpDTAST(srcPath string) ([]byte, error) {
+func (p *Pipeline) DumpHIR(srcPath string) ([]byte, error) {
 	content, err := os.ReadFile(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
@@ -205,10 +205,10 @@ func (p *Pipeline) DumpDTAST(srcPath string) ([]byte, error) {
 		return nil, err
 	}
 
-	desugarer := desugar.New()
-	desugarer.DesugarProgram(tastProgram)
+	hirLowerer := hir.NewLowerer()
+	hirProgram := hirLowerer.LowerProgram(tastProgram)
 
-	jsonBytes, err := json.Marshal(tastProgram)
+	jsonBytes, err := json.Marshal(hirProgram)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
 	}
@@ -290,7 +290,7 @@ func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
 		return fmt.Errorf("failed to dump TAST: %w", err)
 	}
 
-	dtastBytes, err := p.DumpDTAST(srcPath)
+	dtastBytes, err := p.DumpHIR(srcPath)
 	if err != nil {
 		return fmt.Errorf("failed to dump DTAST: %w", err)
 	}

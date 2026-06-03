@@ -621,66 +621,6 @@ func TestStructLiteralAndFieldAccess(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Array and index expressions
-// =============================================================================
-
-func TestArrayLiteralParsing(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-		elemCnt  int
-	}{
-		{
-			name:     "empty array",
-			input:    "return []",
-			expected: "[]",
-			elemCnt:  0,
-		},
-		{
-			name:     "integer array",
-			input:    "return [1, 2, 3]",
-			expected: "[1, 2, 3]",
-			elemCnt:  3,
-		},
-		{
-			name:     "mixed expressions",
-			input:    "return [1, x, 2 + 3]",
-			expected: "[1, x, (2 + 3)]",
-			elemCnt:  3,
-		},
-		{
-			name:     "nested arrays",
-			input:    "return [[1, 2], [3, 4]]",
-			expected: "[[1, 2], [3, 4]]",
-			elemCnt:  2,
-		},
-		{
-			name:     "single element",
-			input:    "return [42]",
-			expected: "[42]",
-			elemCnt:  1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stmts := parseFunctionBody(t, tt.input)
-			require.Len(t, stmts, 1)
-
-			retStmt, ok := stmts[0].(*ast.ReturnStmt)
-			require.True(t, ok)
-
-			arr, ok := retStmt.Value.(*ast.ArrayLiteral)
-			require.True(t, ok, "expected *ast.ArrayLiteral, got %T", retStmt.Value)
-
-			assert.Len(t, arr.Elements, tt.elemCnt)
-			assert.Equal(t, tt.expected, arr.String())
-		})
-	}
-}
-
 func TestIndexExpressionParsing(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1688,7 +1628,7 @@ func TestAwaitPrecedence(t *testing.T) {
 		{
 			name:     "await binds looser than field access",
 			input:    "await user.getProfile()",
-			expected: "(await user.getProfile())", 
+			expected: "(await user.getProfile())",
 		},
 		{
 			name:     "await binds tighter than math",

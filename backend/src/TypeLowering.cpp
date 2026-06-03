@@ -110,11 +110,12 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
       } else {
         // Calculate payload size: Total Size - 4 bytes for the i32 discriminant
         int totalSize = typeJson.value("size", 8);  // Fallback to 8 if missing
+        // Calculate payload size in terms of 8-byte (i64) blocks to guarantee pointer alignment!
         int payloadSize = totalSize > 4 ? totalSize - 4 : 0;
+        int numBlocks = (payloadSize + 7) / 8;  // Round up to nearest 8-byte boundary
 
         llvm::Type *discrimTy = llvm::Type::getInt32Ty(ctx.Context);
-        llvm::Type *payloadTy = llvm::ArrayType::get(llvm::Type::getInt8Ty(ctx.Context), payloadSize);
-
+        llvm::Type *payloadTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(ctx.Context), numBlocks);
         llvm::StructType *st = existingST ? existingST : llvm::StructType::create(ctx.Context, structName);
         st->setBody({discrimTy, payloadTy}, /*isPacked=*/false);
         resultType = st;
