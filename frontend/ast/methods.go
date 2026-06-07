@@ -35,9 +35,6 @@ func (p *Param) String() string {
 	if p.Mut {
 		prefixes = append(prefixes, "mut")
 	}
-	if p.Own {
-		prefixes = append(prefixes, "own")
-	}
 	prefix := ""
 	if len(prefixes) > 0 {
 		prefix = strings.Join(prefixes, " ") + " "
@@ -169,29 +166,8 @@ func (ce *CallExpr) String() string {
 		strings.Join(args, ", "),
 	)
 }
-func (ce *CallExpr) exprNode()            {}
-func (mce *MethodCallExpr) Pos() Position { return mce.Pos_ }
-func (mce *MethodCallExpr) End() Position {
-	if len(mce.Arguments) == 0 {
-		return mce.Method.End()
-	}
-	return mce.Arguments[len(mce.Arguments)-1].End()
-}
-func (mce *MethodCallExpr) String() string {
-	var args []string
-	for _, a := range mce.Arguments {
-		prefix := ""
-		if a.Mut {
-			prefix = "mut "
-		} else if a.Own {
-			prefix = "own "
-		}
-		args = append(args, prefix+a.Argument.String())
-	}
-	return fmt.Sprintf("%s.%s(%s)", mce.Object.String(), mce.Method, strings.Join(args, ", "))
-}
-func (mce *MethodCallExpr) exprNode() {}
-func (ca *CallArg) Pos() Position     { return ca.Pos_ }
+func (ce *CallExpr) exprNode()    {}
+func (ca *CallArg) Pos() Position { return ca.Pos_ }
 func (ca *CallArg) End() Position {
 	if ca.Argument == nil {
 		return ca.Pos_
@@ -309,7 +285,7 @@ func (w *WildcardPattern) End() Position {
 func (w *WildcardPattern) String() string {
 	return "_"
 }
-func (w *WildcardPattern) patternNode() {}
+func (w *WildcardPattern) patternNode()     {}
 func (ip *IdentifierPattern) Pos() Position { return ip.Pos_ }
 func (ip *IdentifierPattern) End() Position {
 	return Position{
@@ -321,12 +297,12 @@ func (ip *IdentifierPattern) String() string {
 	return ip.Name
 }
 func (ip *IdentifierPattern) patternNode() {}
-func (l *LiteralPattern) Pos() Position { return l.Pos_ }
-func (l *LiteralPattern) End() Position { return l.End_ }
+func (l *LiteralPattern) Pos() Position    { return l.Pos_ }
+func (l *LiteralPattern) End() Position    { return l.End_ }
 func (l *LiteralPattern) String() string {
 	return l.Value.String()
 }
-func (l *LiteralPattern) patternNode()  {}
+func (l *LiteralPattern) patternNode() {}
 
 func (cp *CompositePattern) Pos() Position { return cp.Pos_ }
 func (cp *CompositePattern) End() Position { return cp.End_ }
@@ -342,7 +318,6 @@ func (cp *CompositePattern) String() string {
 	return fmt.Sprintf("%s{%s}", cp.TypeExpr.String(), strings.Join(elems, ", "))
 }
 func (cp *CompositePattern) patternNode() {}
-
 
 func (b *BlockStmt) Pos() Position { return b.Pos_ }
 func (b *BlockStmt) End() Position { return b.End_ }
@@ -379,7 +354,17 @@ func (a *AssignStmt) String() string {
 		a.RValue.String(),
 	)
 }
-func (a *AssignStmt) stmtNode()     {}
+func (a *AssignStmt) stmtNode()        {}
+func (vps *VecPushStmt) Pos() Position { return vps.Pos_ }
+func (vps *VecPushStmt) End() Position { return vps.RValue.End() }
+func (vps *VecPushStmt) String() string {
+	return fmt.Sprintf(
+		"%s << %s",
+		vps.LValue.String(),
+		vps.RValue.String(),
+	)
+}
+func (vps *VecPushStmt) stmtNode()  {}
 func (r *ReturnStmt) Pos() Position { return r.Pos_ }
 func (r *ReturnStmt) End() Position { return r.Value.End() }
 func (r *ReturnStmt) String() string {

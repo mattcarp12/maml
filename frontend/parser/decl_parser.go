@@ -106,7 +106,7 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 		ReturnType: returnType,
 		Body:       body,
 		Params:     params,
-		IsAsync:    isAsync, // NEW: Apply the flag to the AST node
+		IsAsync:    isAsync,
 		Pos_:       pos,
 	}
 }
@@ -136,9 +136,6 @@ func (p *Parser) parseParam() *ast.Param {
 	case token.MUT:
 		param.Mut = true
 		p.nextToken() // step off 'mut'
-	case token.OWN:
-		param.Own = true
-		p.nextToken() // step off 'own'
 	}
 
 	// We expect the token to now sit on the parameter Name (e.g., 'x')

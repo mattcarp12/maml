@@ -153,11 +153,16 @@ func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
 		return current
 	case *hir.AssignStmt:
 		return b.buildAssignStmt(s, current)
+	case *hir.BlockStmt:
+		return b.buildBlockStmt(s, current)
 	case *hir.ExprStmt:
 		_, current = b.flattenExpr(s.Value, current)
 		return current
 	case *hir.ReturnStmt:
 		return b.buildReturnStmt(s, current)
+	case *hir.YieldStmt:
+		_, current = b.flattenExpr(s.Value, current)
+		return current
 	case *hir.LoopStmt:
 		return b.buildLoopStmt(s, current)
 	case *hir.BreakStmt:
@@ -178,6 +183,8 @@ func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
 		return b.buildMapInsertStmt(s, current)
 	case *hir.VecWriteStmt:
 		return b.buildVecWriteStmt(s, current)
+	case *hir.VecPushStmt:
+		return b.buildVecPushStmt(s, current)
 	}
 	return current
 }
@@ -379,6 +386,38 @@ func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock)
 		Arguments: []MIRCallArg{
 			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
 			{Argument: flatIdx},            // The integer index
+			{Argument: flatVal},            // The value to write
+		},
+		Type: types.UnitType{},
+	})
+
+	return current
+}
+
+func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *BasicBlock {
+	if stmt == nil {
+		return current
+	}
+
+	var flatVec, flatVal hir.Operand
+
+	// 1. Flatten the receiver, index, and value into atomic operands
+	flatVec, current = b.flattenExpr(stmt.Vec, current)
+	flatVal, current = b.flattenExpr(stmt.Value, current)
+
+	// 2. Create a temporary for the unit return value
+	setTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{
+		Name: setTmp,
+		Type: types.UnitType{},
+	})
+
+	// 3. Emit the runtime call to mutate the vector in-place
+	current.Statements = append(current.Statements, &CallInst{
+		Dst:      setTmp,
+		Function: &hir.Identifier{Value: "maml_vec_push", Type: types.UnknownType{}},
+		Arguments: []MIRCallArg{
+			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
 			{Argument: flatVal},            // The value to write
 		},
 		Type: types.UnitType{},

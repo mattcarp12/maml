@@ -15,7 +15,7 @@ fn inspect_status(s Status) int {
 fn handle_content(c Content) int {
     return match c {
         case Empty: { => 0 }
-        case Text(_): { => 100 }
+        case Text(s): { => 100 }
         case Image{width: w, height: h}: { => w * h }
     }
 }

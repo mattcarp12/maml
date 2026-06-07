@@ -1,6 +1,8 @@
 package hir
 
 import (
+	"fmt"
+
 	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -170,6 +172,13 @@ func (l *Lowerer) lowerStmt(stmt tast.Stmt) Stmt {
 			Pos_:   s.Pos_,
 			LValue: l.lowerExpr(s.LValue),
 			RValue: l.lowerExpr(s.RValue),
+		}
+
+	case *tast.VecPushStmt:
+		return &VecPushStmt{
+			Pos_:  s.Pos_,
+			Vec:   l.lowerExpr(s.LValue),
+			Value: l.lowerExpr(s.RValue),
 		}
 
 	case *tast.ReturnStmt:
@@ -465,53 +474,14 @@ func (l *Lowerer) lowerInfixExpr(e *tast.InfixExpr) Expr {
 	}
 }
 
-// lowerCallExpr intercepts method calls on containers using MethodKind identifiers
-func (l *Lowerer) lowerCallExpr(e *tast.CallExpr) Expr {
-	calleeIdent, ok := e.Function.(*tast.Identifier)
-	if !ok || calleeIdent.Symbol == nil {
-		return l.lowerNormalCall(e)
-	}
-
-	// Intercept container structural operations via MethodKind tags
-	switch calleeIdent.Symbol.MethodKind {
-	case types.MethodMapPut:
-		return &BlockStmt{
-			Pos_: e.Pos_,
-			End_: e.End_,
-			Statements: []Stmt{
-				&MapInsertStmt{
-					Pos_:  e.Pos_,
-					Map:   l.lowerExpr(e.Arguments[0].Argument),
-					Key:   l.lowerExpr(e.Arguments[1].Argument),
-					Value: l.lowerExpr(e.Arguments[2].Argument),
-				},
-			},
-		}
-
-	case types.MethodMapGet:
-		return &MapReadExpr{
-			Pos_: e.Pos_,
-			Map:  l.lowerExpr(e.Arguments[0].Argument),
-			Key:  l.lowerExpr(e.Arguments[1].Argument),
-			Type: e.Type,
-		}
-
-	default:
-		// MethodVecPush, MethodVecPop, MethodVecLen, MethodMapRemove
-		// all fall through to standard runtime function calls.
-		return l.lowerNormalCall(e)
-	}
-}
-
 // lowerNormalCall produces a clean hir.CallExpr for user-defined and standard free functions.
-func (l *Lowerer) lowerNormalCall(e *tast.CallExpr) *CallExpr {
+func (l *Lowerer) lowerCallExpr(e *tast.CallExpr) *CallExpr {
 	var hirArgs []CallArg
 	for _, arg := range e.Arguments {
 		hirArgs = append(hirArgs, CallArg{
 			Pos_:     arg.Pos_,
 			Argument: l.lowerExpr(arg.Argument),
 			Mut:      arg.Mut,
-			Own:      arg.Own,
 		})
 	}
 	return &CallExpr{
@@ -554,26 +524,220 @@ func (l *Lowerer) lowerIndexExpr(idx *tast.IndexExpr) Expr {
 	}
 }
 
-// lowerMatchExpr converts high-level pattern matching blocks into a flattened
-// cascade of conditional branches, preserving side-effect limits by evaluating
-// the target subject expression exactly once.
 func (l *Lowerer) lowerMatchExpr(e *tast.MatchExpr) Expr {
 	if e == nil {
 		return nil
 	}
 
-	// 1. To guarantee the match subject is evaluated exactly once, we wrap our
-	// desugared cascade inside an outer BlockStmt expression that resolves via a trailing YieldStmt.
-	outerBlock := &BlockStmt{
-		Pos_:       e.Pos_,
-		End_:       e.End_,
-		Statements: []Stmt{},
-	}
-
-	subjectLowered := l.lowerExpr(e.Subject)
+	outerBlock := &BlockStmt{Pos_: e.Pos_, End_: e.End_, Statements: []Stmt{}}
 	subjectType := tast.TypeOf(e.Subject)
 
-	// Create a unique internal identifier for tracking the hoisted subject value
+	// 1. Hoist the subject evaluation
+	subjectIdent := l.hoistMatchSubject(e.Subject, subjectType, outerBlock)
+
+	// 2. Build the If/Else cascade in reverse
+	var finalCascade Expr = nil
+
+	for i := len(e.Arms) - 1; i >= 0; i-- {
+		arm := e.Arms[i]
+
+		// HELPER CALL: Abstract away the messy pattern matching logic!
+		condition, armStmts := l.lowerMatchArmPattern(arm, subjectIdent, subjectType)
+
+		consequenceBlock := &BlockStmt{
+			Pos_:       arm.Body.Pos(),
+			End_:       arm.Body.End(),
+			Statements: armStmts,
+		}
+
+		finalCascade = l.chainIfCascade(arm, condition, consequenceBlock, finalCascade, e.Type)
+	}
+
+	// 3. Yield the final cascade
+	outerBlock.Statements = append(outerBlock.Statements, &YieldStmt{
+		Pos_:  e.Pos_,
+		Value: finalCascade,
+	})
+
+	return outerBlock
+}
+
+// lowerMatchArmPattern unwraps a specific MatchArm, generating the Boolean condition
+// for the branch and injecting any necessary variable bindings into the consequence body.
+func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifier, subjectType types.Type) (Expr, []Stmt) {
+	var bodyStmts []Stmt
+
+	// 1. Lower the base consequence body
+	loweredBodyExpr := l.lowerExpr(arm.Body)
+	if block, isBlock := loweredBodyExpr.(*BlockStmt); isBlock {
+		bodyStmts = append(bodyStmts, block.Statements...)
+	} else {
+		bodyStmts = append(bodyStmts, &YieldStmt{Pos_: arm.Body.Pos(), Value: loweredBodyExpr})
+	}
+
+	var condition Expr
+
+	// 2. Map the specific pattern to an evaluation condition and extract bindings
+	switch pat := arm.Pattern.(type) {
+
+	// THE FIX: Handle literal values (e.g. `case 0:`, `case 10:`)
+	case *tast.LiteralPattern:
+		condition = &InfixExpr{
+			Pos_:     pat.Pos(),
+			Operator: "==",
+			Left:     subjectIdent,
+			Right:    l.lowerExpr(pat.Value),
+			Type:     types.BoolType{},
+		}
+
+	// Unconditional catch-all `case _:`
+	case *tast.WildcardPattern:
+		condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
+
+	// Handles `case None:` (SumType variant) OR variable binding fallback `case someVar:`
+	case *tast.IdentifierPattern:
+		if sumTy, ok := subjectType.(*types.SumType); ok && sumTy.GetVariant(pat.Name) != nil {
+			// Variant tag comparison: VariantDiscriminant($match_subject) == <DiscriminantInteger>
+			variant := sumTy.GetVariant(pat.Name)
+			condition = &InfixExpr{
+				Pos_:     pat.Pos(),
+				Operator: "==",
+				Left: &VariantDiscriminantExpr{
+					Pos_:   pat.Pos(),
+					Object: subjectIdent,
+					Type:   types.IntType{},
+				},
+				Right: &IntLiteral{
+					Pos_:  pat.Pos(),
+					Value: int64(variant.Discriminant),
+					Type:  types.IntType{},
+				},
+				Type: types.BoolType{},
+			}
+		} else {
+			// Variable catch-all fallback: binds everything to a local name
+			condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
+
+			bindingSym := &types.Symbol{
+				Kind:    types.VarSymbol,
+				Name:    pat.Name,
+				Type:    subjectType,
+				Mutable: false, // Default match bindings to immutable
+			}
+
+			decl := &DeclareStmt{
+				Pos_:   pat.Pos(),
+				Value:  subjectIdent,
+				Symbol: bindingSym,
+			}
+			// Inject the binding declaration at the TOP of the body block
+			bodyStmts = append([]Stmt{decl}, bodyStmts...)
+		}
+
+	// Handles complex sum types with payloads: `case Some(val):`
+	case *tast.VariantPattern:
+		variantName := ""
+		if pat.Variant != nil {
+			variantName = pat.Variant.Value
+		}
+
+		condition = &InfixExpr{
+			Pos_:     pat.Pos(),
+			Operator: "==",
+			Left: &VariantDiscriminantExpr{
+				Pos_:   pat.Pos(),
+				Object: subjectIdent,
+				Type:   types.StringType{},
+			},
+			Right: &StringLiteral{
+				Pos_:  pat.Pos(),
+				Value: variantName,
+				Type:  types.StringType{},
+			},
+			Type: types.BoolType{},
+		}
+
+		// Generate internal unpacking assignments for bounded tuple parameters
+		if len(pat.TupleBindings) > 0 {
+			for idx, identPat := range pat.TupleBindings {
+				if identPat.Value != "_" {
+					bindingSym := identPat.Symbol
+					if bindingSym == nil {
+						bindingSym = &types.Symbol{Kind: types.VarSymbol, Name: identPat.Value, Type: identPat.Type}
+					}
+
+					// Extract value via VariantReadExpr
+					readExpr := &VariantReadExpr{
+						Pos_:        identPat.Pos(),
+						Object:      subjectIdent,
+						VariantName: variantName,
+						FieldIndex:  idx, // Populated properly for tuple variants
+						FieldName:   "",
+						Type:        identPat.Type,
+					}
+
+					decl := &DeclareStmt{
+						Pos_:   identPat.Pos(),
+						Symbol: bindingSym,
+						Value:  readExpr,
+					}
+					// Inject the payload extraction at the TOP of the body block
+					bodyStmts = append([]Stmt{decl}, bodyStmts...)
+				}
+			}
+		}
+
+	default:
+		// DEFENSE IN DEPTH: Crash loudly if we encounter an unknown pattern type
+		panic(fmt.Sprintf("Lowering Error: Unhandled Match Pattern Type: %T", pat))
+	}
+
+	return condition, bodyStmts
+}
+
+func (l *Lowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt, next Expr, exprType types.Type) Expr {
+	if next == nil {
+		// Base case (the last arm in the match)
+		if boolLit, ok := cond.(*BoolLiteral); ok && boolLit.Value {
+			return conseq // Optimize out `if true` for default cases
+		}
+		return &IfExpr{
+			Pos_:        arm.Pos_,
+			Condition:   cond,
+			Consequence: conseq,
+			Alternative: &BlockStmt{Pos_: arm.End_, Statements: []Stmt{}},
+			Type:        exprType,
+		}
+	}
+
+	// Chain to previous link
+	var altBlock *BlockStmt
+	if ab, ok := next.(*BlockStmt); ok {
+		altBlock = ab
+	} else {
+		altBlock = &BlockStmt{Pos_: next.Pos(), Statements: []Stmt{&YieldStmt{Pos_: next.Pos(), Value: next}}}
+	}
+
+	if boolLit, ok := cond.(*BoolLiteral); ok && boolLit.Value {
+		return conseq // Optimize out shadowed branches
+	}
+
+	return &IfExpr{
+		Pos_:        arm.Pos_,
+		Condition:   cond,
+		Consequence: conseq,
+		Alternative: altBlock,
+		Type:        exprType,
+	}
+}
+
+// hoistMatchSubject evaluates the match target exactly once and binds it to a
+// hidden local variable ($match_subject) to prevent side-effect duplication.
+func (l *Lowerer) hoistMatchSubject(subject tast.Expr, subjectType types.Type, outerBlock *BlockStmt) *Identifier {
+	// Lower the actual subject expression
+	subjectLowered := l.lowerExpr(subject)
+
+	// Create a unique internal symbol for tracking the hoisted value
 	subjectSym := &types.Symbol{
 		Kind:    types.VarSymbol,
 		Name:    "$match_subject",
@@ -581,191 +745,22 @@ func (l *Lowerer) lowerMatchExpr(e *tast.MatchExpr) Expr {
 		Mutable: false,
 	}
 
+	// Create the identifier that the match arms will use to reference the value
 	subjectIdent := &Identifier{
-		Pos_:   e.Pos_,
-		End_:   e.End_,
+		Pos_:   subject.Pos(),
+		End_:   subject.End(),
 		Value:  "$match_subject",
 		Type:   subjectType,
 		Symbol: subjectSym,
 	}
 
-	// Hoist evaluation: let $match_subject = e.Subject;
+	// Hoist the evaluation by injecting the declaration at the top of the block:
+	// e.g., let $match_subject = e.Subject;
 	outerBlock.Statements = append(outerBlock.Statements, &DeclareStmt{
-		Pos_:   e.Pos_,
+		Pos_:   subject.Pos(),
 		Value:  subjectLowered,
 		Symbol: subjectSym,
 	})
 
-	// 2. Loop through the match arms in reverse order to stitch together
-	// the linked alternative links (nested if-else structural chain).
-	var finalCascade Expr = nil
-
-	for i := len(e.Arms) - 1; i >= 0; i-- {
-		arm := e.Arms[i]
-		var armBodyStmts []Stmt
-
-		// Extract or lower the body of this specific match branch arm
-		loweredBodyExpr := l.lowerExpr(arm.Body)
-		if block, isBlock := loweredBodyExpr.(*BlockStmt); isBlock {
-			armBodyStmts = append(armBodyStmts, block.Statements...)
-		} else {
-			armBodyStmts = append(armBodyStmts, &YieldStmt{
-				Pos_:  arm.Body.Pos(),
-				Value: loweredBodyExpr,
-			})
-		}
-
-		var condition Expr = nil
-
-		switch pat := arm.Pattern.(type) {
-		case *tast.WildcardPattern:
-			// Unconditional baseline catch-all '_'
-			condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
-
-		case *tast.IdentifierPattern:
-			// If this identifier name is recognized as a valid constituent member of a Sum Type variant,
-			// handle it as a naked structural variant comparison.
-			if sumTy, ok := subjectType.(*types.SumType); ok && sumTy.GetVariant(pat.Name) != nil {
-				// Variant tag comparison: VariantDiscriminant($match_subject) == <DiscriminantInteger>
-				variant := sumTy.GetVariant(pat.Name)
-				condition = &InfixExpr{
-					Pos_:     pat.Pos(),
-					Operator: "==",
-					Left: &VariantDiscriminantExpr{
-						Pos_:   pat.Pos(),
-						Object: subjectIdent,
-						Type:   types.IntType{},
-					},
-					Right: &IntLiteral{
-						Pos_:  pat.Pos(),
-						Value: int64(variant.Discriminant),
-						Type:  types.IntType{},
-					},
-					Type: types.BoolType{},
-				}
-			} else {
-				// Variable catch-all fallback: binds everything to a local name
-				condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
-
-				// SYNTHESIZE the symbol here since tast.IdentifierPattern doesn't carry one
-				bindingSym := &types.Symbol{
-					Kind:    types.VarSymbol,
-					Name:    pat.Name,
-					Type:    subjectType,
-					Mutable: false, // Default match bindings to immutable
-				}
-
-				decl := &DeclareStmt{
-					Pos_:   pat.Pos(),
-					Value:  subjectIdent,
-					Symbol: bindingSym,
-				}
-				armBodyStmts = append([]Stmt{decl}, armBodyStmts...)
-			}
-		case *tast.VariantPattern:
-			variantName := ""
-			if pat.Variant != nil {
-				variantName = pat.Variant.Value
-			}
-
-			condition = &InfixExpr{
-				Pos_:     pat.Pos(),
-				Operator: "==",
-				Left: &VariantDiscriminantExpr{
-					Pos_:   pat.Pos(),
-					Object: subjectIdent,
-					Type:   types.StringType{},
-				},
-				Right: &StringLiteral{
-					Pos_:  pat.Pos(),
-					Value: variantName,
-					Type:  types.StringType{},
-				},
-				Type: types.BoolType{},
-			}
-
-			// Generate internal unpacking assignments if there are bounded tuple parameters
-			if len(pat.TupleBindings) > 0 {
-				for idx, identPat := range pat.TupleBindings {
-					if identPat.Value != "_" {
-						bindingSym := identPat.Symbol
-						if bindingSym == nil {
-							bindingSym = &types.Symbol{Kind: types.VarSymbol, Name: identPat.Value, Type: identPat.Type}
-						}
-
-						// Extract value via VariantReadExpr
-						readExpr := &VariantReadExpr{
-							Pos_:        identPat.Pos(),
-							Object:      subjectIdent,
-							VariantName: variantName,
-							FieldIndex:  idx, // Populated properly for tuple variants
-							FieldName:   "",  // Empty for tuples
-							Type:        identPat.Type,
-						}
-
-						decl := &DeclareStmt{
-							Pos_:   identPat.Pos(),
-							Symbol: bindingSym,
-							Value:  readExpr,
-						}
-						armBodyStmts = append([]Stmt{decl}, armBodyStmts...)
-					}
-				}
-			}
-
-		}
-
-		consequenceBlock := &BlockStmt{
-			Pos_:       arm.Body.Pos(),
-			End_:       arm.Body.End(),
-			Statements: armBodyStmts,
-		}
-
-		if finalCascade == nil {
-			// Base branch condition mapping
-			if boolLit, ok := condition.(*BoolLiteral); ok && boolLit.Value {
-				finalCascade = consequenceBlock
-			} else {
-				finalCascade = &IfExpr{
-					Pos_:        arm.Pos_,
-					Condition:   condition,
-					Consequence: consequenceBlock,
-					Alternative: &BlockStmt{Pos_: arm.End_, Statements: []Stmt{}},
-					Type:        e.Type,
-				}
-			}
-		} else {
-			// Wrap current alternative links into matching containers
-			var alternativeBlock *BlockStmt
-			if ab, ok := finalCascade.(*BlockStmt); ok {
-				alternativeBlock = ab
-			} else {
-				alternativeBlock = &BlockStmt{
-					Pos_:       finalCascade.Pos(),
-					Statements: []Stmt{&YieldStmt{Pos_: finalCascade.Pos(), Value: finalCascade}},
-				}
-			}
-
-			if boolLit, ok := condition.(*BoolLiteral); ok && boolLit.Value {
-				// Shorthand path optimizing shadowed sub-branches
-				finalCascade = consequenceBlock
-			} else {
-				finalCascade = &IfExpr{
-					Pos_:        arm.Pos_,
-					Condition:   condition,
-					Consequence: consequenceBlock,
-					Alternative: alternativeBlock,
-					Type:        e.Type,
-				}
-			}
-		}
-	}
-
-	// 3. Close out by yielding the fully integrated cascade out through our block expression
-	outerBlock.Statements = append(outerBlock.Statements, &YieldStmt{
-		Pos_:  e.Pos_,
-		Value: finalCascade,
-	})
-
-	return outerBlock
+	return subjectIdent
 }

@@ -521,34 +521,6 @@ func TestCallExpressionParsing(t *testing.T) {
 	}
 }
 
-func TestMethodCallExpressionParsing(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-		argCount int
-	}{
-		{"no args", "return p.add()", "p.add()", 0},
-		{"one arg", "return p.add(5)", "p.add(5)", 1},
-		{"multiple args", "return p.add(5, x + 2)", "p.add(5, (x + 2))", 2},
-		{"nested calls", "return p.f(g(1), h(2, 3))", "p.f(g(1), h(2, 3))", 2},
-		{"call with bool", "return p.check(true)", "p.check(true)", 1},
-		{"nested calls", "return a.b.c.foo()", "(a.b).c.foo()", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stmts := parseFunctionBody(t, tt.input)
-			retStmt := stmts[0].(*ast.ReturnStmt)
-
-			callExpr, ok := retStmt.Value.(*ast.MethodCallExpr)
-			require.True(t, ok, "expected *ast.MethodCallExpr, got %T", retStmt.Value)
-			assert.Len(t, callExpr.Arguments, tt.argCount)
-			assert.Equal(t, tt.expected, retStmt.Value.String())
-		})
-	}
-}
-
 func TestGroupedExpressionParsing(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1162,7 +1134,6 @@ func TestFunctionParameterModifiers(t *testing.T) {
 			for i, exp := range tt.expected {
 				assert.Equal(t, exp.name, fn.Params[i].Name)
 				assert.Equal(t, exp.mut, fn.Params[i].Mut, "Mut mismatch for param %s", exp.name)
-				assert.Equal(t, exp.own, fn.Params[i].Own, "Own mismatch for param %s", exp.name)
 			}
 		})
 	}
@@ -1220,8 +1191,6 @@ func TestCallArgumentModifiers(t *testing.T) {
 
 			switch call := retStmt.Value.(type) {
 			case *ast.CallExpr:
-				args = call.Arguments
-			case *ast.MethodCallExpr:
 				args = call.Arguments
 			default:
 				t.Fatalf("expected CallExpr or MethodCallExpr, got %T", retStmt.Value)

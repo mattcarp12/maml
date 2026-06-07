@@ -85,12 +85,9 @@ type Program struct {
 type Param struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
-
 	Name string   `json:"name"`
 	Type TypeExpr `json:"type"`
-
-	Mut bool `json:"mut"`
-	Own bool `json:"own"`
+	Mut  bool     `json:"mut"`
 }
 
 type FnDecl struct {
@@ -170,6 +167,12 @@ type ContinueStmt struct {
 	Token token.Token `json:"-"`
 }
 
+type VecPushStmt struct {
+	Pos_   Position `json:"-"`
+	LValue Expr     `json:"lvalue"`
+	RValue Expr     `json:"rvalue"`
+}
+
 // ==========================================================================
 // Expressions
 // ==========================================================================
@@ -214,14 +217,6 @@ type CallExpr struct {
 
 	Function  Expr      `json:"function"`
 	Arguments []CallArg `json:"arguments"`
-}
-
-type MethodCallExpr struct {
-	Object    Expr        // e.g., `a.b` in `a.b.foo()`
-	Method    *Identifier // e.g., `foo`
-	Arguments []CallArg
-	Pos_      Position `json:"-"`
-	End_      Position `json:"-"`
 }
 
 type CallArg struct {
@@ -299,12 +294,9 @@ type WildcardPattern struct {
 }
 
 type IdentifierPattern struct {
-    Pos_ Position `json:"-"`
-    Name string   `json:"name"`
+	Pos_ Position `json:"-"`
+	Name string   `json:"name"`
 }
-
-
-
 
 type LiteralPattern struct {
 	Pos_ Position `json:"-"`
@@ -328,7 +320,7 @@ type CompositePattern struct {
 }
 
 // ==========================================================================
-// Types
+// Type Expressions
 // ==========================================================================
 
 // TypeExprWrapper is used for parsing literals

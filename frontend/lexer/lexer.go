@@ -75,6 +75,10 @@ func (l *Lexer) NextToken() token.Token {
 	case '<':
 		if l.peekChar() == '=' {
 			tok = l.twoCharToken(token.LTE, startLine, startCol)
+		} else if l.peekChar() == '<' {
+			tok = l.twoCharToken(token.PUSH, startLine, startCol)
+			// Consume the second '<' for PUSH operator
+			l.readChar()
 		} else {
 			tok = l.newToken(token.LT, l.ch, startLine, startCol)
 		}

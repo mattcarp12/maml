@@ -44,10 +44,10 @@ var builtinGenerics = map[string]builtinGeneric{
 			)
 		},
 	},
-	"Task": { // TODO - Rename to Future
+	"Future": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return types.TaskType{
+			return types.FutureType{
 				Base: args[0],
 			}
 		},

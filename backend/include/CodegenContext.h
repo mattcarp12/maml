@@ -12,9 +12,16 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ErrorHandler.h"
-
 namespace maml {
+
+class ErrorHandler {
+  bool hasError = false;
+
+ public:
+  void report(std::string_view message, const nlohmann::json &node = nullptr);
+  void fatal(std::string_view message, const nlohmann::json &node = nullptr);
+  bool hasErrors() const { return hasError; }
+};
 
 struct StringViewHash {
   using is_transparent = void;

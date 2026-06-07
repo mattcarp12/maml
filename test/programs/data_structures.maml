@@ -1,4 +1,4 @@
-// EXIT_CODE: 331
+// EXIT_CODE: 75
 // EXPECTED_OUTPUT: world
 
 fn main() int {
@@ -15,4 +15,6 @@ fn main() int {
     puts(greetings[1])
 
     return x + arr[3] + ch1 + ch2
+    // return value is 331
+    // exit code = 331 % 256 = 75
 }

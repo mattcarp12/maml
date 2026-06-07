@@ -17,13 +17,12 @@ import (
 
 var (
 	exitCodeRegex    = regexp.MustCompile(`//\s*EXIT_CODE:\s*(\d+)`)
-	expectedOutRegex = regexp.MustCompile(`//\s*EXPECTED_OUTPUT:\s*(.+)`)
+	expectedOutStart = regexp.MustCompile(`//\s*EXPECTED_OUTPUT:`)
 	expectedErrRegex = regexp.MustCompile(`//\s*EXPECTED_ERROR:\s*(.+)`)
 )
 
 func TestEndToEnd(t *testing.T) {
-	matches, err := filepath.Glob("../programs/*.maml") // Flat directory
-
+	matches, err := filepath.Glob("../programs/*.maml")
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
 
@@ -35,16 +34,11 @@ func TestEndToEnd(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			content, err := os.ReadFile(srcPath)
 			require.NoError(t, err)
-
 			src := string(content)
 
 			expectedExit := parseExitCode(src)
 			expectedOut := parseExpectedOutput(src)
 			expectedErr := parseExpectedError(src)
-
-			// -----------------------------------------------------------------
-			// Build executable through the driver pipeline
-			// -----------------------------------------------------------------
 
 			binPath, compileErr := d.BuildTemporary(srcPath)
 
@@ -57,64 +51,96 @@ func TestEndToEnd(t *testing.T) {
 			require.NoError(t, compileErr)
 			defer os.Remove(binPath)
 
-			// -----------------------------------------------------------------
-			// Execute binary
-			// -----------------------------------------------------------------
-
 			actualExit, actualOut := runBinary(t, binPath)
 
 			assert.Equal(t, expectedExit, actualExit)
 
 			if expectedOut != "" {
-				assert.Equal(t,
-					strings.TrimSpace(expectedOut),
-					strings.TrimSpace(actualOut),
-				)
+				// Normalize both sides: trim + collapse whitespace
+				normalizedExpected := normalizeOutput(expectedOut)
+				normalizedActual := normalizeOutput(actualOut)
+
+				assert.Equal(t, normalizedExpected, normalizedActual)
 			}
 		})
 	}
 }
 
-func parseExitCode(src string) int {
-	matches := exitCodeRegex.FindStringSubmatch(src)
-	if len(matches) < 2 {
-		return 0 // default
+// parseExpectedOutput supports multi-line output
+func parseExpectedOutput(src string) string {
+	lines := strings.Split(src, "\n")
+	var outputLines []string
+	inOutput := false
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		if expectedOutStart.MatchString(line) {
+			inOutput = true
+			// Capture anything after EXPECTED_OUTPUT: on the same line
+			if idx := strings.Index(line, "EXPECTED_OUTPUT:"); idx != -1 {
+				rest := strings.TrimSpace(line[idx+len("EXPECTED_OUTPUT:"):])
+				if rest != "" {
+					outputLines = append(outputLines, rest)
+				}
+			}
+			continue
+		}
+
+		if inOutput {
+			if strings.HasPrefix(line, "//") {
+				// Continue collecting indented or continued comment lines
+				clean := strings.TrimPrefix(line, "//")
+				clean = strings.TrimSpace(clean)
+				if clean != "" {
+					outputLines = append(outputLines, clean)
+				}
+			} else {
+				// Stop when we hit non-comment line
+				break
+			}
+		}
 	}
-	val, _ := strconv.Atoi(strings.TrimSpace(matches[1]))
+
+	return strings.Join(outputLines, "\n")
+}
+
+func parseExitCode(src string) int {
+	m := exitCodeRegex.FindStringSubmatch(src)
+	if len(m) < 2 {
+		return 0
+	}
+	val, _ := strconv.Atoi(strings.TrimSpace(m[1]))
 	return val
 }
 
-func parseExpectedOutput(src string) string {
-	matches := expectedOutRegex.FindStringSubmatch(src)
-	if len(matches) < 2 {
+func parseExpectedError(src string) string {
+	m := expectedErrRegex.FindStringSubmatch(src)
+	if len(m) < 2 {
 		return ""
 	}
-	return strings.TrimSpace(matches[1])
+	return strings.TrimSpace(m[1])
 }
 
-func parseExpectedError(src string) string {
-	matches := expectedErrRegex.FindStringSubmatch(src)
-	if len(matches) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(matches[1])
+func normalizeOutput(s string) string {
+	s = strings.TrimSpace(s)
+	// Replace all whitespace sequences with single space, or keep newlines if you prefer exact match
+	// For now, let's do exact line-by-line match after trimming
+	return s
 }
 
 func runBinary(t *testing.T, binPath string) (int, string) {
 	var stdout bytes.Buffer
-
 	cmd := exec.Command(binPath)
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
-
 	exitCode := 0
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	} else if err != nil {
 		t.Fatalf("failed to run binary: %v", err)
 	}
-
 	return exitCode, stdout.String()
 }

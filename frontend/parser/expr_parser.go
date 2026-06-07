@@ -56,7 +56,7 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	}
 
 	// If followed by '{', it's a standard named composite type (e.g., User{)
-	if p.peekToken.Type == token.LBRACE && p.allowStructLiterals{
+	if p.peekToken.Type == token.LBRACE && p.allowStructLiterals {
 		typeExpr := &ast.NamedTypeExpr{
 			Name: &ast.Identifier{Value: name, Pos_: startPos},
 			Pos_: startPos,
@@ -193,26 +193,9 @@ func (p *Parser) parseIfExpression() ast.Expr {
 }
 
 func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
-	pos := p.curPos() // Position of the '('
-
-	// Intercept method calls: a.b() evaluates as FieldAccess(a, b) -> Call()
-	if fa, ok := function.(*ast.FieldAccess); ok {
-		methodCall := &ast.MethodCallExpr{
-			Object: fa.Object, // The receiver (e.g., `a` or `a[10]`)
-			Method: fa.Field,  // The method name (e.g., `b`)
-			Pos_:   pos,
-		}
-
-		// Parse the arguments safely with your newly updated empty-slice logic
-		methodCall.Arguments = p.parseCallArguments(token.RPAREN)
-
-		return methodCall
-	}
-
-	// Standard fallback for regular function calls: foo()
 	callExpr := &ast.CallExpr{
 		Function: function,
-		Pos_:     pos,
+		Pos_:     p.curPos(),
 	}
 
 	// Parse the arguments safely

@@ -149,7 +149,6 @@ func buildInstructionDTO(inst Instruction) map[string]any {
 			args = append(args, map[string]any{
 				"argument": buildExprDTO(arg.Argument),
 				"mut":      arg.Mut,
-				"own":      arg.Own,
 			})
 		}
 		return map[string]any{
@@ -404,7 +403,7 @@ func lowerType(t types.Type) any {
 			"key_type":   lowerType(v.Key),
 			"value_type": lowerType(v.Value),
 		}
-	case types.TaskType: // NEW: Explicit Task serialization
+	case types.FutureType: // NEW: Explicit Task serialization
 		return map[string]any{
 			"kind":      "task",
 			"base_type": lowerType(v.Base),

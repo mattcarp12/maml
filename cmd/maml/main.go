@@ -26,8 +26,8 @@ func main() {
 		dumpAstCmd(os.Args[2:])
 	case "dump-tast":
 		dumpTastCmd(os.Args[2:])
-	case "dump-dtast":
-		dumpDTastCmd(os.Args[2:])
+	case "dump-hir":
+		dumpHIRCmd(os.Args[2:])
 	case "dump-mir":
 		dumpMirCmd(os.Args[2:])
 	case "dump-llvm":
@@ -146,9 +146,9 @@ func dumpTastCmd(args []string) {
 	fmt.Println(string(jsonBytes))
 }
 
-func dumpDTastCmd(args []string) {
+func dumpHIRCmd(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-tast <file.maml>")
+		fmt.Println("Usage: maml dump-hir <file.maml>")
 		os.Exit(1)
 	}
 

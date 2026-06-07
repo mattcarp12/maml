@@ -1,3 +1,11 @@
+// ==========================================================================
+// Liveness Analysis
+// ------------------
+// - Currently only computes global block-level analysis
+// - TODO - Implement local statement-level analysis
+// ==========================================================================
+
+
 package passes
 
 import (
@@ -5,7 +13,6 @@ import (
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
-// LivenessResult holds the LiveIn and LiveOut sets for every BasicBlock.
 type LivenessResult struct {
 	LiveIn  map[mir.BlockID]map[string]bool
 	LiveOut map[mir.BlockID]map[string]bool
@@ -18,20 +25,17 @@ func newLivenessResult() *LivenessResult {
 	}
 }
 
-// AnalyzeLiveness computes the liveness of variables across the MIR CFG (Phase 5).
 func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 	res := newLivenessResult()
 
-	// Initialize sets
 	for id := range g.Blocks {
 		res.LiveIn[id] = make(map[string]bool)
 		res.LiveOut[id] = make(map[string]bool)
 	}
 
-	// Precompute block summaries once upfront
 	blockUses := make(map[mir.BlockID]map[string]bool)
 	blockDefs := make(map[mir.BlockID]map[string]bool)
-	for _, block := range g.SortedBlocks() {
+	for _, block := range g.Blocks {
 		useSet, defSet := computeBlockUseDef(block)
 		blockUses[block.ID] = useSet
 		blockDefs[block.ID] = defSet
@@ -41,7 +45,6 @@ func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 	for changed {
 		changed = false
 
-		// Find the true maximum block ID in the graph
 		maxID := mir.BlockID(0)
 		for id := range g.Blocks {
 			if id > maxID {
@@ -49,7 +52,6 @@ func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 			}
 		}
 
-		// Iterate backward through blocks (reverse order speeds up convergence)
 		for id := maxID; id >= 0; id-- {
 			block, exists := g.Blocks[id]
 			if !exists {
@@ -67,19 +69,17 @@ func AnalyzeLiveness(g *mir.Graph) *LivenessResult {
 				}
 			}
 
-			// Get Use and Def for this block
 			useSet := blockUses[id]
 			defSet := blockDefs[id]
 
 			// 2. LiveIn = Use U (LiveOut - Def)
-			// First, fold in the local uses
+			// Track modifications accurately to verify fixed-point completion
 			for v := range useSet {
 				if !res.LiveIn[id][v] {
 					res.LiveIn[id][v] = true
 					changed = true
 				}
 			}
-			// Next, pass through the non-redefined LiveOut variables
 			for v := range res.LiveOut[id] {
 				if !defSet[v] {
 					if !res.LiveIn[id][v] {
@@ -98,118 +98,27 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 	useSet := make(map[string]bool)
 	defSet := make(map[string]bool)
 
-	// Helper to safely add an operand to the Use set (if it's a variable and not yet defined)
+	// Local helper closures
 	addUse := func(op hir.Operand) {
 		if ident, ok := op.(*hir.Identifier); ok && ident != nil {
-			if !defSet[ident.Value] {
-				useSet[ident.Value] = true
-			}
+			useSet[ident.Value] = true
 		}
 	}
 
-	// Helper to add explicit string variable names to the Use set
 	addUseName := func(name string) {
-		if !defSet[name] {
+		if name != "" && name != "_" {
 			useSet[name] = true
 		}
 	}
 
-	// Traverse forward to compute block-level summary
-	for _, inst := range block.Statements {
-		switch i := inst.(type) {
-		// --- Declarations & Allocations (Defs only) ---
-		case *mir.TempDeclInst:
-			defSet[i.Name] = true
-		case *mir.RefAllocInst:
-			defSet[i.Dst] = true
-
-		// --- Assignments (Use RHS, then Def LHS) ---
-		case *mir.AssignInst:
-			addUse(i.RValue)
-			defSet[i.Dst] = true
-		case *mir.CopyInst:
-			addUseName(i.Src)
-			defSet[i.Dst] = true
-		case *mir.MoveInst:
-			addUseName(i.Src)
-			defSet[i.Dst] = true
-		case *mir.CastInst:
-			addUse(i.Src)
-			defSet[i.Dst] = true
-
-		// --- Arithmetic & Logic ---
-		case *mir.BinaryOpInst:
-			addUse(i.Left)
-			addUse(i.Right)
-			defSet[i.Dst] = true
-		case *mir.UnaryOpInst:
-			addUse(i.Operand)
-			defSet[i.Dst] = true
-
-		// --- Containers & Structs ---
-		case *mir.StructInitInst:
-			addUse(i.Value)
-			addUseName(i.Dst) // Mutating a struct uses the struct pointer/reference!
-		case *mir.FieldReadInst:
-			addUse(i.Object)
-			defSet[i.Dst] = true
-		case *mir.VariantInitInst:
-			for _, p := range i.Payloads {
-				addUse(p)
-			}
-			defSet[i.Dst] = true
-		case *mir.VariantReadInst:
-			addUse(i.Object)
-			defSet[i.Dst] = true
-		case *mir.VariantDiscriminantInst:
-			addUse(i.Object)
-			defSet[i.Dst] = true
-		case *mir.ArrayInitInst:
-			addUse(i.Value)
-			addUseName(i.Dst) // Array mutation uses the array
-		case *mir.SliceInst:
-			addUse(i.Left)
-			addUse(i.Low)
-			addUse(i.High)
-			defSet[i.Dst] = true
-		case *mir.IndexReadInst:
-			addUse(i.Source)
-			addUse(i.Index)
-			defSet[i.Dst] = true
-		case *mir.IndexAssignInst:
-			addUse(i.Index)
-			addUse(i.Value)
-			addUseName(i.Target) // Mutating an index uses the container!
-
-		// --- Pointers ---
-		case *mir.LoadPtrInst:
-			addUse(i.Ptr)
-			defSet[i.Dst] = true
-		case *mir.StoreInst:
-			addUse(i.Value)
-			addUseName(i.DstPtr) // Storing into a pointer uses the pointer
-
-		// --- Functions ---
-		case *mir.CallInst:
-			addUse(i.Function)
-			for _, arg := range i.Arguments {
-				addUse(arg.Argument)
-			}
-			if i.Dst != "" && i.Dst != "_" {
-				defSet[i.Dst] = true
-			}
-
-		// --- Memory/Ownership Intrinsic Markers (Uses) ---
-		case *mir.RefIncInst:
-			addUseName(i.Src)
-		case *mir.RefDecInst:
-			addUseName(i.Src)
-		case *mir.MutBorrowInst:
-			addUseName(i.Src)
+	addDef := func(name string) {
+		if name != "" && name != "_" {
+			defSet[name] = true
+			delete(useSet, name) // A Def kills any upward Use path inside this block!
 		}
 	}
 
-	// Terminators also USE variables
+	// --- STEP 1: Process Terminator Uses FIRST (Since they sit at the very bottom) ---
 	switch t := block.Terminator.(type) {
 	case *mir.BranchTerminator:
 		addUse(t.Condition)
@@ -219,18 +128,108 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 		}
 	}
 
+	// --- STEP 2: Traverse Statements BACKWARD (Bottom to Top) ---
+	for i := len(block.Statements) - 1; i >= 0; i-- {
+		inst := block.Statements[i]
+		switch i := inst.(type) {
+		case *mir.TempDeclInst:
+			addDef(i.Name)
+		case *mir.RefAllocInst:
+			addDef(i.Dst)
+
+		case *mir.AssignInst:
+			addDef(i.Dst)
+			addUse(i.RValue)
+		case *mir.CopyInst:
+			addDef(i.Dst)
+			addUseName(i.Src)
+		case *mir.MoveInst:
+			addDef(i.Dst)
+			addUseName(i.Src)
+		case *mir.CastInst:
+			addDef(i.Dst)
+			addUse(i.Src)
+
+		case *mir.BinaryOpInst:
+			addDef(i.Dst)
+			addUse(i.Left)
+			addUse(i.Right)
+		case *mir.UnaryOpInst:
+			addDef(i.Dst)
+			addUse(i.Operand)
+
+		case *mir.StructInitInst:
+			addUseName(i.Dst) // Mutation uses reference
+			addUse(i.Value)
+		case *mir.FieldReadInst:
+			addDef(i.Dst)
+			addUse(i.Object)
+		case *mir.VariantInitInst:
+			addDef(i.Dst)
+			for _, p := range i.Payloads {
+				addUse(p)
+			}
+		case *mir.VariantReadInst:
+			addDef(i.Dst)
+			addUse(i.Object)
+		case *mir.VariantDiscriminantInst:
+			addDef(i.Dst)
+			addUse(i.Object)
+		case *mir.ArrayInitInst:
+			addUseName(i.Dst)
+			addUse(i.Value)
+		case *mir.SliceInst:
+			addDef(i.Dst)
+			addUse(i.Left)
+			addUse(i.Low)
+			addUse(i.High)
+		case *mir.IndexReadInst:
+			addDef(i.Dst)
+			addUse(i.Source)
+			addUse(i.Index)
+		case *mir.IndexAssignInst:
+			addUseName(i.Target)
+			addUse(i.Index)
+			addUse(i.Value)
+
+		case *mir.LoadPtrInst:
+			addDef(i.Dst)
+			addUse(i.Ptr)
+		case *mir.StoreInst:
+			addUseName(i.DstPtr)
+			addUse(i.Value)
+
+		case *mir.CallInst:
+			if i.Dst != "" && i.Dst != "_" {
+				addDef(i.Dst)
+			}
+			addUse(i.Function)
+			for _, arg := range i.Arguments {
+				addUse(arg.Argument)
+			}
+
+		case *mir.RefIncInst:
+			addUseName(i.Src)
+		case *mir.RefDecInst:
+			addUseName(i.Src)
+		case *mir.MutBorrowInst:
+			addUseName(i.Src)
+		}
+	}
+
 	return useSet, defSet
 }
 
 func getSuccessors(block *mir.BasicBlock) []mir.BlockID {
+	if block.Terminator == nil {
+		return nil
+	}
 	switch t := block.Terminator.(type) {
 	case *mir.JumpTerminator:
 		return []mir.BlockID{t.Target}
 	case *mir.BranchTerminator:
 		return []mir.BlockID{t.TrueTarget, t.FalseTarget}
 	case *mir.CoroSuspendTerminator:
-		// When a coroutine suspends, control flows either to the resume block (when awoken)
-		// or the cleanup block (if cancelled/destroyed).
 		return []mir.BlockID{t.ResumeBlock, t.CleanupBlock}
 	}
 	return nil

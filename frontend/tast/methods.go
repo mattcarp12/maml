@@ -40,8 +40,6 @@ func (p *Param) String() string {
 		switch p.Symbol.ParamMode {
 		case types.ParamMutBorrow:
 			prefix = "mut "
-		case types.ParamOwned:
-			prefix = "own "
 		}
 	}
 	return fmt.Sprintf("%s%s %s", prefix, p.Name, p.Type.String())
@@ -196,8 +194,6 @@ func (ce *CallExpr) String() string {
 		prefix := ""
 		if a.Mut {
 			prefix = "mut "
-		} else if a.Own {
-			prefix = "own "
 		}
 		args = append(args, prefix+a.Argument.String())
 	}
@@ -357,8 +353,17 @@ func (a *AssignStmt) End() Position { return a.RValue.End() }
 func (a *AssignStmt) String() string {
 	return fmt.Sprintf("%s = %s", a.LValue.String(), a.RValue.String())
 }
-func (a *AssignStmt) stmtNode() {}
-
+func (a *AssignStmt) stmtNode()        {}
+func (vps *VecPushStmt) Pos() Position { return vps.Pos_ }
+func (vps *VecPushStmt) End() Position { return vps.RValue.End() }
+func (vps *VecPushStmt) String() string {
+	return fmt.Sprintf(
+		"%s << %s",
+		vps.LValue.String(),
+		vps.RValue.String(),
+	)
+}
+func (vps *VecPushStmt) stmtNode()  {}
 func (r *ReturnStmt) Pos() Position { return r.Pos_ }
 func (r *ReturnStmt) End() Position {
 	if r.Value != nil {

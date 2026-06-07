@@ -16,7 +16,6 @@ type Instruction interface {
 type MIRCallArg struct {
 	Argument hir.Operand
 	Mut      bool
-	Own      bool
 }
 
 type AssignInst struct {

@@ -16,7 +16,6 @@ type Symbol struct {
 	ParamMode  ParamMode   // How this variable behaves across a function boundary
 	SumType    *SumType    // For variant symbols, the sum type they belong to
 	Variant    *SumVariant // For variant symbols, the variant they represent
-	MethodKind MethodKind  // For function symbols that represent built-in methods, the specific method kind
 }
 
 type ParamMode int
@@ -24,5 +23,4 @@ type ParamMode int
 const (
 	ParamBorrow    ParamMode = iota // fn f(x T)
 	ParamMutBorrow                  // fn f(mut x T)
-	ParamOwned                      // fn f(own x T)
 )

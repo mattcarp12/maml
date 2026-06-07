@@ -343,18 +343,18 @@ func (t *SumType) GetVariant(name string) *SumVariant {
 	return nil
 }
 
-// --- TASK (ASYNC/AWAIT) ---
-type TaskType struct {
+// --- Future (ASYNC/AWAIT) ---
+type FutureType struct {
 	Base Type
 }
 
-func (t TaskType) String() string { return "Task<" + t.Base.String() + ">" }
-func (t TaskType) Equals(other Type) bool {
+func (t FutureType) String() string { return "Task<" + t.Base.String() + ">" }
+func (t FutureType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
 	}
 
-	o, ok := other.(TaskType)
+	o, ok := other.(FutureType)
 	if !ok {
 		return false
 	}
@@ -369,9 +369,9 @@ func (t TaskType) Equals(other Type) bool {
 
 	return t.Base.Equals(o.Base)
 }
-func (t TaskType) IsReferenceType() bool { return true } // Tasks are heap-allocated state machines
-func (t TaskType) SizeInBytes() int      { return 8 }    // Pointer to the heap task
-func (t TaskType) Alignment() int        { return 8 }
+func (t FutureType) IsReferenceType() bool { return true } // Tasks are heap-allocated state machines
+func (t FutureType) SizeInBytes() int      { return 8 }    // Pointer to the heap task
+func (t FutureType) Alignment() int        { return 8 }
 
 // --- FUNCTION ---
 type FunctionType struct {

@@ -95,6 +95,12 @@ type AssignStmt struct {
 	RValue Expr
 }
 
+type VecPushStmt struct {
+	Pos_   Position `json:"-"`
+	LValue Expr
+	RValue Expr
+}
+
 type ReturnStmt struct {
 	Pos_  Position `json:"-"`
 	Value Expr
@@ -232,7 +238,6 @@ type CallArg struct {
 	Pos_     Position `json:"-"`
 	Argument Expr
 	Mut      bool
-	Own      bool
 }
 
 type CallExpr struct {

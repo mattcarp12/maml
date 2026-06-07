@@ -434,7 +434,6 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Operand
 		flatArgs = append(flatArgs, MIRCallArg{
 			Argument: flatArgExpr,
 			Mut:      arg.Mut,
-			Own:      arg.Own,
 		})
 	}
 

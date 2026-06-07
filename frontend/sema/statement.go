@@ -46,6 +46,8 @@ func (a *Analyzer) buildStmt(stmt ast.Stmt) tast.Stmt {
 		return a.buildDeclareStmt(s)
 	case *ast.AssignStmt:
 		return a.buildAssignStmt(s)
+	case *ast.VecPushStmt:
+		return a.buildVecPushStmt(s)
 	case *ast.ReturnStmt:
 		return a.buildReturnStmt(s)
 	case *ast.YieldStmt:
@@ -124,6 +126,39 @@ func (a *Analyzer) buildAssignStmt(s *ast.AssignStmt) *tast.AssignStmt {
 	}
 }
 
+func (a *Analyzer) buildVecPushStmt(s *ast.VecPushStmt) *tast.VecPushStmt {
+	tastLValue := a.buildExpr(s.LValue)
+	tastRValue := a.buildExpr(s.RValue)
+
+	var lvalType types.Type
+	if vec, okVec := tast.TypeOf(tastLValue).(types.VectorType); !okVec {
+		a.errorf(s.Pos_, "cannot push to a non-Vector")
+		lvalType = types.UnknownType{}
+	} else {
+		lvalType = vec.Base
+	}
+	rvalType := tast.TypeOf(tastRValue)
+
+	// 1. Static Capability Check: Extract the root symbol and verify mutability
+	rootSym := a.getRootSymbol(tastLValue)
+	if rootSym == nil {
+		a.errorf(s.Pos_, "cannot assign to non-variable expression")
+	} else if !rootSym.Mutable {
+		a.errorf(s.Pos_, "cannot mutate immutable variable '%s'", rootSym.Name)
+	}
+
+	// 2. Static Type Check
+	if !lvalType.Equals(rvalType) && !types.IsUnknown(lvalType) && !types.IsUnknown(rvalType) {
+		a.errorf(s.Pos_, "type mismatch: cannot push '%s' to Vec<%s>", rvalType.String(), lvalType.String())
+	}
+
+	return &tast.VecPushStmt{
+		Pos_:   s.Pos_,
+		LValue: tastLValue,
+		RValue: tastRValue,
+	}
+}
+
 // =============================================================================
 // Control Flow Statements
 // =============================================================================
@@ -141,7 +176,7 @@ func (a *Analyzer) buildReturnStmt(s *ast.ReturnStmt) *tast.ReturnStmt {
 
 	// Unwrap Task<T> to T if we are inside an async function
 	if a.currentFn != nil && a.currentFn.IsAsync {
-		if taskTy, ok := expected.(types.TaskType); ok {
+		if taskTy, ok := expected.(types.FutureType); ok {
 			expected = taskTy.Base
 		}
 	}

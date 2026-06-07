@@ -37,6 +37,7 @@ const (
 	GT        // >
 	LTE       // <=
 	GTE       // >=
+	PUSH      // <<
 
 	// Delimiters
 	COMMA     // ,

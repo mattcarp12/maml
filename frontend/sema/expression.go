@@ -34,8 +34,6 @@ func (a *Analyzer) buildExpr(expr ast.Expr) tast.Expr {
 		return a.buildIfExpr(e)
 	case *ast.CallExpr:
 		return a.buildCallExpr(e)
-	case *ast.MethodCallExpr:
-		return a.buildMethodCallExpr(e)
 	case *ast.CompositeLiteral:
 		return a.buildCompositeLiteral(e)
 	case *ast.FieldAccess:
@@ -238,7 +236,6 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 			Pos_:     arg.Pos_,
 			Argument: valNode,
 			Mut:      arg.Mut,
-			Own:      arg.Own,
 		})
 
 		// Validate parameter type and mode if within bounds
@@ -258,13 +255,6 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 				if arg.Own {
 					a.errorf(arg.Pos_, "argument %d expects 'mut', got 'own'", i+1)
 				}
-			case types.ParamOwned:
-				if !arg.Own {
-					a.errorf(arg.Pos_, "argument %d requires 'own' modifier", i+1)
-				}
-				if arg.Mut {
-					a.errorf(arg.Pos_, "argument %d expects 'own', got 'mut'", i+1)
-				}
 			case types.ParamBorrow:
 				if arg.Mut || arg.Own {
 					a.errorf(arg.Pos_, "argument %d does not take ownership modifiers", i+1)
@@ -281,116 +271,6 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 	}
 }
 
-func (a *Analyzer) buildMethodCallExpr(e *ast.MethodCallExpr) *tast.CallExpr {
-	// 1. Resolve the receiver expression and its type
-	tastObject := a.buildExpr(e.Object)
-	objType := tast.TypeOf(tastObject)
-
-	// 2. Delegate to our reflection-free registry to get the synthesized method symbol
-	methodSym, err := a.resolveBuiltinMethod(objType, e.Method.Value)
-	if err != nil {
-		a.errorf(e.Pos_, "%s", err.Error())
-		return &tast.CallExpr{
-			Pos_: e.Pos_,
-			End_: e.End_,
-			Type: types.UnknownType{},
-		}
-	}
-
-	fnType, ok := methodSym.Type.(*types.FunctionType)
-	if !ok {
-		a.errorf(e.Pos_, "internal error: method symbol for '%s' is not a function type", e.Method)
-		return &tast.CallExpr{
-			Pos_: e.Pos_,
-			End_: e.End_,
-			Type: types.UnknownType{},
-		}
-	}
-
-	// 3. Mutability Check on the Receiver
-	// Since the method itself modifies the object, a mutating method treats the receiver
-	// as an implicit 'mut' parameter. The root variable bound to it must be mutable.
-	if methodSym.Mutable {
-		rootSym := a.getRootSymbol(tastObject)
-		// If it's a bound variable/field tracking back to a symbol, ensure it's mutable
-		if rootSym != nil && !rootSym.Mutable {
-			a.errorf(e.Pos_, "cannot call mutating method '%s' on immutable object '%s'", e.Method, rootSym.Name)
-		}
-	}
-
-	// 4. Type check the explicit arguments against the function signature parameters
-	if len(e.Arguments) != len(fnType.Params) {
-		a.errorf(e.Pos_, "method '%s' expects %d arguments, got %d", e.Method.Value, len(fnType.Params), len(e.Arguments))
-	}
-
-	var tastArgs []tast.CallArg
-	maxArgs := min(len(fnType.Params), len(e.Arguments))
-
-	for i := 0; i < maxArgs; i++ {
-		argExpr := a.buildExpr(e.Arguments[i].Argument)
-		argType := tast.TypeOf(argExpr)
-		expectedType := fnType.Params[i]
-
-		// Type matching check
-		if !argType.Equals(expectedType) && !types.IsUnknown(argType) {
-			a.errorf(e.Arguments[i].Pos(), "type mismatch in method '%s' argument %d: expected '%s', got '%s'",
-				e.Method.Value, i+1, expectedType.String(), argType.String())
-		}
-
-		// Mutability validation for arguments matching ParamMutBorrow
-		if i < len(fnType.ParamModes) && fnType.ParamModes[i] == types.ParamMutBorrow {
-			argRootSym := a.getRootSymbol(argExpr)
-			if argRootSym != nil && !argRootSym.Mutable {
-				a.errorf(e.Arguments[i].Pos(), "cannot pass immutable variable '%s' as a mutable parameter to method '%s'", argRootSym.Name, e.Method.Value)
-			}
-		}
-
-		tastArgs = append(tastArgs, tast.CallArg{
-			Pos_:     e.Arguments[i].Pos(),
-			Argument: argExpr,
-			Mut:      e.Arguments[i].Mut,
-			Own:      e.Arguments[i].Own,
-		})
-	}
-
-	// Pad any extra unmatched arguments if user provided more than the signature expected
-	for i := len(tastArgs); i < len(e.Arguments); i++ {
-		tastArgs = append(tastArgs, tast.CallArg{
-			Pos_:     e.Arguments[i].Pos(),
-			Argument: a.buildExpr(e.Arguments[i].Argument),
-			Mut:      e.Arguments[i].Mut,
-			Own:      e.Arguments[i].Own,
-		})
-	}
-
-	// 5. Build clean TAST identifier representing the method symbol
-	calleeIdent := &tast.Identifier{
-		Pos_:   e.Pos_,
-		Value:  e.Method.Value,
-		Type:   fnType,
-		Symbol: methodSym,
-	}
-
-	// Package up the arguments cleanly, prepending the receiver as the implicit first argument.
-	// This matches downstream expectations where the receiver becomes parameter 0.
-	allArgs := append([]tast.CallArg{
-		{
-			Pos_:     e.Pos_,
-			Argument: tastObject,
-			Mut:      false,
-			Own:      false,
-		},
-	}, tastArgs...)
-
-	return &tast.CallExpr{
-		Pos_:      e.Pos_,
-		End_:      e.End_,
-		Function:  calleeIdent,
-		Arguments: allArgs,
-		Type:      fnType.Return,
-	}
-}
-
 func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 	if a.currentFn == nil || !a.currentFn.IsAsync {
 		a.errorf(e.Pos(), "cannot use 'await' outside of an async function")
@@ -400,7 +280,7 @@ func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 	valType := tast.TypeOf(valNode)
 
 	var resultType types.Type = types.UnknownType{}
-	if taskTy, ok := valType.(types.TaskType); ok {
+	if taskTy, ok := valType.(types.FutureType); ok {
 		resultType = taskTy.Base
 	} else if !types.IsUnknown(valType) {
 		a.errorf(e.Pos(), "cannot await non-task type '%s'", valType.String())
@@ -469,10 +349,6 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 	leftType := tast.TypeOf(leftNode)
 	idxType := tast.TypeOf(idxNode)
 
-	if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
-		a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", idxType.String())
-	}
-
 	var resultType types.Type = types.UnknownType{}
 	switch ty := leftType.(type) {
 	case types.ArrayType:
@@ -481,11 +357,25 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 		resultType = ty.Base
 	case types.VectorType:
 		resultType = ty.Base
+	case types.MapType:
+		resultType = ty.Value
 	case types.StringType:
 		resultType = types.IntType{} // Characters are currently ints
 	default:
 		if !types.IsUnknown(leftType) {
 			a.errorf(e.Left.Pos(), "cannot index non-array/slice type '%s'", leftType.String())
+		}
+	}
+
+	// Type check the index expression
+	switch ty := leftType.(type) {
+	case types.ArrayType, types.ViewType, types.VectorType, types.StringType:
+		if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
+			a.errorf(e.Index.Pos(), "index must be an integer, got '%s'", idxType.String())
+		}
+	case types.MapType:
+		if !idxType.Equals(ty.Key) && !types.IsUnknown(ty.Key) {
+			a.errorf(e.Index.Pos(), "index of map must be '%s', got '%s'", ty.Key.String(), idxType.String())
 		}
 	}
 
@@ -805,65 +695,6 @@ func (a *Analyzer) buildFieldAccess(e *ast.FieldAccess) *tast.FieldAccess {
 		Field:  &tast.Identifier{Pos_: e.Field.Pos_, Value: e.Field.Value, Type: resultType},
 		Type:   resultType,
 	}
-}
-
-// buildMethodSymbol constructs a synthetic symbol for a built-in method call.
-// It is called instead of buildIdentifier because built-in method names ("push",
-// "get", etc.) are not in the symbol table — they are structural properties of
-// their receiver type, not named declarations.
-//
-// The mangled Name is the runtime function the backend will call. It must match
-// the corresponding declaration in declareRuntimeFunctions on the C++ side.
-func (a *Analyzer) buildMethodSymbol(
-	methodName string,
-	receiverType types.Type,
-	returnType types.Type,
-	paramTypes []types.Type,
-	mutating bool,
-) *types.Symbol {
-	mangledName := mangleMethodName(methodName, receiverType)
-
-	paramModes := make([]types.ParamMode, len(paramTypes))
-	for i := range paramModes {
-		paramModes[i] = types.ParamBorrow
-	}
-
-	return &types.Symbol{
-		Kind: types.FuncSymbol,
-		Name: mangledName,
-		Type: &types.FunctionType{
-			Params:     paramTypes,
-			ParamModes: paramModes,
-			Return:     returnType,
-		},
-		Mutable: mutating,
-	}
-}
-
-// mangleMethodName produces the runtime function name for a built-in method.
-// These names must exactly match the declarations in declareRuntimeFunctions.
-func mangleMethodName(method string, receiver types.Type) string {
-	switch receiver.(type) {
-	case types.VectorType:
-		switch method {
-		case "push":
-			return "maml_vec_push"
-		case "pop":
-			return "maml_vec_pop"
-		case "len":
-			return "maml_vec_len"
-		}
-	case types.MapType:
-		switch method {
-		// case "put":
-		// 	return "maml_map_put"
-		// case "get":
-		// 	return "maml_map_get"
-		case "remove":
-			return "maml_map_remove"
-		}
-	}
-	return method // fallback: use name as-is
 }
 
 func (a *Analyzer) lookupStruct(name string) *types.StructType {

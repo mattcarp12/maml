@@ -173,7 +173,8 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 	}
 
 	// Handle the case where an expression is followed by an assignment, e.g., 'x = 5'
-	if p.peekToken.Type == token.ASSIGN {
+	switch p.peekToken.Type {
+	case token.ASSIGN:
 		p.nextToken() // get onto '='
 		p.nextToken() // move to the expression on the right side of '='
 		value := p.parseExpression(LOWEST)
@@ -182,6 +183,19 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 		}
 		p.expectStatementEnd() // Consume the newline after the assignment
 		return &ast.AssignStmt{
+			LValue: expr,
+			RValue: value,
+			Pos_:   pos,
+		}
+	case token.PUSH:
+		p.nextToken() // get onto '<<'
+		p.nextToken() // move to the expression on the right side of '<<'
+		value := p.parseExpression(LOWEST)
+		if value == nil {
+			return nil
+		}
+		p.expectStatementEnd() // Consume the newline after the assignment
+		return &ast.VecPushStmt{
 			LValue: expr,
 			RValue: value,
 			Pos_:   pos,

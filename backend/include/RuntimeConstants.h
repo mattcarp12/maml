@@ -6,7 +6,7 @@ namespace rt {
 
 // --- Memory & ARC Constants ---
 constexpr const char *ALLOC = "maml_alloc";
-constexpr const char *FREE = "maml_free"; 
+constexpr const char *FREE = "maml_free";
 constexpr const char *RETAIN = "maml_retain";
 constexpr const char *RELEASE = "maml_release";
 
@@ -24,6 +24,8 @@ constexpr const char *RUN_EXECUTOR = "maml_run_executor";
 // --- Container Constants ---
 constexpr const char *VEC_GROW = "maml_vec_grow";
 constexpr const char *VEC_PUSH = "maml_vec_push";
+constexpr const char *VEC_CREATE = "maml_vec_create";
+constexpr const char *VEC_GET = "maml_vec_get";
 constexpr const char *MAP_CREATE = "maml_map_create";
 constexpr const char *MAP_PUT = "maml_map_put";
 constexpr const char *MAP_GET = "maml_map_get";
@@ -32,7 +34,7 @@ constexpr const char *STR_HASH = "maml_str_hash";
 // --- Standard Built-ins ---
 constexpr const char *PUTS = "puts";
 
-} // namespace rt
-} // namespace maml
+}  // namespace rt
+}  // namespace maml
 
-#endif // MAML_RUNTIME_CONSTANTS_H
+#endif  // MAML_RUNTIME_CONSTANTS_H

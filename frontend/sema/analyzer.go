@@ -131,8 +131,6 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	for i, p := range v.Params {
 		paramTypes[i] = a.resolveAstType(p.Type)
 		switch {
-		case p.Own:
-			paramModes[i] = types.ParamOwned
 		case p.Mut:
 			paramModes[i] = types.ParamMutBorrow
 		default:
@@ -144,7 +142,7 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	if v.ReturnType != nil {
 		returnType = a.resolveAstType(v.ReturnType)
 		if v.IsAsync {
-			returnType = types.TaskType{Base: returnType}
+			returnType = types.FutureType{Base: returnType}
 		}
 	}
 

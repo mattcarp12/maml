@@ -56,9 +56,13 @@ void declareRuntimeFunctions(CodegenContext &ctx) {
   Module->getOrInsertFunction(rt::RETAIN, llvm::FunctionType::get(voidTy, {ptrTy}, false));
   // maml_release: void (ptr)
   Module->getOrInsertFunction(rt::RELEASE, llvm::FunctionType::get(voidTy, {ptrTy}, false));
-  // maml_vec_grow: ptr (ptr, i32, ptr, i32)
-  Module->getOrInsertFunction(rt::VEC_GROW, llvm::FunctionType::get(ptrTy, {ptrTy, i32Ty, ptrTy, i32Ty}, false));
+  // maml_vec_grow: ptr (ptr, ptr, i32)
+  Module->getOrInsertFunction(rt::VEC_GROW, llvm::FunctionType::get(ptrTy, {ptrTy,ptrTy, i32Ty}, false));
   Module->getOrInsertFunction(rt::VEC_PUSH, llvm::FunctionType::get(voidTy, {ptrTy, ptrTy}, false));
+  // maml_vec_get: ptr (ptr, i32)
+  Module->getOrInsertFunction(rt::VEC_GET, llvm::FunctionType::get(ptrTy, {ptrTy, i32Ty}, false));
+  // maml_vec_create: ptr (i32)
+  Module->getOrInsertFunction(rt::VEC_CREATE, llvm::FunctionType::get(ptrTy, {i32Ty}, false));
   // maml_map_create: ptr (i32, i8)
   Module->getOrInsertFunction(rt::MAP_CREATE, llvm::FunctionType::get(ptrTy, {i32Ty, i8Ty}, false));
   // maml_map_put: void (ptr, i64, ptr, ptr, i32)
@@ -74,7 +78,6 @@ void declareRuntimeFunctions(CodegenContext &ctx) {
 void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
   auto &Builder = ctx.Builder;
   auto &Context = ctx.Context;
-  auto &Module = ctx.Module;
 
   std::string_view name = fn["name"].get<std::string_view>();
 
@@ -100,7 +103,7 @@ void compileFunction(CodegenContext &ctx, const nlohmann::json &fn) {
   // 3. Create the LLVM Function Signature
   llvm::StringRef llName(name.data(), name.size());
   llvm::FunctionType *FT = llvm::FunctionType::get(retType, paramTypes, false);
-  llvm::Function *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, llName, *Module);
+  llvm::Function *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, llName, *ctx.Module);
 
   if (fn.contains("is_async") && fn["is_async"] == true) {
     F->addFnAttr(llvm::Attribute::PresplitCoroutine);

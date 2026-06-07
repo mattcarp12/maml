@@ -42,11 +42,14 @@ FetchContent_MakeAvailable(json)
 # Define source files explicitly to maintain clear modular compilation units
 set(BACKEND_SOURCES
     src/CodegenContext.cpp
-    src/TypeLowering.cpp
+    src/CompoundOps.cpp
+    src/ContainerOps.cpp
+    src/ControlFlowOps.cpp
     src/ExprCore.cpp
+    src/MemoryOps.cpp
+    src/TypeLowering.cpp
     src/StmtGenerator.cpp
     src/ProgramGenerator.cpp
-    src/ErrorHandler.cpp
     src/main.cpp
 )
 

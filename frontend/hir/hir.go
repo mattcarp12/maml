@@ -522,12 +522,11 @@ func (a *AwaitExpr) exprNode()      {}
 // Expressions — calls
 // =============================================================================
 
-// CallArg wraps a single function argument and its ownership modifier.
+// CallArg wraps a single function argument
 type CallArg struct {
 	Pos_     Position
 	Argument Expr
 	Mut      bool
-	Own      bool
 }
 
 // CallExpr is the only call form in the HIR. MethodCallExpr from the TAST has
@@ -553,8 +552,6 @@ func (ce *CallExpr) String() string {
 		prefix := ""
 		if a.Mut {
 			prefix = "mut "
-		} else if a.Own {
-			prefix = "own "
 		}
 		args = append(args, prefix+a.Argument.String())
 	}
@@ -852,6 +849,19 @@ func (s *VecWriteStmt) String() string {
 	return fmt.Sprintf("%s[%s] = %s", s.Vec.String(), s.Index.String(), s.Value.String())
 }
 func (s *VecWriteStmt) stmtNode() {}
+
+type VecPushStmt struct {
+	Pos_  Position
+	Vec   Expr
+	Value Expr
+}
+
+func (s *VecPushStmt) Pos() Position { return s.Pos_ }
+func (s *VecPushStmt) End() Position { return s.Value.End() }
+func (s *VecPushStmt) String() string {
+	return fmt.Sprintf("%s << %s", s.Vec.String(), s.Value.String())
+}
+func (s *VecPushStmt) stmtNode() {}
 
 // =============================================================================
 // Operand — atomic expressions safe for direct use in MIR instructions
