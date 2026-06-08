@@ -75,7 +75,24 @@ llvm::Value *evaluateExpression(CodegenContext &ctx, const nlohmann::json &expr)
   if (op == "const_bool")
     return llvm::ConstantInt::get(llvm::Type::getInt1Ty(Context), expr["value"].get<bool>() ? 1 : 0);
   if (op == "const_string") return compileStringLiteral(ctx, expr);
-  if (op == "ident") return compileIdentifier(ctx, expr);
+
+  if (op == "ident") {
+    std::string name = expr["value"].get<std::string>();
+
+    // 1. Handle the "null" pointer passed by the frontend for empty ARC hooks
+    if (name == "null") {
+      return llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context));
+    }
+
+    // 2. Check if the identifier is a global runtime function (e.g., "maml_release")
+    // This allows the Map/Vec constructors to accept function pointers safely.
+    if (llvm::Function *func = ctx.Module->getFunction(name)) {
+      return func;
+    }
+
+    // 3. Otherwise, it's a standard local variable. Delegate to your existing logic.
+    return compileIdentifier(ctx, expr);
+  }
 
   // If we reach this, the frontend failed to flatten an expression and leaked it to the backend.
   ctx.Error.fatal("CRITICAL ERROR: Unflattened AST expression node reached backend! Operator: " + std::string(op),

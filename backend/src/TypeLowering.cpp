@@ -17,7 +17,8 @@ namespace maml {
 static TypeKind parseTypeKind(std::string_view kindStr) {
   static const std::unordered_map<std::string_view, TypeKind> kindMap = {
       {"struct", TypeKind::Struct}, {"sum_type", TypeKind::SumType}, {"array", TypeKind::Array},
-      {"vector", TypeKind::Vector}, {"view", TypeKind::View},        {"map", TypeKind::Map}};
+      {"vector", TypeKind::Vector}, {"view", TypeKind::View},        {"map", TypeKind::Map},
+      {"future", TypeKind::Future}};
 
   auto it = kindMap.find(kindStr);
   if (it != kindMap.end()) {
@@ -108,16 +109,17 @@ static llvm::Type *lowerArrayType(CodegenContext &ctx, const nlohmann::json &typ
   return llvm::ArrayType::get(elemTy, size);
 }
 
-static llvm::Type *lowerVectorOrViewType(CodegenContext &ctx) {
+static llvm::Type *lowerDynamicContainerType(CodegenContext &ctx) { return llvm::PointerType::getUnqual(ctx.Context); }
+
+static llvm::Type *lowerViewType(CodegenContext &ctx) {
+  // Views remain lightweight stack-allocated fat-pointer value structs
   return llvm::StructType::get(ctx.Context, {
-                                                llvm::PointerType::getUnqual(ctx.Context),
-                                                llvm::PointerType::getUnqual(ctx.Context),
-                                                llvm::Type::getInt32Ty(ctx.Context),
-                                                llvm::Type::getInt32Ty(ctx.Context),
+                                                llvm::PointerType::getUnqual(ctx.Context),  // field 0: raw_ptr
+                                                llvm::PointerType::getUnqual(ctx.Context),  // field 1: data_ptr
+                                                llvm::Type::getInt32Ty(ctx.Context),        // field 2: len
+                                                llvm::Type::getInt32Ty(ctx.Context),        // field 3: cap
                                             });
 }
-
-static llvm::Type *lowerMapType(CodegenContext &ctx) { return llvm::PointerType::getUnqual(ctx.Context); }
 
 // -----------------------------------------------------------------------------
 // Public AST/MIR Type Router Entry Point
@@ -162,11 +164,12 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
         resultType = lowerArrayType(ctx, typeJson);
         break;
       case TypeKind::Vector:
-      case TypeKind::View:
-        resultType = lowerVectorOrViewType(ctx);
-        break;
       case TypeKind::Map:
-        resultType = lowerMapType(ctx);
+      case TypeKind::Future:
+        resultType = lowerDynamicContainerType(ctx);
+        break;
+      case TypeKind::View:
+        resultType = lowerViewType(ctx);
         break;
       case TypeKind::Unknown:
       default:

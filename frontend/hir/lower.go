@@ -637,8 +637,16 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 	// Handles complex sum types with payloads: `case Some(val):`
 	case *tast.VariantPattern:
 		variantName := ""
+		discriminant := 0
 		if pat.Variant != nil {
 			variantName = pat.Variant.Value
+		}
+
+		// Look up the underlying discriminant integer from the type system
+		if sumTy, ok := subjectType.(*types.SumType); ok {
+			if v := sumTy.GetVariant(variantName); v != nil {
+				discriminant = v.Discriminant
+			}
 		}
 
 		condition = &InfixExpr{
@@ -647,12 +655,12 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 			Left: &VariantDiscriminantExpr{
 				Pos_:   pat.Pos(),
 				Object: subjectIdent,
-				Type:   types.StringType{},
+				Type:   types.IntType{},
 			},
-			Right: &StringLiteral{
+			Right: &IntLiteral{
 				Pos_:  pat.Pos(),
-				Value: variantName,
-				Type:  types.StringType{},
+				Value: int64(discriminant),
+				Type:  types.IntType{},
 			},
 			Type: types.BoolType{},
 		}
@@ -687,6 +695,47 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 			}
 		}
 
+		// Generate internal unpacking assignments for bounded struct parameters
+		if len(pat.Fields) > 0 {
+			for _, fieldPat := range pat.Fields {
+				// Resolve the exact field index from the type system's payload layout
+				payloadIndex := 0
+				if sumTy, ok := subjectType.(*types.SumType); ok {
+					if v := sumTy.GetVariant(variantName); v != nil {
+						for i, f := range v.Fields {
+							if f.Name == fieldPat.Field { // Or fieldPat.FieldName
+								payloadIndex = i
+								break
+							}
+						}
+					}
+				}
+
+				bindingSym := fieldPat.Binding.Symbol
+				if bindingSym == nil {
+					bindingSym = &types.Symbol{Kind: types.VarSymbol, Name: fieldPat.Binding.Value, Type: fieldPat.Binding.Type}
+				}
+
+				// Extract value via VariantReadExpr
+				readExpr := &VariantReadExpr{
+					Pos_:        fieldPat.Binding.Pos(),
+					Object:      subjectIdent,
+					VariantName: variantName,
+					FieldIndex:  payloadIndex,
+					FieldName:   fieldPat.Field,
+					Type:        fieldPat.Binding.Type,
+				}
+
+				decl := &DeclareStmt{
+					Pos_:   fieldPat.Binding.Pos(),
+					Symbol: bindingSym,
+					Value:  readExpr,
+				}
+				// Inject the payload extraction at the TOP of the body block
+				bodyStmts = append([]Stmt{decl}, bodyStmts...)
+			}
+		}
+
 	default:
 		// DEFENSE IN DEPTH: Crash loudly if we encounter an unknown pattern type
 		panic(fmt.Sprintf("Lowering Error: Unhandled Match Pattern Type: %T", pat))
@@ -698,16 +747,11 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 func (l *Lowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt, next Expr, exprType types.Type) Expr {
 	if next == nil {
 		// Base case (the last arm in the match)
-		if boolLit, ok := cond.(*BoolLiteral); ok && boolLit.Value {
-			return conseq // Optimize out `if true` for default cases
-		}
-		return &IfExpr{
-			Pos_:        arm.Pos_,
-			Condition:   cond,
-			Consequence: conseq,
-			Alternative: &BlockStmt{Pos_: arm.End_, Statements: []Stmt{}},
-			Type:        exprType,
-		}
+		// Because the frontend guarantees match exhaustiveness during type-checking,
+		// the final arm can safely act as the unconditional fallback branch.
+		// This prevents generating an empty 'else' block that leaks void `_unit`
+		// assignments into typed expressions, and optimizes away the final redundant check!
+		return conseq
 	}
 
 	// Chain to previous link

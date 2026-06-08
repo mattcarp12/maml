@@ -69,7 +69,7 @@ func buildFunctionDTO(fn *Function) exportFunction {
 
 	if fn.Graph != nil {
 		entry = fmt.Sprintf("%d", fn.Graph.Entry)
-		for _, block := range fn.Graph.Blocks {
+		for _, block := range fn.Graph.SortedBlocks() {
 			blocks = append(blocks, buildBlockDTO(block))
 		}
 	}
@@ -95,6 +95,9 @@ func buildFunctionDTO(fn *Function) exportFunction {
 func buildBlockDTO(block *BasicBlock) exportBlock {
 	insts := make([]map[string]any, 0, len(block.Statements))
 	for _, inst := range block.Statements {
+		if _, isKeepAlive := inst.(*KeepAliveInst); isKeepAlive {
+			continue
+		}
 		insts = append(insts, buildInstructionDTO(inst))
 	}
 
@@ -384,7 +387,8 @@ func lowerType(t types.Type) any {
 	case types.ArrayType:
 		return map[string]any{
 			"kind":      "array",
-			"size":      v.Size,
+			"size":      v.SizeInBytes(),
+			"len":       v.Size,
 			"elem_type": lowerType(v.Base),
 		}
 	case types.ViewType:
@@ -405,7 +409,7 @@ func lowerType(t types.Type) any {
 		}
 	case types.FutureType: // NEW: Explicit Task serialization
 		return map[string]any{
-			"kind":      "task",
+			"kind":      "future",
 			"base_type": lowerType(v.Base),
 		}
 	case types.UnknownType:

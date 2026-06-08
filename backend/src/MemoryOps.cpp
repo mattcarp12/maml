@@ -86,24 +86,38 @@ static void handleRefAlloc(CodegenContext &ctx, const nlohmann::json &stmt) {
   ctx.Builder->CreateStore(heapPtr, dstTarget);
 }
 
-static void handleRefInc(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string src = stmt["src"].get<std::string>();
-  if (llvm::Value *srcTarget = ctx.resolveSymbol(src)) {
-    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcTarget)) {
-      llvm::Value *loaded = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
-      llvm::Function *retainFn = ctx.Module->getFunction(rt::RETAIN);
-      if (retainFn) ctx.Builder->CreateCall(retainFn, {loaded});
-    }
-  }
-}
-
 static void handleRefDec(CodegenContext &ctx, const nlohmann::json &stmt) {
   std::string src = stmt["src"].get<std::string>();
   if (llvm::Value *srcTarget = ctx.resolveSymbol(src)) {
     if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcTarget)) {
       llvm::Value *loaded = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
+      llvm::Value *ptrToRelease = loaded;
+
+      // NEW: If the type is a fat pointer (struct), extract the raw pointer (field 0)
+      if (loaded->getType()->isStructTy()) {
+        ptrToRelease = ctx.Builder->CreateExtractValue(loaded, 0);
+      }
+
       llvm::Function *releaseFn = ctx.Module->getFunction(rt::RELEASE);
-      if (releaseFn) ctx.Builder->CreateCall(releaseFn, {loaded});
+      if (releaseFn) ctx.Builder->CreateCall(releaseFn, {ptrToRelease});
+    }
+  }
+}
+
+static void handleRefInc(CodegenContext &ctx, const nlohmann::json &stmt) {
+  std::string src = stmt["src"].get<std::string>();
+  if (llvm::Value *srcTarget = ctx.resolveSymbol(src)) {
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcTarget)) {
+      llvm::Value *loaded = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
+      llvm::Value *ptrToRetain = loaded;
+
+      // NEW: Extract raw pointer for retains as well
+      if (loaded->getType()->isStructTy()) {
+        ptrToRetain = ctx.Builder->CreateExtractValue(loaded, 0);
+      }
+
+      llvm::Function *retainFn = ctx.Module->getFunction(rt::RETAIN);
+      if (retainFn) ctx.Builder->CreateCall(retainFn, {ptrToRetain});
     }
   }
 }

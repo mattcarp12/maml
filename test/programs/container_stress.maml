@@ -1,0 +1,13 @@
+// EXIT_CODE: 128
+
+fn main() int {
+    mut v := Vec<int>{}
+    mut m := Map<int,int>{}
+    n := 1000000
+    for mut i := 0; i < n; i = i + 1 {
+        v << i
+        m[i] = i
+    }
+
+    return len(v) + len(m)
+}

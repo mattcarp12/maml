@@ -61,6 +61,27 @@ func newGlobalScope() *Scope {
 			Return:     types.IntType{},
 		},
 	}
+	// Builtin: len(collection)
+	global.symbols["len"] = &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "len",
+		Type: &types.FunctionType{
+			Params:     []types.Type{types.AnyType{}},
+			ParamModes: []types.ParamMode{types.ParamBorrow},
+			Return:     types.IntType{},
+		},
+	}
+
+	// Builtin: delete(map, key)
+	global.symbols["delete"] = &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "delete",
+		Type: &types.FunctionType{
+			Params:     []types.Type{types.AnyType{}, types.AnyType{}},
+			ParamModes: []types.ParamMode{types.ParamMutBorrow, types.ParamBorrow},
+			Return:     types.UnitType{},
+		},
+	}
 
 	return global
 }

@@ -10,7 +10,7 @@
 namespace maml {
 
 // Strongly-typed representation of compound MIR type kinds
-enum class TypeKind { Unknown, Struct, SumType, Array, Vector, View, Map };
+enum class TypeKind { Unknown, Struct, SumType, Array, Vector, View, Map, Future };
 
 // Translates a MAML JSON type definition into a native LLVM IR Type
 llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson);

@@ -290,3 +290,16 @@ type CoroPrologueInst struct{}
 
 func (CoroPrologueInst) isInstruction()    {}
 func (i *CoroPrologueInst) String() string { return "coro_prologue" }
+
+// ==========================================================================
+// Helper instructions
+// ==========================================================================
+
+// KeepAliveInst explicitly prevents ARC from dropping a reference until after this instruction.
+// It acts as a fake "Use" of a variable to extend its lifetime across block boundaries.
+type KeepAliveInst struct {
+	Src string
+}
+
+func (KeepAliveInst) isInstruction()    {}
+func (i *KeepAliveInst) String() string { return fmt.Sprintf("keep_alive %s", i.Src) }

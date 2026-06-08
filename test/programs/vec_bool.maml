@@ -1,0 +1,14 @@
+// EXIT_CODE: 42
+
+fn main() int {
+    mut bools := Vec<bool>{}
+    bools << true
+    bools << false
+    bools << false
+    bools[2] = true
+    if bools[0] != true { return 1 }
+    if bools[1] != false { return 2 }
+    if bools[2] != true { return 3 }
+
+    return 42
+}

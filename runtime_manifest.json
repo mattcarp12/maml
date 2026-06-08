@@ -1,0 +1,43 @@
+{
+    "operators"       : {
+        "index_read"  : {
+            "map"   : { "runtime_symbol": "maml_map_get", "return": "ptr", "args": ["ptr", "i32", "ptr", "i32"] },
+            "vector": { "runtime_symbol": "maml_vec_get", "return": "ptr", "args": ["ptr", "i32"              ] }
+        },
+        "index_assign": {
+            "map"        : {
+                "runtime_symbol": "maml_map_put",
+                "return"        : "void",
+                "args"          : ["ptr", "i64", "ptr", "i32", "i64", "ptr"]
+            },
+            "vector_push": { "runtime_symbol": "maml_vec_push", "return": "void", "args": ["ptr", "ptr"] },
+            "vector_set" : { "runtime_symbol": "maml_vec_set", "return": "void", "args": ["ptr", "i32", "ptr"] }
+        }
+    },
+    "builtins"        : {
+        "len"   : {
+            "vector": { "runtime_symbol": "maml_vec_len", "return": "i32", "args": ["ptr"] },
+            "map"   : { "runtime_symbol": "maml_map_len", "return": "i32", "args": ["ptr"] }
+        },
+        "delete": {
+            "map": { "runtime_symbol": "maml_map_delete", "return": "void", "args": ["ptr", "i32", "ptr", "i32"] }
+        }
+    },
+    "global_functions": {
+        "maml_alloc"              : { "return": "ptr",  "args": ["i64"                     ] },
+        "maml_free"               : { "return": "void", "args": ["ptr"                     ] },
+        "maml_retain"             : { "return": "void", "args": ["ptr"                     ] },
+        "maml_release"            : { "return": "void", "args": ["ptr"                     ] },
+        "maml_vec_grow"           : { "return": "ptr",  "args": ["ptr", "ptr", "i32"       ] },
+        "maml_vec_create"         : { "return": "ptr",  "args": ["i32"                     ] },
+        "maml_map_create"         : { "return": "ptr",  "args": ["i32", "i8"               ] },
+        "maml_str_hash"           : { "return": "i32",  "args": ["ptr", "i32"              ] },
+        "maml_str_eq"             : { "return": "i32",  "args": ["ptr", "i32", "ptr", "i32"] },
+        "puts"                    : { "return": "i32",  "args": ["ptr"                     ] },
+        "maml_coro_resume_helper" : { "return": "void", "args": ["ptr"                     ] },
+        "maml_coro_done_helper"   : { "return": "bool", "args": ["ptr"                     ] },
+        "maml_coro_destroy_helper": { "return": "void", "args": ["ptr"                     ] },
+        "maml_spawn_task"         : { "return": "void", "args": ["ptr"                     ] },
+        "maml_run_executor"       : { "return": "void", "args": [                          ] }
+    }
+}

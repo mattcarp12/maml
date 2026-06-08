@@ -114,9 +114,19 @@ func (a *Analyzer) buildAssignStmt(s *ast.AssignStmt) *tast.AssignStmt {
 		a.errorf(s.Pos_, "cannot mutate immutable variable '%s'", rootSym.Name)
 	}
 
+	// Special case for Map Assignment Unwrapping
+	// If we are assigning to a map index, the expected RValue type is the raw
+	// map.Value type, NOT the Option<V> wrapper used for map reads.
+	expectedType := lvalType
+	if idxExpr, ok := tastLValue.(*tast.IndexExpr); ok {
+		if mapTy, isMap := tast.TypeOf(idxExpr.Left).(types.MapType); isMap {
+			expectedType = mapTy.Value
+		}
+	}
+
 	// 2. Static Type Check
-	if !lvalType.Equals(rvalType) && !types.IsUnknown(lvalType) && !types.IsUnknown(rvalType) {
-		a.errorf(s.Pos_, "type mismatch: cannot assign '%s' to '%s'", rvalType.String(), lvalType.String())
+	if !expectedType.Equals(rvalType) && !types.IsUnknown(expectedType) && !types.IsUnknown(rvalType) {
+		a.errorf(s.Pos_, "type mismatch: cannot assign '%s' to '%s'", rvalType.String(), expectedType.String())
 	}
 
 	return &tast.AssignStmt{
@@ -174,10 +184,10 @@ func (a *Analyzer) buildReturnStmt(s *ast.ReturnStmt) *tast.ReturnStmt {
 
 	expected := a.expectedReturn
 
-	// Unwrap Task<T> to T if we are inside an async function
+	// Unwrap Future<T> to T if we are inside an async function
 	if a.currentFn != nil && a.currentFn.IsAsync {
-		if taskTy, ok := expected.(types.FutureType); ok {
-			expected = taskTy.Base
+		if futTy, ok := expected.(types.FutureType); ok {
+			expected = futTy.Base
 		}
 	}
 

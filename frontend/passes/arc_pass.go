@@ -23,9 +23,11 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 		}
 	}
 
+	// Inside InjectARC in frontend/passes/arc_pass.go:
+
 	isRef := func(name string) bool {
 		t, ok := varTypes[name]
-		return ok && t != nil && t.IsReferenceType()
+		return ok && t != nil && t.IsNeedsARC() // Fixed: Only inject ARC for owning types
 	}
 
 	// 2. Single-Pass Block Injection
@@ -71,9 +73,8 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 		// Extract the dying references into a slice first
 		var dyingRefs []string
 		for v := range activeRefs {
+			// A reference dies if it is not live out of this block
 			if !liveness.LiveOut[block.ID][v] {
-				// Prevent freeing the return value before handing it back to the caller!
-				// Ownership is transferred across the function ABI.
 				isReturned := false
 				if ret, ok := block.Terminator.(*mir.ReturnTerminator); ok && ret.Value != nil {
 					if ident, isIdent := ret.Value.(*hir.Identifier); isIdent && ident.Value == v {
@@ -81,7 +82,17 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 					}
 				}
 
-				if !isReturned {
+				// NEW: Check if the variable is a caller-owned parameter
+				isParam := false
+				for _, param := range g.Params {
+					if param.Name == v {
+						isParam = true
+						break
+					}
+				}
+
+				// Only drop if it's not returned AND not a caller-owned parameter!
+				if !isReturned && !isParam {
 					dyingRefs = append(dyingRefs, v)
 				}
 			}

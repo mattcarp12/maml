@@ -1,17 +1,119 @@
 // EXIT_CODE: 185
 
-fn main() int {
-    mut m := Map<string, int>{}
-    m["hello"] = 50
-    m["world"] = 60
-    m["hello"] = 999
+type Point = {x int, y int}
 
+fn test_vectors() int {
     mut v := Vec<int>{}
-    for mut i := 0; i < 20; i = i + 1 {
-        v << i * 10
+
+    // 1. Test basic push and length
+    v << 100
+    v << 200
+    v << 300
+
+    if len(v) != 3 { return 1 }
+
+    // 2. Test reading
+    if v[0] != 100 { return 2 }
+    if v[2] != 300 { return 3 }
+
+    // 3. Test in-place mutation
+    v[1] = 99
+    if v[1] != 99 { return 4 }
+
+    // 4. Test Vec<string>
+    mut vs := Vec<string>{"hello", "world"}
+    if len(vs) != 2 { return 5 }
+    vs << "foo"
+    vs << "bar"
+    if len(vs) != 4 { return 6 }
+
+    if vs[3] != "bar" { return 7 }
+
+    // 5. Test Vec<Point>
+    mut vp := Vec<Point>{}
+    vp << Point{x: 1, y: 2}
+    if vp[0].x != 1 || vp[0].y != 2 { return 8 }
+
+    return 0 // Success
+}
+
+fn test_maps() int {
+    mut m := Map<string, int>{}
+
+    // 1. Test insertion and length
+    m["alice"] = 10
+    m["bob"] = 20
+
+    if len(m) != 2 { return 10 }
+
+    // 2. Test reading an existing key
+    match m["alice"] {
+        case Some(val): {
+            if val != 10 { return 11 }
+        }
+        case None: { 
+            return 12 // Failed: key should exist 
+        }
     }
 
-    return m["hello"] + m["world"] + v[15]
-    // return value is 1209
-    // exit code = 1209 % 256 = 185
+    // 3. Test reading a missing key (Should be None)
+    match m["charlie"] {
+        case Some(val): { 
+            return 13 // Failed: charlie should not exist
+        }
+        case None: {
+            // Success: safely handled missing key
+        }
+    }
+
+    // 4. Test Tombstone Deletion
+    delete(mut m, "alice")
+    
+    if len(m) != 1 { return 14 } // Count should decrement
+
+    // Verify "alice" is actually gone and returns None
+    match m["alice"] {
+        case Some(val): { 
+            return 15 // Failed: alice was not deleted properly
+        }
+        case None: {
+            // Success: alice is gone
+        }
+    }
+
+    // 5. Verify probe chain isn't broken (bob should still be reachable)
+    match m["bob"] {
+        case Some(val): {
+            if val != 20 { return 16 }
+        }
+        case None: {
+            return 17 // Failed: tombstone broke the probe chain
+        }
+    }
+
+    // 6. Test map update
+    m["alice"] = 30
+    m["alice"] = 40
+    match m["alice"] {
+        case Some(val): {
+            if val != 40 { return 18 }
+        }
+        case None: { return 19 }
+    }
+
+    return 0 // Success
+}
+
+fn main() int {
+    vec_result := test_vectors()
+    if vec_result != 0 {
+        return vec_result
+    }
+
+    map_result := test_maps()
+    if map_result != 0 {
+        return map_result
+    }
+
+    return 185
 }

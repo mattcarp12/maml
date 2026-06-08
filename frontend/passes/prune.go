@@ -31,6 +31,8 @@ func Reachable(g *mir.Graph) map[mir.BlockID]bool {
 			succs = append(succs, t.Target)
 		case *mir.BranchTerminator:
 			succs = append(succs, t.TrueTarget, t.FalseTarget)
+		case *mir.CoroSuspendTerminator:
+			succs = append(succs, t.ResumeBlock, t.CleanupBlock)
 		}
 
 		for _, succ := range succs {

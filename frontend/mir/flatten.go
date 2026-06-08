@@ -40,8 +40,13 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Operand, 
 	case *hir.InfixExpr:
 		flatLeft, current := b.flattenExpr(e.Left, current)
 		flatRight, current := b.flattenExpr(e.Right, current)
-		tmp := b.newTemp()
 
+		// Intercept String Equality Comparisons to enforce deep-equality runtime semantics
+		if hir.TypeOf(e.Left).Equals(types.StringType{}) && (e.Operator == "==" || e.Operator == "!=") {
+			return b.flattenStringEq(e, flatLeft, flatRight, current)
+		}
+
+		tmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 		current.Statements = append(current.Statements, &BinaryOpInst{
 			Dst:      tmp,
@@ -180,35 +185,73 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (hir.Operand, 
 
 	case *hir.MapReadExpr:
 		flatMap, current := b.flattenExpr(e.Map, current)
-		hashVal, ptrVal, lenVal, current := b.lowerMapKey(e.Key, current)
+		hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(e.Key, current) // NEW
 
 		opaqueTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: opaqueTmp, Type: types.AnyType{}})
-
-		// EMIT EXACTLY 4 ARGUMENTS FOR ZIG'S maml_map_get
 		current.Statements = append(current.Statements, &CallInst{
-			Dst:      opaqueTmp,
-			Function: &hir.Identifier{Value: "maml_map_get", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatMap},
-				{Argument: hashVal},
-				{Argument: ptrVal},
-				{Argument: lenVal},
-			},
-			Type: types.AnyType{},
+			Dst:       opaqueTmp,
+			Function:  &hir.Identifier{Value: "maml_map_get", Type: types.UnknownType{}},
+			Arguments: []MIRCallArg{{Argument: flatMap}, {Argument: hashVal}, {Argument: ptrVal}, {Argument: lenVal}, {Argument: intKey}}, // NEW
+			Type:      types.AnyType{},
 		})
-
 		opaquePtr := &hir.Identifier{Value: opaqueTmp, Type: types.AnyType{}}
 
-		valTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: e.Type})
-		current.Statements = append(current.Statements, &LoadPtrInst{
-			Dst:  valTmp,
-			Ptr:  opaquePtr,
-			Type: e.Type,
+		// 🌟 NEW: Option<V> Branching Logic
+		resTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: resTmp, Type: e.Type})
+
+		// Check if the pointer returned from the map is null (0)
+		cmpTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: cmpTmp, Type: types.BoolType{}})
+		current.Statements = append(current.Statements, &BinaryOpInst{
+			Dst: cmpTmp, Operator: "!=", Left: opaquePtr, Right: &hir.IntLiteral{Value: 0, Type: types.AnyType{}}, Type: types.BoolType{},
 		})
 
-		return &hir.Identifier{Value: valTmp, Type: e.Type}, current
+		thenBlock := b.newBlock()
+		elseBlock := b.newBlock()
+		mergeBlock := b.newBlock()
+
+		current.Terminator = &BranchTerminator{
+			Condition:   &hir.Identifier{Value: cmpTmp, Type: types.BoolType{}},
+			TrueTarget:  thenBlock.ID,
+			FalseTarget: elseBlock.ID,
+		}
+
+		// --- Then Block (Some) ---
+		valTmp := b.newTemp()
+		optType := e.Type.(*types.SumType)
+		valType := optType.TypeArgs[0] // Extract the 'V' from Option<V>
+
+		thenBlock.Statements = append(thenBlock.Statements, &TempDeclInst{Name: valTmp, Type: valType})
+		thenBlock.Statements = append(thenBlock.Statements, &LoadPtrInst{Dst: valTmp, Ptr: opaquePtr, Type: valType})
+
+		someTmp := b.newTemp()
+		thenBlock.Statements = append(thenBlock.Statements, &TempDeclInst{Name: someTmp, Type: e.Type})
+		thenBlock.Statements = append(thenBlock.Statements, &VariantInitInst{
+			Dst: someTmp, VariantName: "Some", Discriminant: 0,
+			Payloads: []hir.Operand{&hir.Identifier{Value: valTmp, Type: valType}}, Type: e.Type,
+		})
+		thenBlock.Statements = append(thenBlock.Statements, &AssignInst{Dst: resTmp, RValue: &hir.Identifier{Value: someTmp, Type: e.Type}})
+		thenBlock.Terminator = &JumpTerminator{Target: mergeBlock.ID}
+
+		// --- Else Block (None) ---
+		noneTmp := b.newTemp()
+		elseBlock.Statements = append(elseBlock.Statements, &TempDeclInst{Name: noneTmp, Type: e.Type})
+		elseBlock.Statements = append(elseBlock.Statements, &VariantInitInst{
+			Dst: noneTmp, VariantName: "None", Discriminant: 1, Payloads: nil, Type: e.Type,
+		})
+		elseBlock.Statements = append(elseBlock.Statements, &AssignInst{Dst: resTmp, RValue: &hir.Identifier{Value: noneTmp, Type: e.Type}})
+		elseBlock.Terminator = &JumpTerminator{Target: mergeBlock.ID}
+
+		// Keep the map alive until the merge block!
+		// This forces liveness.go to pull the map into the LiveOut set of the
+		// lookup block, pushing arc_pass.go's ref_dec(m) to the merge block.
+		if mapIdent, ok := flatMap.(*hir.Identifier); ok {
+			mergeBlock.Statements = append(mergeBlock.Statements, &KeepAliveInst{Src: mapIdent.Value})
+		}
+
+		return &hir.Identifier{Value: resTmp, Type: e.Type}, mergeBlock
 
 	case *hir.VecReadExpr:
 		// 1. Flatten the Vector and Index operands
@@ -425,6 +468,48 @@ func (b *Builder) flattenBlockExpr(block *hir.BlockStmt, current *BasicBlock) (h
 }
 
 func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (hir.Operand, *BasicBlock) {
+	// Intercept Builtins: Route to the correct ABI runtime functions
+	if ident, ok := e.Function.(*hir.Identifier); ok {
+		switch ident.Value {
+		case "len":
+			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
+			current = nextBlock
+
+			var rtSym string
+			switch hir.TypeOf(flatArg).(type) {
+			case types.VectorType, types.ViewType:
+				rtSym = "maml_vec_len"
+			case types.MapType:
+				rtSym = "maml_map_len"
+				// Note: Array and String len should ideally be handled without a runtime call (inline),
+				// but we'll default to the runtime for now if you haven't implemented inline lengths.
+			}
+
+			tmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.IntType{}})
+			current.Statements = append(current.Statements, &CallInst{
+				Dst: tmp, Function: &hir.Identifier{Value: rtSym, Type: types.UnknownType{}},
+				Arguments: []MIRCallArg{{Argument: flatArg, Mut: false}}, Type: types.IntType{},
+			})
+			return &hir.Identifier{Value: tmp, Type: types.IntType{}}, current
+
+		case "delete":
+			flatMap, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
+			hashVal, ptrVal, lenVal, intKey, nextBlock := b.lowerMapKey(e.Arguments[1].Argument, nextBlock)
+			current = nextBlock
+
+			tmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
+			current.Statements = append(current.Statements, &CallInst{
+				Dst: tmp, Function: &hir.Identifier{Value: "maml_map_delete", Type: types.UnknownType{}},
+				Arguments: []MIRCallArg{
+					{Argument: flatMap, Mut: true}, {Argument: hashVal}, {Argument: ptrVal}, {Argument: lenVal}, {Argument: intKey},
+				}, Type: types.UnitType{},
+			})
+			return &hir.Identifier{Value: tmp, Type: types.UnitType{}}, current
+		}
+	}
+
 	flatFunc, current := b.flattenExpr(e.Function, current)
 
 	var flatArgs []MIRCallArg
@@ -524,13 +609,27 @@ func (b *Builder) flattenVecLiteral(e *hir.VecLiteral, current *BasicBlock) (hir
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
 
-	// Add creation initializer (pass the number of elements as initial capacity!)
+	// Helper to determine if a type requires ARC memory hooks
+	getHooks := func(t types.Type) (string, string) {
+		if t != nil && t.IsNeedsARC() {
+			return "maml_retain", "maml_release"
+		}
+		return "null", "null"
+	}
+	elemRetain, elemRelease := getHooks(t.Base)
+
+	// Add creation initializer (pass element size and ARC hooks)
 	createFn := &hir.Identifier{Value: "maml_vec_create", Type: types.UnknownType{}}
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      tmp,
 		Function: createFn,
 		Arguments: []MIRCallArg{
-			{Argument: &hir.IntLiteral{Value: int64(len(e.Elements)), Type: types.IntType{}}},
+			// 1. elem_size
+			{Argument: &hir.IntLiteral{Value: int64(t.Base.SizeInBytes()), Type: types.IntType{}}},
+			// 2. elem_retain hook
+			{Argument: &hir.Identifier{Value: elemRetain, Type: types.UnknownType{}}},
+			// 3. elem_release hook
+			{Argument: &hir.Identifier{Value: elemRelease, Type: types.UnknownType{}}},
 		},
 		Type: t,
 	})
@@ -565,25 +664,49 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (hir
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
 
-	// Add creation initializer
+	// Helper to determine if a type requires ARC memory hooks
+	getHooks := func(t types.Type) (string, string) {
+		if t != nil && t.IsNeedsARC() {
+			return "maml_retain", "maml_release"
+		}
+		return "null", "null"
+	}
+
+	keyRetain, keyRelease := getHooks(t.Key)
+	valRetain, valRelease := getHooks(t.Value)
+
+	isStrKey := int64(0)
+	if _, isStr := t.Key.(*types.StringType); isStr {
+		isStrKey = 1
+	}
+
+	// Add creation initializer (pass value size, type flags, and 4 ARC hooks)
 	createFn := &hir.Identifier{Value: "maml_map_create", Type: types.UnknownType{}}
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      tmp,
 		Function: createFn,
 		Arguments: []MIRCallArg{
-			{Argument: &hir.IntLiteral{Value: 0, Type: types.IntType{}}},
-			{Argument: &hir.IntLiteral{Value: 0, Type: types.IntType{}}},
+			// 1. val_size
+			{Argument: &hir.IntLiteral{Value: int64(t.Value.SizeInBytes()), Type: types.IntType{}}},
+			// 2. is_string_key
+			{Argument: &hir.IntLiteral{Value: isStrKey, Type: types.IntType{}}},
+			// 3. key_retain hook
+			{Argument: &hir.Identifier{Value: keyRetain, Type: types.UnknownType{}}},
+			// 4. key_release hook
+			{Argument: &hir.Identifier{Value: keyRelease, Type: types.UnknownType{}}},
+			// 5. val_retain hook
+			{Argument: &hir.Identifier{Value: valRetain, Type: types.UnknownType{}}},
+			// 6. val_release hook
+			{Argument: &hir.Identifier{Value: valRelease, Type: types.UnknownType{}}},
 		},
 		Type: t,
 	})
 
 	for _, kv := range e.Elements {
 		var flatVal hir.Operand
-		// Only pre-flatten the value
 		flatVal, current = b.flattenExpr(kv.Value, current)
 
-		// Let lowerMapKey handle the flattening and unpacking of the key
-		hashVal, ptrVal, lenVal, current := b.lowerMapKey(kv.Key, current)
+		hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(kv.Key, current)
 
 		putFn := &hir.Identifier{Value: "maml_map_put", Type: types.UnknownType{}}
 		putTmp := b.newTemp()
@@ -595,9 +718,10 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (hir
 			Arguments: []MIRCallArg{
 				{Argument: &hir.Identifier{Value: tmp, Type: t}, Mut: true},
 				{Argument: hashVal},
-				{Argument: flatVal},
 				{Argument: ptrVal},
 				{Argument: lenVal},
+				{Argument: intKey},
+				{Argument: flatVal},
 			},
 			Type: types.UnitType{},
 		})
@@ -605,85 +729,135 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (hir
 	return &hir.Identifier{Value: tmp, Type: t}, current
 }
 
-// lowerMapKey prepares the hash, str_ptr, and str_len arguments required
-// by the runtime map ABI. It implements Step 1 of the map lowering phase.
-func (b *Builder) lowerMapKey(keyExpr hir.Expr, current *BasicBlock) (hash, ptr, len hir.Operand, nextBlock *BasicBlock) {
+// lowerMapKey prepares the hash, str_ptr, str_len, and int_key arguments required
+// by the runtime map ABI.
+func (b *Builder) lowerMapKey(keyExpr hir.Expr, current *BasicBlock) (hash, ptr, len, intKey hir.Operand, nextBlock *BasicBlock) {
 	flatKey, current := b.flattenExpr(keyExpr, current)
 	keyType := hir.TypeOf(flatKey)
 
 	switch keyType.(type) {
-	case types.IntType:
-		// For integer keys: hash = zext(key), ptr = null, len = 0
+	case types.IntType, *types.IntType:
 		hashTmp := b.newTemp()
-
-		// Declare the temporary for the hash and emit the cast
 		current.Statements = append(current.Statements, &TempDeclInst{Name: hashTmp, Type: types.IntType{}})
-		current.Statements = append(current.Statements, &CastInst{
-			Dst:  hashTmp,
-			Src:  flatKey,
-			Type: types.IntType{}, // The backend will interpret this as the target bit-width (e.g., i64)
-		})
+		current.Statements = append(current.Statements, &CastInst{Dst: hashTmp, Src: flatKey, Type: types.IntType{}})
 
 		hashVal := &hir.Identifier{Value: hashTmp, Type: types.IntType{}}
-
-		// ptr = null (0 typed as AnyType/ptr)
 		ptrVal := &hir.IntLiteral{Value: 0, Type: types.AnyType{}}
-
-		// len = 0
 		lenVal := &hir.IntLiteral{Value: 0, Type: types.IntType{}}
 
-		return hashVal, ptrVal, lenVal, current
+		// The integer key is passed directly
+		return hashVal, ptrVal, lenVal, flatKey, current
 
-	case types.StringType:
-		// For string keys: extract ptr and len fields, then call maml_str_hash
+	case types.StringType, *types.StringType:
+		keyTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: keyTmp, Type: keyType})
+		current.Statements = append(current.Statements, &AssignInst{Dst: keyTmp, RValue: flatKey})
+		safeKey := &hir.Identifier{Value: keyTmp, Type: keyType}
 
-		// 1. Extract ptr
 		ptrTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: ptrTmp, Type: types.AnyType{}})
-		current.Statements = append(current.Statements, &FieldReadInst{
-			Dst:        ptrTmp,
-			Object:     flatKey,
-			FieldName:  "ptr",
-			FieldIndex: 0,
-			Type:       types.AnyType{},
-		})
+		current.Statements = append(current.Statements, &FieldReadInst{Dst: ptrTmp, Object: safeKey, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{}})
 		ptrVal := &hir.Identifier{Value: ptrTmp, Type: types.AnyType{}}
 
-		// 2. Extract len
 		lenTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: lenTmp, Type: types.IntType{}})
-		current.Statements = append(current.Statements, &FieldReadInst{
-			Dst:        lenTmp,
-			Object:     flatKey,
-			FieldName:  "len",
-			FieldIndex: 1,
-			Type:       types.IntType{},
-		})
+		current.Statements = append(current.Statements, &FieldReadInst{Dst: lenTmp, Object: safeKey, FieldName: "len", FieldIndex: 1, Type: types.IntType{}})
 		lenVal := &hir.Identifier{Value: lenTmp, Type: types.IntType{}}
 
-		// 3. hash = call maml_str_hash(ptr, len)
 		hashTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: hashTmp, Type: types.IntType{}})
-
-		// EMIT CALLINST DIRECTLY
 		current.Statements = append(current.Statements, &CallInst{
-			Dst:      hashTmp,
-			Function: &hir.Identifier{Value: "maml_str_hash", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: ptrVal},
-				{Argument: lenVal},
-			},
-			Type: types.IntType{},
+			Dst: hashTmp, Function: &hir.Identifier{Value: "maml_str_hash", Type: types.UnknownType{}},
+			Arguments: []MIRCallArg{{Argument: ptrVal}, {Argument: lenVal}}, Type: types.IntType{},
 		})
 		hashVal := &hir.Identifier{Value: hashTmp, Type: types.IntType{}}
 
-		return hashVal, ptrVal, lenVal, current
+		intKeyVal := &hir.IntLiteral{Value: 0, Type: types.IntType{}}
+		return hashVal, ptrVal, lenVal, intKeyVal, current
 
 	default:
-		// Failsafe for unhandled types falling through Sema
-		return &hir.IntLiteral{Value: 0, Type: types.IntType{}},
-			&hir.IntLiteral{Value: 0, Type: types.AnyType{}},
-			&hir.IntLiteral{Value: 0, Type: types.IntType{}},
-			current
+		return &hir.IntLiteral{Value: 0, Type: types.IntType{}}, &hir.IntLiteral{Value: 0, Type: types.AnyType{}}, &hir.IntLiteral{Value: 0, Type: types.IntType{}}, &hir.IntLiteral{Value: 0, Type: types.IntType{}}, current
 	}
+}
+
+// flattenStringEq unpacks string operands into raw pointer/length field pairs and delegates
+// deep character comparison to the maml_str_eq runtime function.
+func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight hir.Operand, current *BasicBlock) (hir.Operand, *BasicBlock) {
+	// 1. Force operands into localized safe variables to shield against multi-evaluation leaks
+	leftTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: leftTmp, Type: types.StringType{}})
+	current.Statements = append(current.Statements, &AssignInst{Dst: leftTmp, RValue: flatLeft})
+	safeLeft := &hir.Identifier{Value: leftTmp, Type: types.StringType{}}
+
+	rightTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: rightTmp, Type: types.StringType{}})
+	current.Statements = append(current.Statements, &AssignInst{Dst: rightTmp, RValue: flatRight})
+	safeRight := &hir.Identifier{Value: rightTmp, Type: types.StringType{}}
+
+	// 2. Extract 'ptr' (field 0) and 'len' (field 1) from Left operand
+	leftPtrTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: leftPtrTmp, Type: types.AnyType{}})
+	current.Statements = append(current.Statements, &FieldReadInst{
+		Dst: leftPtrTmp, Object: safeLeft, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{},
+	})
+
+	leftLenTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: leftLenTmp, Type: types.IntType{}})
+	current.Statements = append(current.Statements, &FieldReadInst{
+		Dst: leftLenTmp, Object: safeLeft, FieldName: "len", FieldIndex: 1, Type: types.IntType{},
+	})
+
+	// 3. Extract 'ptr' (field 0) and 'len' (field 1) from Right operand
+	rightPtrTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: rightPtrTmp, Type: types.AnyType{}})
+	current.Statements = append(current.Statements, &FieldReadInst{
+		Dst: rightPtrTmp, Object: safeRight, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{},
+	})
+
+	rightLenTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: rightLenTmp, Type: types.IntType{}})
+	current.Statements = append(current.Statements, &FieldReadInst{
+		Dst: rightLenTmp, Object: safeRight, FieldName: "len", FieldIndex: 1, Type: types.IntType{},
+	})
+
+	// 4. Emit Call to maml_str_eq(left_ptr, left_len, right_ptr, right_len) -> i32
+	callTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: callTmp, Type: types.IntType{}})
+	current.Statements = append(current.Statements, &CallInst{
+		Dst:      callTmp,
+		Function: &hir.Identifier{Value: "maml_str_eq", Type: types.UnknownType{}},
+		Arguments: []MIRCallArg{
+			{Argument: &hir.Identifier{Value: leftPtrTmp, Type: types.AnyType{}}},
+			{Argument: &hir.Identifier{Value: leftLenTmp, Type: types.IntType{}}},
+			{Argument: &hir.Identifier{Value: rightPtrTmp, Type: types.AnyType{}}},
+			{Argument: &hir.Identifier{Value: rightLenTmp, Type: types.IntType{}}},
+		},
+		Type: types.IntType{},
+	})
+
+	// 5. Evaluate the returned i32 as a Boolean condition (result != 0)
+	boolTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: boolTmp, Type: types.BoolType{}})
+	current.Statements = append(current.Statements, &BinaryOpInst{
+		Dst:      boolTmp,
+		Operator: "!=",
+		Left:     &hir.Identifier{Value: callTmp, Type: types.IntType{}},
+		Right:    &hir.IntLiteral{Value: 0, Type: types.IntType{}},
+		Type:     types.BoolType{},
+	})
+
+	// 6. Invert the logical output if the instruction represents an inequality check
+	if e.Operator == "!=" {
+		notTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: notTmp, Type: types.BoolType{}})
+		current.Statements = append(current.Statements, &UnaryOpInst{
+			Dst:      notTmp,
+			Operator: "!",
+			Operand:  &hir.Identifier{Value: boolTmp, Type: types.BoolType{}},
+			Type:     types.BoolType{},
+		})
+		boolTmp = notTmp
+	}
+
+	return &hir.Identifier{Value: boolTmp, Type: types.BoolType{}}, current
 }

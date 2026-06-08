@@ -22,6 +22,16 @@ static void handleBinaryOp(CodegenContext &ctx, const nlohmann::json &stmt) {
   llvm::Value *right = evaluateExpression(ctx, stmt["right"]);
   llvm::Value *result = nullptr;
 
+  if (left->getType()->isPointerTy() && right->getType()->isIntegerTy()) {
+    if (auto *cInt = llvm::dyn_cast<llvm::ConstantInt>(right); cInt && cInt->isZero()) {
+      right = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
+    }
+  } else if (right->getType()->isPointerTy() && left->getType()->isIntegerTy()) {
+    if (auto *cInt = llvm::dyn_cast<llvm::ConstantInt>(left); cInt && cInt->isZero()) {
+      left = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(right->getType()));
+    }
+  }
+
   // Enforce zero-division and modulus hardware trap barriers
   if (opSymbol == "/" || opSymbol == "%") {
     llvm::Value *isZero = ctx.Builder->CreateICmpEQ(right, llvm::ConstantInt::get(right->getType(), 0), "is_zero");
@@ -92,30 +102,6 @@ static void handleCallInst(CodegenContext &ctx, const nlohmann::json &stmt) {
 
   if (functionNodeType == "ident") {
     funcName = stmt["function"]["value"].get<std::string>();
-
-    // 🌟 STEP 1: Absolute top-level remap before looking up anything!
-    if (funcName == "push") {
-      funcName = rt::VEC_PUSH;
-    } else if (funcName == "put") {
-      funcName = rt::MAP_PUT;
-    } else if (funcName == "get") {
-      // Discriminate map.get() vs vector subscipts by checking the container argument type
-      if (!stmt["arguments"].empty()) {
-        std::string_view containerKind = stmt["arguments"][0]["argument"]["type"].is_object() &&
-                                                 stmt["arguments"][0]["argument"]["type"].contains("kind")
-                                             ? stmt["arguments"][0]["argument"]["type"]["kind"].get<std::string_view>()
-                                             : "";
-        if (containerKind == "vector") {
-          funcName = "maml_vec_get";
-        } else {
-          funcName = rt::MAP_GET;
-        }
-      } else {
-        funcName = rt::MAP_GET;
-      }
-    }
-
-    // STEP 2: Now look up the cleanly remapped function symbol name in the global module declarations
     callee = ctx.Module->getFunction(funcName);
     if (!callee) {
       callee = ctx.resolveSymbol(funcName);
@@ -153,20 +139,41 @@ static void handleCallInst(CodegenContext &ctx, const nlohmann::json &stmt) {
   for (const auto &argWrapper : stmt["arguments"]) {
     llvm::Value *argVal = evaluateExpression(ctx, argWrapper["argument"]);
 
-    // 🌟 THE FINISHING TEST FIX: Calibrate container instantiations arguments dynamically
+    // Calibrate container instantiations arguments dynamically
     if (funcName == rt::MAP_CREATE) {
       if (i == 0) {
-        // Argument 0: Value Size (int is 4 bytes on our 32-bit/64-bit targets)
-        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 4);
+        int itemSize = 4;
+        if (stmt["type"].contains("value_type")) {
+          const auto &valType = stmt["type"]["value_type"];
+          if (valType.is_object() && valType.contains("size")) {
+            itemSize = valType["size"].get<int>();
+          } else {
+            // Fallback: Resolve allocation footprint dynamically via LLVM DataLayout
+            llvm::Type *llvmTy = llvmTypeFor(ctx, valType);
+            llvm::DataLayout DL(ctx.Module.get());
+            itemSize = DL.getTypeAllocSize(llvmTy);
+          }
+        }
+        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
       } else if (i == 1) {
-        // Argument 1: is_string_key flag (Check if key_type in MIR is "string")
         bool isStr = stmt["type"].contains("key_type") && stmt["type"]["key_type"].get<std::string_view>() == "string";
         argVal = llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), isStr ? 1 : 0);
       }
     } else if (funcName == rt::VEC_CREATE) {
       if (i == 0) {
-        // Argument 0: Item Size (int is 4 bytes)
-        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 4);
+        int itemSize = 4;
+        if (stmt["type"].contains("elem_type")) {
+          const auto &elemType = stmt["type"]["elem_type"];
+          if (elemType.is_object() && elemType.contains("size")) {
+            itemSize = elemType["size"].get<int>();
+          } else {
+            // Fallback: Resolve allocation footprint dynamically via LLVM DataLayout
+            llvm::Type *llvmTy = llvmTypeFor(ctx, elemType);
+            llvm::DataLayout DL(ctx.Module.get());
+            itemSize = DL.getTypeAllocSize(llvmTy);
+          }
+        }
+        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
       }
     }
 
@@ -178,16 +185,41 @@ static void handleCallInst(CodegenContext &ctx, const nlohmann::json &stmt) {
 
       if (expectedTy != actualTy) {
         if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
-          argVal = ctx.Builder->CreateExtractValue(argVal, {0}, "fat_ptr_unwrap");
+          // argVal = ctx.Builder->CreateExtractValue(argVal, {0}, "fat_ptr_unwrap");
+
+          auto *structTy = llvm::dyn_cast<llvm::StructType>(actualTy);
+
+          // Only unwrap literal string structs if they are being passed to non-collection functions
+          // (e.g., passing a string to an external print function that expects a raw char pointer).
+          // If we are interacting with runtime collections (maml_vec_* / maml_map_*), or handling
+          // a named user struct like 'Point', we must pass a pointer to the structure itself.
+          if (structTy && structTy->isLiteral() && funcName.compare(0, 9, "maml_vec_") != 0 &&
+              funcName.compare(0, 9, "maml_map_") != 0) {
+            argVal = ctx.Builder->CreateExtractValue(argVal, {0}, "fat_ptr_unwrap");
+          } else {
+            // Spill the structure to the entry block stack and pass the pointer instead
+            llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+            llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
+            llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_struct_spill");
+
+            ctx.Builder->CreateStore(argVal, spill);
+            argVal = spill;
+          }
+
         } else if (expectedTy->isIntegerTy() && actualTy->isIntegerTy()) {
           argVal = ctx.Builder->CreateIntCast(argVal, expectedTy, true, "arg_cast");
         } else if (expectedTy->isPointerTy() && actualTy->isPointerTy()) {
           argVal = ctx.Builder->CreatePointerCast(argVal, expectedTy, "ptr_cast");
-        } 
-        
-        
+        }
+
         else if (expectedTy->isPointerTy() && !actualTy->isPointerTy()) {
-          if (auto *cInt = llvm::dyn_cast<llvm::ConstantInt>(argVal); cInt && cInt->isZero()) {
+          // Fix: Only treat 0 as a null pointer if it's explicitly NOT a boolean (i1)
+          // or a standard data integer being boxed into an anyopaque.
+          auto *cInt = llvm::dyn_cast<llvm::ConstantInt>(argVal);
+
+          // You might need to adjust this depending on how you represent true 'null' in MAML,
+          // but removing the isZero() trap for i1/i32 fixes the boolean and int push bugs!
+          if (cInt && cInt->isZero() && actualTy->isIntegerTy(64)) {
             argVal = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(expectedTy));
           } else {
             llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();

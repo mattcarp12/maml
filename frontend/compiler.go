@@ -10,6 +10,7 @@ import (
 	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/parser"
+	"github.com/mattcarp12/maml/frontend/passes"
 	"github.com/mattcarp12/maml/frontend/sema"
 	"github.com/mattcarp12/maml/frontend/tast"
 )
@@ -51,43 +52,29 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	// --------------------------------------------------------------------------
 	// Desugar pass (Modify in-place)
 	// --------------------------------------------------------------------------
-
 	hirLowerer := hir.NewLowerer()
 	hirProgram := hirLowerer.LowerProgram(tastProgram)
 
 	// --------------------------------------------------------------------------
 	// MIR Lowering -> MIR
 	// --------------------------------------------------------------------------
-
 	mirProgram := mir.BuildProgram(hirProgram)
 
-	// ==========================================================================
-	// COMMENT OUT UNTIL CODEGEN IS WORKING
-	// ==========================================================================*/
+	// --------------------------------------------------------------------------
+	// MIR Optimization & Analysis Passes
+	// --------------------------------------------------------------------------
+	cfg := passes.DefaultConfig()
 
-	// // Phase 5-8: Sequential Graph Passes
-	// // Iterate over each function and apply the passes sequentially to its CFG.
-	// for i := range mirProgram.Functions {
-	// 	fn := &mirProgram.Functions[i]
+	for i := range mirProgram.Functions {
+		fn := &mirProgram.Functions[i]
+		if fn.Graph != nil {
+			ownershipErrors := passes.RunPasses(fn.Graph, cfg)
+			if len(ownershipErrors) > 0 {
+				return nil, formatErrors("OWNERSHIP", ownershipErrors)
+			}
+		}
+	}
 
-	// 	// Phase 5: Liveness & Escape Analysis
-	// 	livenessRes := liveness.AnalyzeLiveness(fn.Graph)
-	// 	escapes := escape.AnalyzeEscape(fn.Graph)
-
-	// 	// Phase 6: Allocation Lowering
-	// 	alloc.LowerAllocations(fn.Graph, escapes)
-
-	// 	// Phase 7: ARC Injection
-	// 	arc.InjectARC(fn.Graph, livenessRes)
-
-	// 	// Phase 8: Ownership Analysis
-	// 	ownErrs := ownership.New().Analyze(fn.Graph)
-	// 	if len(ownErrs) > 0 {
-	// 		return nil, formatErrors("OWNERSHIP", ownErrs)
-	// 	}
-	// }
-
-	// Return the fully populated pipeline state
 	return &FrontendResult{
 		AST:  astProgram,
 		TAST: tastProgram,
@@ -126,7 +113,7 @@ func (c *Compiler) CompileAST(src string) (*ast.Program, error) {
 	return astProgram, nil
 }
 
-// CompileAST executes Phase 1 (Syntax Analysis) and Phase 2 (Semantic Analysis)
+// CompileTAST executes Phase 1 (Syntax Analysis) and Phase 2 (Semantic Analysis)
 // and returns the typed AST.
 func (c *Compiler) CompileTAST(src string) (*tast.Program, error) {
 	l := lexer.New(src)

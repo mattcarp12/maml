@@ -4,28 +4,29 @@ import (
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
-// LowerAllocations upgrades TempDeclInst to RefAllocInst based on the EscapeMap.
 func LowerAllocations(g *mir.Graph, escapes map[string]EscapeState) {
 	if g == nil || escapes == nil {
 		return
 	}
 
 	for _, block := range g.SortedBlocks() {
-		for i, inst := range block.Statements {
-			if decl, ok := inst.(*mir.TempDeclInst); ok && decl != nil {
-				// GUARD: If type resolution failed or is missing, skip to avoid nil deref
-				if decl.Type == nil {
-					continue
-				}
+		var newStmts []mir.Instruction
+		for _, inst := range block.Statements {
+			// 1. Always retain the local declaration so the backend has a stack pointer
+			newStmts = append(newStmts, inst)
 
-				// Upgrade to Heap Allocation if the analyzer flagged it
-				if decl.Type.IsReferenceType() && escapes[decl.Name] == StateHeap {
-					block.Statements[i] = &mir.RefAllocInst{
+			if decl, ok := inst.(*mir.TempDeclInst); ok && decl != nil && decl.Type != nil {
+				// 2. ONLY allocate a backing buffer if a value type (like a stack struct)
+				// is forced to escape to the heap. ARC types (like Vec) already manage
+				// their own heap memory via their constructors!
+				if !decl.Type.IsNeedsARC() && decl.Type.IsReferenceType() && escapes[decl.Name] == StateHeap {
+					newStmts = append(newStmts, &mir.RefAllocInst{
 						Dst:  decl.Name,
 						Type: decl.Type,
-					}
+					})
 				}
 			}
 		}
+		block.Statements = newStmts
 	}
 }

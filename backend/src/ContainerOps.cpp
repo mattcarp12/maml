@@ -40,7 +40,6 @@ static void handleArrayInit(CodegenContext &ctx, const nlohmann::json &stmt) {
 
   ctx.Builder->CreateStore(elemVal, elemPtr);
 }
-
 static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
   std::string dst = stmt["dst"].get<std::string>();
   llvm::Value *dstPtr = ctx.resolveSymbol(dst);
@@ -55,7 +54,6 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
   llvm::Type *leftTy = llvmTypeFor(ctx, stmt["container_type"]);
   llvm::Value *leftPtr = leftVal;
 
-  // Try to re-resolve the raw alloca if it's an identifier to avoid operating on a loaded copy
   if (stmt["left"].contains("value")) {
     std::string leftName = stmt["left"]["value"].get<std::string>();
     if (llvm::Value *sym = ctx.resolveSymbol(leftName)) {
@@ -65,7 +63,6 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
     }
   }
 
-  // If leftPtr is STILL a loaded value (e.g. an inline literal), spill it to memory so we can GEP safely
   if (!leftPtr->getType()->isPointerTy()) {
     llvm::AllocaInst *spill = ctx.Builder->CreateAlloca(leftTy, nullptr, "slice_source_spill");
     ctx.Builder->CreateStore(leftVal, spill);
@@ -87,8 +84,6 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
     originalCap = ctx.Builder->getInt32(size);
     originalDataPtr =
         ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}, "array_data_ptr");
-
-    // Fixed-size arrays are stack allocated and do NOT have an ARC header. Force raw_ptr to null.
     originalRawPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(ctx.Context));
     highVal = stmt.contains("high") && !stmt["high"].is_null() ? evaluateExpression(ctx, stmt["high"]) : originalCap;
 
@@ -103,7 +98,39 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
     originalCap = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), lenGep);
     highVal = stmt.contains("high") && !stmt["high"].is_null() ? evaluateExpression(ctx, stmt["high"]) : originalCap;
 
-  } else if (leftKind == "vector" || leftKind == "view") {
+  } else if (leftKind == "vector") {
+    // Vector variable holds an opaque pointer handle to the heap. Load it first.
+    llvm::Value *vecHandle = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), leftPtr, "vec_handle");
+
+    // Map the true structural layout of the runtime's on-heap VecHeader for GEP resolution
+    llvm::StructType *hdrTy =
+        llvm::StructType::get(ctx.Context, {
+                                               llvm::PointerType::getUnqual(ctx.Context),  // offset 0: raw_ptr
+                                               llvm::PointerType::getUnqual(ctx.Context),  // offset 8: data_ptr
+                                               llvm::Type::getInt32Ty(ctx.Context),        // offset 16: len
+                                               llvm::Type::getInt32Ty(ctx.Context),        // offset 20: cap
+                                               llvm::Type::getInt32Ty(ctx.Context),        // offset 24: item_size
+                                               llvm::Type::getInt32Ty(ctx.Context)         // offset 28: _pad
+                                           });
+
+    llvm::Value *rawGep =
+        ctx.Builder->CreateGEP(hdrTy, vecHandle, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)});
+    llvm::Value *dataGep =
+        ctx.Builder->CreateGEP(hdrTy, vecHandle, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)});
+    llvm::Value *lenGep =
+        ctx.Builder->CreateGEP(hdrTy, vecHandle, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(2)});
+    llvm::Value *capGep =
+        ctx.Builder->CreateGEP(hdrTy, vecHandle, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(3)});
+
+    originalRawPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), rawGep);
+    originalDataPtr = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataGep);
+    originalCap = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), capGep);
+    highVal = stmt.contains("high") && !stmt["high"].is_null()
+                  ? evaluateExpression(ctx, stmt["high"])
+                  : ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), lenGep);
+
+  } else if (leftKind == "view") {
+    // View is a stack-allocated struct variable. GEP into its local fields directly.
     llvm::Value *rawGep = ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)});
     llvm::Value *dataGep =
         ctx.Builder->CreateGEP(leftTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)});
@@ -128,7 +155,7 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
 
   llvm::Type *sliceTy = llvmTypeFor(ctx, stmt["result_type"]);
 
-  // Write the 4 fat-pointer fields into the destination slice struct variable
+  // Write values into the destination slice struct sitting on the stack frame
   ctx.Builder->CreateStore(
       originalRawPtr, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(0)}));
   ctx.Builder->CreateStore(
@@ -138,7 +165,6 @@ static void handleSliceRead(CodegenContext &ctx, const nlohmann::json &stmt) {
   ctx.Builder->CreateStore(
       newCap, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(3)}));
 
-  // Bump the reference count on the underlying heap buffer via ARC tracking rules
   if (leftKind == "vector" || leftKind == "string" || leftKind == "array" || leftKind == "view") {
     llvm::FunctionCallee retainFn = ctx.Module->getOrInsertFunction(
         "maml_retain", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context),
@@ -178,7 +204,18 @@ static void handleIndexRead(CodegenContext &ctx, const nlohmann::json &stmt) {
     llvm::Value *dataPtr =
         ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), dataPtrGep, "str_data_ptr");
     elemPtr = ctx.Builder->CreateGEP(llvm::Type::getInt8Ty(ctx.Context), dataPtr, indexVal, "char_ptr");
-  } else if (kind == "vector" || kind == "view") {
+  } else if (kind == "vector") {
+    // Vector is an opaque handle pointer. Load the handle out of memory.
+    llvm::Value *vecHandle = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), leftPtr, "vec_handle");
+
+    // Call the runtime lookup API directly to enforce bounds safety
+    llvm::FunctionCallee getFn = ctx.Module->getOrInsertFunction(
+        "maml_vec_get", llvm::FunctionType::get(
+                            llvm::PointerType::getUnqual(ctx.Context),
+                            {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)}, false));
+    elemPtr = ctx.Builder->CreateCall(getFn, {vecHandle, indexVal}, "vec_get_ptr");
+  } else if (kind == "view") {
+    // View is a stack-allocated struct value. Access field 1 (data_ptr) locally.
     llvm::Type *hdrTy = llvmTypeFor(ctx, leftTypeJson);
     llvm::Value *dataPtrGep =
         ctx.Builder->CreateGEP(hdrTy, leftPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)}, "slice_data_gep");
@@ -192,7 +229,6 @@ static void handleIndexRead(CodegenContext &ctx, const nlohmann::json &stmt) {
 
   llvm::Value *loadedVal = nullptr;
   if (kind == "string") {
-    // If reading a char from a string, load the native i8 byte and zero-extend to a 32-bit compiler int
     llvm::Value *charVal = ctx.Builder->CreateLoad(llvm::Type::getInt8Ty(ctx.Context), elemPtr, "char_load");
     loadedVal = ctx.Builder->CreateZExt(charVal, llvm::Type::getInt32Ty(ctx.Context), "char_ext");
   } else {
@@ -226,7 +262,26 @@ static void handleIndexAssign(CodegenContext &ctx, const nlohmann::json &stmt) {
   if (kind == "array") {
     llvm::Type *arrayTy = llvmTypeFor(ctx, targetTypeJson);
     elemPtr = ctx.Builder->CreateGEP(arrayTy, arrayPtr, {ctx.Builder->getInt32(0), indexVal}, "index_assign_ptr");
-  } else if (kind == "vector" || kind == "view") {
+  } else if (kind == "vector") {
+    // Vector is an opaque handle pointer. Load the handle out of memory.
+    llvm::Value *vecHandle = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), arrayPtr, "vec_handle");
+
+    // Spill item value to entry block stack to pass by pointer reference to runtime
+    llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+    llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
+    llvm::AllocaInst *itemSpill = TmpBuilder.CreateAlloca(storeVal->getType(), nullptr, "vec_assign_spill");
+    ctx.Builder->CreateStore(storeVal, itemSpill);
+
+    // Delegate mutation to the runtime helper
+    llvm::FunctionCallee setFn = ctx.Module->getOrInsertFunction(
+        "maml_vec_set",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context),
+                                {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context),
+                                 llvm::PointerType::getUnqual(ctx.Context)},
+                                false));
+    ctx.Builder->CreateCall(setFn, {vecHandle, indexVal, itemSpill});
+  } else if (kind == "view") {
+    // View is a stack struct value. Read field 1 (data_ptr) and inline-store directly.
     llvm::Type *hdrTy = llvmTypeFor(ctx, targetTypeJson);
     llvm::Value *dataPtrGep =
         ctx.Builder->CreateGEP(hdrTy, arrayPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(1)}, "slice_data_gep");
@@ -239,7 +294,9 @@ static void handleIndexAssign(CodegenContext &ctx, const nlohmann::json &stmt) {
     return;
   }
 
-  ctx.Builder->CreateStore(storeVal, elemPtr);
+  if (elemPtr) {
+    ctx.Builder->CreateStore(storeVal, elemPtr);
+  }
 }
 
 // -----------------------------------------------------------------------------

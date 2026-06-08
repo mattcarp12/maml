@@ -5,7 +5,6 @@
 // - TODO - Implement local statement-level analysis
 // ==========================================================================
 
-
 package passes
 
 import (
@@ -213,6 +212,8 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 		case *mir.RefDecInst:
 			addUseName(i.Src)
 		case *mir.MutBorrowInst:
+			addUseName(i.Src)
+		case *mir.KeepAliveInst:
 			addUseName(i.Src)
 		}
 	}

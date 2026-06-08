@@ -9,7 +9,7 @@ fn get_slice(cond bool) View<int> {
     return b[:]
 }
 
-fn consume(own s View<int>) int {
+fn consume(s View<int>) int {
     return s[2]
 }
 

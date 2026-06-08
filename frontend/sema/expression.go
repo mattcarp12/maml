@@ -224,6 +224,29 @@ func (a *Analyzer) buildCallExpr(e *ast.CallExpr) tast.Expr {
 		}
 	}
 
+	// --- Builtin Type Validation ---
+	if funcIdent, isIdent := e.Function.(*ast.Identifier); isIdent {
+		if funcIdent.Value == "len" && len(e.Arguments) == 1 {
+			argType := tast.TypeOf(a.buildExpr(e.Arguments[0].Argument))
+			switch argType.(type) {
+			case types.VectorType, types.MapType, types.ArrayType, types.ViewType, types.StringType:
+				// Valid collection
+			default:
+				a.errorf(e.Arguments[0].Pos(), "len() requires a collection type, got '%s'", argType.String())
+			}
+		} else if funcIdent.Value == "delete" && len(e.Arguments) == 2 {
+			mapArg := tast.TypeOf(a.buildExpr(e.Arguments[0].Argument))
+			if mapTy, isMap := mapArg.(types.MapType); isMap {
+				keyArg := tast.TypeOf(a.buildExpr(e.Arguments[1].Argument))
+				if !keyArg.Equals(mapTy.Key) && !types.IsUnknown(keyArg) {
+					a.errorf(e.Arguments[1].Pos(), "delete() key type mismatch: expected '%s', got '%s'", mapTy.Key.String(), keyArg.String())
+				}
+			} else if !types.IsUnknown(mapArg) {
+				a.errorf(e.Arguments[0].Pos(), "delete() requires a Map as the first argument, got '%s'", mapArg.String())
+			}
+		}
+	}
+
 	// Build and validate arguments for a standard function
 	if len(e.Arguments) != len(ft.Params) {
 		a.errorf(e.Pos(), "wrong number of arguments: expected %d, got %d", len(ft.Params), len(e.Arguments))
@@ -280,8 +303,8 @@ func (a *Analyzer) buildAwaitExpr(e *ast.AwaitExpr) *tast.AwaitExpr {
 	valType := tast.TypeOf(valNode)
 
 	var resultType types.Type = types.UnknownType{}
-	if taskTy, ok := valType.(types.FutureType); ok {
-		resultType = taskTy.Base
+	if futTy, ok := valType.(types.FutureType); ok {
+		resultType = futTy.Base
 	} else if !types.IsUnknown(valType) {
 		a.errorf(e.Pos(), "cannot await non-task type '%s'", valType.String())
 	}
@@ -358,7 +381,7 @@ func (a *Analyzer) buildIndexExpr(e *ast.IndexExpr) *tast.IndexExpr {
 	case types.VectorType:
 		resultType = ty.Base
 	case types.MapType:
-		resultType = ty.Value
+		resultType = types.NewOptionType(ty.Value) // m[k] returns Option<V>
 	case types.StringType:
 		resultType = types.IntType{} // Characters are currently ints
 	default:

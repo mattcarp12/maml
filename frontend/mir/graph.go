@@ -1,9 +1,19 @@
 package mir
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/mattcarp12/maml/frontend/types"
+)
 
 // BlockID is a unique identifier for a basic block within a function.
 type BlockID int
+
+// Param captures information about function parameters at the MIR layer.
+type Param struct {
+	Name string
+	Type types.Type
+}
 
 // BasicBlock represents a flat, linear sequence of executable instructions
 // that ends with exactly one control-flow terminator.
@@ -17,6 +27,7 @@ type BasicBlock struct {
 type Graph struct {
 	Entry  BlockID
 	Blocks map[BlockID]*BasicBlock
+	Params []Param // Populated during builder pass for parameter visibility
 }
 
 // NewGraph initializes a new, empty Control Flow Graph.

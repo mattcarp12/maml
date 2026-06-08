@@ -1,8 +1,15 @@
-// EXIT_CODE: 481255
+// EXIT_CODE: 185
 
 type Status = Loading | Active(int) | Error{ code int, msg string }
 type Content = Empty | Text(string) | Image{ width int, height int, url string }
 type Action = MarkRead | Delete | Archive{ folder string }
+
+// Track 4.4: Custom value-type struct layout for structure nesting verification
+type Point = { x int, y int }
+
+// ============================================================================
+// Core Sum Type Inspectors 
+// ============================================================================
 
 fn inspect_status(s Status) int {
     return match s {
@@ -28,7 +35,91 @@ fn process_action(act Action) int {
     }
 }
 
+// ============================================================================
+// Option / Result Validation Suite
+// ============================================================================
+
+// Basic Option construction and match validation
+fn test_option_basic() int {
+    mut x := Some(42)
+    return match x {
+        case Some(v): { => v }
+        case None:    { => 0 }
+    }
+}
+
+// Search operation returning None or inferred index context
+fn find(haystack Vec<int>, needle int) Option<int> {
+    for mut i := 0; i < len(haystack); i = i + 1 {
+        if haystack[i] == needle {
+            return Some(i)
+        }
+    }
+    return None
+}
+
+// Result construction demonstrating numeric boundaries
+fn divide(a int, b int) Result<int, int> {
+    if b == 0 {
+        return Err(-1)
+    }
+    return Ok(a / b)
+}
+
+// Nested match handling on computed Result payloads
+fn test_result_match() int {
+    result := divide(10, 2)
+    return match result {
+        case Ok(v):  { => v }
+        case Err(e): { => e }
+    }
+}
+
+// Vector elements serving as reference variant containers
+fn first(v Vec<int>) Option<int> {
+    if len(v) == 0 {
+        return None
+    }
+    return Some(v[0])
+}
+
+// ============================================================================
+// Error Propagation & Structural Combinations
+// ============================================================================
+
+fn parse_positive(n int) Result<int, int> {
+    if n < 0 {
+        return Err(n)
+    }
+    return Ok(n)
+}
+
+// Track 4.3: Manual deep-variant propagation tracking
+fn double_positive(n int) int {
+    result := parse_positive(n)
+    return match result {
+        case Ok(v):  { => v * 2 }
+        case Err(e): { => e }
+    }
+}
+
+// Track 4.4: Struct payload variants (exposing SizeInBytes layout constraints)
+fn find_origin(points Vec<Point>) Option<Point> {
+    for mut i := 0; i < len(points); i = i + 1 {
+        p := points[i]
+        if p.x == 0 && p.y == 0 {
+            return Some(p)
+        }
+    }
+    return None
+}
+
+// ============================================================================
+// Aggregated Main Driver Execution Entry Point
+// ============================================================================
+
 fn main() int {
+    // 1. Initialize original test assets
     s1 := Loading
     s2 := Active(5)
     s3 := Error{code: 404, msg: "Not Found"}
@@ -40,7 +131,51 @@ fn main() int {
     a1 := MarkRead
     a2 := Archive{folder: "Inbox"}
 
-    return inspect_status(s1) + inspect_status(s2) + inspect_status(s3) +
-           handle_content(c1) + handle_content(c2) + handle_content(c3) +
-           process_action(a1) + process_action(a2)
+    base_sum := inspect_status(s1) + inspect_status(s2) + inspect_status(s3) +
+                handle_content(c1) + handle_content(c2) + handle_content(c3) +
+                process_action(a1) + process_action(a2)
+
+    // 2. Option and primitive Result validations
+    opt_basic := test_option_basic()
+    res_match := test_result_match()
+    res_prop  := double_positive(25)
+
+    // 3. Vector container validations
+    v := Vec<int>{10, 20, 30, 42, 50}
+    
+    opt_find := match find(v, 42) {
+        case Some(idx): { => idx }
+        case None:      { => -1 }
+    }
+
+    opt_first := match first(v) {
+        case Some(val): { => val }
+        case None:      { => -1 }
+    }
+
+    // 4. Structural Variant payload layout tests
+    p1 := Point{x: 4, y: 5}
+    p2 := Point{x: 0, y: 0}
+    p3 := Point{x: 7, y: 8}
+    points_vec := Vec<Point>{p1, p2, p3}
+
+    opt_origin := match find_origin(points_vec) {
+        case Some(pt): { => pt.x + pt.y + 100 }
+        case None:     { => 0 }
+    }
+
+    // Return aggregated computation block score across all runtime branches
+    return base_sum + opt_basic + res_match + res_prop + opt_find + opt_first + opt_origin
+
+    // ============================================================================
+    // EXPECTED EXECUTION VERIFICATION METADATA
+    // ============================================================================
+    // EXPECTED_RETURN_VALUE: 481465
+    // EXPECTED_EXIT_CODE: 185 (481465 % 256)
+    //
+    // Subtotal Breakdown:
+    // - Base Sum Types: 481255 (Loading=1, Active=50, Error=404, Empty=0, Text=100, Image=480000, MarkRead=200, Archive=500)
+    // - Option/Result:  97     (Basic=42, Match=5, Prop=50)
+    // - Vector/Struct:  113    (Find=3, First=10, Origin=100)
+    // ============================================================================
 }

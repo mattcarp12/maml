@@ -93,65 +93,62 @@ static void handleVariantDiscriminant(CodegenContext &ctx, const nlohmann::json 
   std::string dst = stmt["dst"].get<std::string>();
   auto objectJson = stmt["object"];
 
-  llvm::Value *objectPtr = evaluateExpression(ctx, objectJson);
-  if (!objectPtr) {
-    ctx.Error.fatal("Failed to evaluate object pointer context for variant_discriminant", stmt);
-    return;
+  // 🌟 THE FIX: Grab the memory pointer directly to ensure GEP access
+  llvm::Value *objectPtr = nullptr;
+  if (objectJson.contains("op") && objectJson["op"] == "ident") {
+    objectPtr = ctx.resolveSymbol(objectJson["value"].get<std::string>());
   }
 
-  // Resolve the underlying tag structural layout of the base SumType
-  llvm::Type *sumTy = llvmTypeFor(ctx, objectJson["type"]);
+  if (!objectPtr) {
+    objectPtr = evaluateExpression(ctx, objectJson);
+  }
 
-  // The tag discriminant is structurally guaranteed to always reside at layout index 0
-  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 0, dst + "_gep");
-  llvm::Value *discrimVal = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), discrimGep, dst + "_val");
+  llvm::Value *discrimVal = nullptr;
+
+  if (objectPtr->getType()->isPointerTy()) {
+    // We only need the tag, so a simple { i32 } struct overlay guarantees we read offset 0 correctly
+    llvm::StructType *sumTy = llvm::StructType::get(ctx.Context, {llvm::Type::getInt32Ty(ctx.Context)}, false);
+    llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 0, dst + "_gep");
+    discrimVal = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), discrimGep, dst + "_val");
+  } else {
+    // Fallback
+    discrimVal = ctx.Builder->CreateExtractValue(objectPtr, {0}, dst + "_val");
+  }
 
   ctx.SymbolEnv.back()[dst] = discrimVal;
 }
 
 static void handleVariantRead(CodegenContext &ctx, const nlohmann::json &stmt) {
   std::string dst = stmt.value("dst", "");
-  std::string variant_name = stmt.value("variant_name", "");
   int payload_index = stmt.value("payload_index", 0);
   auto objectJson = stmt["object"];
 
-  llvm::Value *objectPtr = evaluateExpression(ctx, objectJson);
-  if (!objectPtr) {
-    ctx.Error.fatal("Failed to evaluate target object pointer for variant_read", stmt);
-    return;
+  llvm::Value *objectPtr = nullptr;
+  if (objectJson.contains("op") && objectJson["op"] == "ident") {
+    objectPtr = ctx.resolveSymbol(objectJson["value"].get<std::string>());
   }
+  if (!objectPtr) objectPtr = evaluateExpression(ctx, objectJson);
 
-  // Reconstruct the structural field layout schema for this specific algebraic variant branch
-  std::vector<llvm::Type *> fieldTys;
-  fieldTys.push_back(llvm::Type::getInt32Ty(ctx.Context));  // Index 0 is always the variant tag discriminant
+  llvm::Value *loadedVal = nullptr;
 
-  if (objectJson.contains("type") && objectJson["type"].contains("variants")) {
-    for (const auto &v : objectJson["type"]["variants"]) {
-      if (v.value("name", "") == variant_name) {
-        if (v.contains("tuple_types")) {
-          for (const auto &tJson : v["tuple_types"]) fieldTys.push_back(llvmTypeFor(ctx, tJson));
-        }
-        if (v.contains("fields")) {
-          for (const auto &fJson : v["fields"]) fieldTys.push_back(llvmTypeFor(ctx, fJson["type"]));
-        }
-        break;
-      }
+  if (objectPtr->getType()->isPointerTy()) {
+    // 🌟 THE FIX: Read directly from the padded array at index 1
+    llvm::Type *sumTy = llvmTypeFor(ctx, objectJson["type"]);
+    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 1, dst + "_array_gep");
+
+    llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
+    llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(targetTy));
+
+    if (payload_index > 0) {
+      castGep = ctx.Builder->CreateGEP(targetTy, castGep,
+                                       llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, payload_index)));
     }
+
+    loadedVal = ctx.Builder->CreateLoad(targetTy, castGep, dst + "_val");
+  } else {
+    // Fallback
+    loadedVal = ctx.Builder->CreateExtractValue(objectPtr, {1}, dst + "_val");
   }
-
-  // Calibration Failsafe: Backfill sparse definitions up to target index boundaries
-  if (fieldTys.size() <= static_cast<size_t>(1 + payload_index)) {
-    while (fieldTys.size() <= static_cast<size_t>(1 + payload_index)) {
-      fieldTys.push_back(llvmTypeFor(ctx, stmt["type"]));
-    }
-  }
-
-  llvm::StructType *variantStructTy = llvm::StructType::get(ctx.Context, fieldTys, /*isPacked=*/false);
-
-  // Step past index 0 discriminant to extract payload at position (1 + payload_index)
-  llvm::Value *payloadGep = ctx.Builder->CreateStructGEP(variantStructTy, objectPtr, 1 + payload_index, dst + "_gep");
-  llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
-  llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, payloadGep, dst + "_val");
 
   ctx.SymbolEnv.back()[dst] = loadedVal;
 }
@@ -162,37 +159,35 @@ static void handleVariantInit(CodegenContext &ctx, const nlohmann::json &stmt) {
   auto payloadsJson = stmt["payloads"];
 
   llvm::Value *dstPtr = ctx.resolveSymbol(dst);
-  if (!dstPtr) {
-    ctx.Error.fatal("variant_init: target memory allocation pointer not found for '" + dst + "'", stmt);
-    return;
-  }
+  if (!dstPtr) return;
 
-  // Reconstruct the anonymous tuple layout structure for writing fields
-  std::vector<llvm::Type *> fieldTys;
-  fieldTys.push_back(llvm::Type::getInt32Ty(ctx.Context));  // Discriminant tag
-  for (const auto &pJson : payloadsJson) {
-    fieldTys.push_back(llvmTypeFor(ctx, pJson["type"]));
-  }
+  // 🌟 THE FIX: Get the official, padded LLVM type for the SumType
+  llvm::Type *sumTy = llvmTypeFor(ctx, stmt["type"]);
 
-  llvm::StructType *variantStructTy = llvm::StructType::get(ctx.Context, fieldTys, /*isPacked=*/false);
-
-  // Write the tag value into index 0
-  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(variantStructTy, dstPtr, 0, dst + "_disc_gep");
+  // 1. Write the integer tag into index 0
+  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 0, dst + "_disc_gep");
   llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), discriminant);
   ctx.Builder->CreateStore(discrimVal, discrimGep);
 
-  // Pack each field value down sequentially into the variant allocation buffer
-  for (size_t i = 0; i < payloadsJson.size(); ++i) {
-    auto pJson = payloadsJson[i];
-    llvm::Value *payloadVal = evaluateExpression(ctx, pJson);
-    if (!payloadVal) {
-      ctx.Error.fatal("variant_init: Failed to evaluate payload field parameter index " + std::to_string(i), stmt);
-      continue;
-    }
+  // 2. Write the payload directly into the padded array at index 1
+  if (payloadsJson.size() > 0) {
+    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 1, dst + "_array_gep");
 
-    llvm::Value *payloadGep =
-        ctx.Builder->CreateStructGEP(variantStructTy, dstPtr, 1 + i, dst + "_pld_" + std::to_string(i) + "_gep");
-    ctx.Builder->CreateStore(payloadVal, payloadGep);
+    for (size_t i = 0; i < payloadsJson.size(); ++i) {
+      auto pJson = payloadsJson[i];
+      llvm::Value *payloadVal = evaluateExpression(ctx, pJson);
+
+      // Cast the generic array memory to a pointer of our specific payload type
+      llvm::Type *payloadTy = payloadVal->getType();
+      llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(payloadTy));
+
+      // If there are multiple tuple payloads, we offset the pointer
+      if (i > 0) {
+        castGep = ctx.Builder->CreateGEP(payloadTy, castGep, llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, i)));
+      }
+
+      ctx.Builder->CreateStore(payloadVal, castGep);
+    }
   }
 }
 
