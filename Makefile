@@ -2,24 +2,33 @@
 # MAML Unified Build Pipeline Orchestration
 # =============================================================================
 
-.PHONY: all frontend backend runtime clean test test-e2e pipeline-demo
+.PHONY: all frontend backend runtime clean test test-e2e pipeline-demo codegen
 
 # Directories
 BIN_DIR     := $(CURDIR)/bin
 BUILD_DIR   := $(CURDIR)/build
 RUNTIME_DIR := $(CURDIR)/runtime
 
-# Default target builds the entire decentralized engine
-all: frontend backend runtime
+# Default target runs codegen before compiling the decentralized engine
+all: codegen frontend backend runtime
+
+# 0. Single Source of Truth Code Generation
+codegen:
+	@echo "==> Running AST Codegen..."
+	@python3 frontend/ast/generate_ast.py
+	@echo "==> Running TAST Codegen..."
+	@python3 frontend/tast/generate_tast.py
+	@echo "==> Running Single Source of Truth Codegen..."
+	@python3 tools/codegen.py
 
 # 1. Build the Go Compiler Frontend
-frontend:
+frontend: codegen
 	@echo "==> Building Go Frontend..."
 	@mkdir -p $(BIN_DIR)
 	@go build -o $(BIN_DIR)/maml ./cmd/maml/main.go
 
 # 2. Configure and Build the C++ LLVM Backend
-backend:
+backend: codegen
 	@echo "==> Building C++ LLVM Backend..."
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(BIN_DIR)

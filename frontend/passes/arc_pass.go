@@ -23,8 +23,6 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 		}
 	}
 
-	// Inside InjectARC in frontend/passes/arc_pass.go:
-
 	isRef := func(name string) bool {
 		t, ok := varTypes[name]
 		return ok && t != nil && t.IsNeedsARC() // Fixed: Only inject ARC for owning types

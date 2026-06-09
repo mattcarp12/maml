@@ -27,6 +27,15 @@ func (p *Parser) curPos() ast.Position {
 	return ast.Position{Line: p.curToken.Line, Col: p.curToken.Col}
 }
 
+func (p *Parser) curEndPos() ast.Position {
+	// If the literal text exists, use its structural length; otherwise assume 1 char (e.g. ';', '}', ')')
+	length := len(p.curToken.Literal)
+	if length == 0 {
+		length = 1
+	}
+	return ast.Position{Line: p.curToken.Line, Col: p.curToken.Col + length}
+}
+
 // --- public error API --------------------------------------------------------
 
 // Errors returns all collected error messages as plain strings so that call
@@ -121,6 +130,41 @@ func (p *Parser) expectPeek(t token.TokenType) bool {
 }
 
 // --- precedence helpers ------------------------------------------------------
+
+const (
+	_ int = iota
+	LOWEST
+	OR
+	AND
+	EQUALS      // == or !=
+	LESSGREATER // > or < or >= or <=
+	SUM         // + or -
+	PRODUCT     // * or / or %
+	PREFIX      // -X, !X, or await X  <-- Move this down!
+	CALL        // fn() or struct literal or field access
+	INDEX       // array[index]
+)
+
+var precedences = map[token.TokenType]int{
+	token.AND:      AND,
+	token.OR:       OR,
+	token.EQ:       EQUALS,
+	token.NOT_EQ:   EQUALS,
+	token.LT:       LESSGREATER,
+	token.LTE:      LESSGREATER,
+	token.GT:       LESSGREATER,
+	token.GTE:      LESSGREATER,
+	token.PLUS:     SUM,
+	token.MINUS:    SUM,
+	token.MULTIPLY: PRODUCT,
+	token.DIVIDE:   PRODUCT,
+	token.MODULO:   PRODUCT,
+	token.LPAREN:   CALL,
+	token.LBRACE:   CALL,
+	token.DOT:      CALL,
+	token.NOT:      PREFIX,
+	token.LBRACKET: INDEX,
+}
 
 func (p *Parser) peekPrecedence() int {
 	if pr, ok := precedences[p.peekToken.Type]; ok {

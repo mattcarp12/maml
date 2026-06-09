@@ -1,0 +1,83 @@
+interfaces:
+  Decl: [Program, FnDecl, TypeDecl]
+  Stmt: [BlockStmt, DeclareStmt, AssignStmt, ReturnStmt, YieldStmt, ExprStmt, ForStmt, BreakStmt, ContinueStmt, VecPushStmt]
+  Expr: [BlockStmt, Identifier, IntLiteral, BoolLiteral, StringLiteral, InfixExpr, PrefixExpr, IfExpr, CallExpr, FieldAccess, IndexExpr, SliceExpr, StructLiteral, ArrayLiteral, VariantLiteral, AwaitExpr, MatchExpr, MapLiteral, VecLiteral]
+  Pattern: [VariantPattern, WildcardPattern, IdentifierPattern, LiteralPattern, CompositePattern]
+
+nodes:
+  # Declarations
+  Program:
+    fields: { Decls: "[]Decl" }
+  FnDecl:
+    fields: { Name: string, Params: "[]*Param", ReturnType: "types.Type", Body: "*BlockStmt", IsAsync: bool, Symbol: "*types.Symbol" }
+  TypeDecl:
+    fields: { Name: "*Identifier", Type: "types.Type", Symbol: "*types.Symbol" }
+
+  # Statements
+  BlockStmt:
+    fields: { Statements: "[]Stmt" }
+  DeclareStmt:
+    fields: { Symbol: "*types.Symbol", Value: Expr }
+  AssignStmt:
+    fields: { LValue: Expr, RValue: Expr }
+  ReturnStmt:
+    fields: { Value: Expr }
+  YieldStmt:
+    fields: { Value: Expr }
+  ExprStmt:
+    fields: { Value: Expr }
+  ForStmt:
+    fields: { Init: Stmt, Condition: Expr, Post: Stmt, Body: "*BlockStmt" }
+  BreakStmt: {}
+  ContinueStmt: {}
+  VecPushStmt:
+    fields: { LValue: Expr, RValue: Expr }
+
+  # Expressions
+  Identifier:
+    fields: { Value: string, Symbol: "*types.Symbol", Type: "types.Type" }
+  IntLiteral:
+    fields: { Value: int64, Type: "types.Type" }
+  BoolLiteral:
+    fields: { Value: bool, Type: "types.Type" }
+  StringLiteral:
+    fields: { Value: string, Type: "types.Type" }
+  InfixExpr:
+    fields: { Operator: string, Left: Expr, Right: Expr, Type: "types.Type" }
+  PrefixExpr:
+    fields: { Operator: string, Right: Expr, Type: "types.Type" }
+  IfExpr:
+    fields: { Condition: Expr, Consequence: "*BlockStmt", Alternative: "*BlockStmt", Type: "types.Type" }
+  CallExpr:
+    fields: { Function: Expr, Arguments: "[]CallArg", Type: "types.Type" }
+  FieldAccess:
+    fields: { Object: Expr, Field: "*Identifier", Type: "types.Type" }
+  IndexExpr:
+    fields: { Left: Expr, Index: Expr, Type: "types.Type" }
+  SliceExpr:
+    fields: { Left: Expr, Low: Expr, High: Expr, Type: "types.Type" }
+  StructLiteral:
+    fields: { Fields: "[]StructField", Type: "types.Type" }
+  ArrayLiteral:
+    fields: { Elements: "[]Expr", Type: "types.Type" }
+  VariantLiteral:
+    fields: { Variant: "*types.SumVariant", Arguments: "[]Expr", Fields: "[]VariantField", Type: "types.Type" }
+  AwaitExpr:
+    fields: { Value: Expr, Type: "types.Type" }
+  MatchExpr:
+    fields: { Subject: Expr, Arms: "[]MatchArm", Type: "types.Type" }
+  MapLiteral:
+    fields: { Elements: "[]MapElement", Type: "types.MapType" }
+  VecLiteral:
+    fields: { Elements: "[]Expr", Type: "types.VectorType" }
+
+  # Patterns
+  WildcardPattern: {}
+  IdentifierPattern:
+    fields: { Name: string, Symbol: "*types.Symbol" }
+  LiteralPattern:
+    fields: { Value: Expr }
+  CompositePattern:
+    fields: { StructType: "types.Type", Elements: "[]CompositePatternElement" }
+  VariantPattern:
+    fields: {Variant: "*Identifier", TupleBindings: "[]*Identifier", Fields: "[]VariantPatternField", Type: "types.Type", Symbol: "*types.Symbol"}

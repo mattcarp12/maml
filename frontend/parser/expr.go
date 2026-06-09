@@ -52,20 +52,36 @@ func (p *Parser) parseIdentifier() ast.Expr {
 	if p.peekToken.Type == token.LT && p.looksLikeGenericInstantiation() {
 		p.nextToken() // Step onto '<'
 		typeExpr := p.parseGenericTypeExpr(name, startPos)
-		return &ast.TypeExprWrapper{Pos_: startPos, TypeExpr: typeExpr}
+		wrapper := &ast.TypeExprWrapper{
+			Pos_:     startPos,
+			TypeExpr: typeExpr,
+		}
+		wrapper.End_ = p.curEndPos()
+		return wrapper
 	}
 
 	// If followed by '{', it's a standard named composite type (e.g., User{)
 	if p.peekToken.Type == token.LBRACE && p.allowStructLiterals {
 		typeExpr := &ast.NamedTypeExpr{
-			Name: &ast.Identifier{Value: name, Pos_: startPos},
+			Name: &ast.Identifier{Value: name, Pos_: startPos, End_: p.curEndPos()},
 			Pos_: startPos,
 		}
-		return &ast.TypeExprWrapper{Pos_: startPos, TypeExpr: typeExpr}
+		typeExpr.End_ = p.curEndPos()
+		wrapper := &ast.TypeExprWrapper{
+			Pos_:     startPos,
+			TypeExpr: typeExpr,
+		}
+		wrapper.End_ = p.curEndPos()
+		return wrapper
 	}
 
 	// Fallback: Just a standard variable/constant identifier lookup expression
-	return &ast.Identifier{Value: name, Pos_: startPos}
+	id := &ast.Identifier{
+		Value: name,
+		Pos_:  startPos,
+	}
+	id.End_ = p.curEndPos()
+	return id
 }
 
 func (p *Parser) parseIntegerLiteral() ast.Expr {
@@ -81,8 +97,7 @@ func (p *Parser) parseIntegerLiteral() ast.Expr {
 	return &ast.IntLiteral{
 		Value: value,
 		Pos_:  pos,
-		// End_ points to the column just past the last digit.
-		End_: ast.Position{Line: pos.Line, Col: pos.Col + len(lit)},
+		End_:  ast.Position{Line: pos.Line, Col: pos.Col + len(lit)},
 	}
 }
 
@@ -90,6 +105,7 @@ func (p *Parser) parseBooleanLiteral() ast.Expr {
 	return &ast.BoolLiteral{
 		Value: p.curToken.Literal == "true",
 		Pos_:  p.curPos(),
+		End_:  p.curEndPos(),
 	}
 }
 
@@ -111,6 +127,7 @@ func (p *Parser) parseInfixExpression(left ast.Expr) ast.Expr {
 		return nil
 	}
 
+	expression.End_ = p.curEndPos()
 	return expression
 }
 
@@ -124,6 +141,7 @@ func (p *Parser) parsePrefixExpression() ast.Expr {
 	if expression.Right == nil {
 		return nil
 	}
+	expression.End_ = p.curEndPos()
 	return expression
 }
 
@@ -189,6 +207,7 @@ func (p *Parser) parseIfExpression() ast.Expr {
 		Consequence: consequence,
 		Alternative: alternative,
 		Pos_:        pos,
+		End_:        p.curEndPos(),
 	}
 }
 
@@ -201,6 +220,7 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 	// Parse the arguments safely
 	callExpr.Arguments = p.parseCallArguments(token.RPAREN)
 
+	callExpr.End_ = p.curEndPos()
 	return callExpr
 }
 
@@ -233,6 +253,7 @@ func (p *Parser) parseCallArg() ast.CallArg {
 
 	// Parse the actual expression
 	arg.Argument = p.parseExpression(LOWEST)
+	arg.End_ = p.curEndPos()
 	return arg
 }
 
@@ -241,10 +262,12 @@ func (p *Parser) parseArrayTypePrefix() ast.Expr {
 	if typeExpr == nil {
 		return nil
 	}
-	return &ast.TypeExprWrapper{
+	wrapper := &ast.TypeExprWrapper{
 		TypeExpr: typeExpr,
 		Pos_:     typeExpr.Pos(),
 	}
+	wrapper.End_ = p.curEndPos()
+	return wrapper
 }
 
 func (p *Parser) parseCompositeLiteral(left ast.Expr) ast.Expr {
@@ -276,7 +299,7 @@ func (p *Parser) parseCompositeLiteral(left ast.Expr) ast.Expr {
 				Pos_:  startPos,
 				Key:   firstExpr,
 				Value: valueExpr,
-				End_:  p.curPos(),
+				End_:  p.curEndPos(),
 			}
 		} else {
 			// Otherwise, it's a purely positional element (e.g., Array or Vector)
@@ -284,7 +307,7 @@ func (p *Parser) parseCompositeLiteral(left ast.Expr) ast.Expr {
 				Pos_:  startPos,
 				Key:   nil,
 				Value: firstExpr,
-				End_:  p.curPos(),
+				End_:  p.curEndPos(),
 			}
 		}
 
@@ -295,7 +318,7 @@ func (p *Parser) parseCompositeLiteral(left ast.Expr) ast.Expr {
 		return nil
 	}
 
-	cl.End_ = p.curPos()
+	cl.End_ = p.curEndPos()
 	return cl
 }
 
@@ -306,13 +329,18 @@ func extractTypeExpr(expr ast.Expr) ast.TypeExpr {
 	}
 	// If it's a standard identifier like 'User', treat it as a NamedTypeExpr
 	if id, ok := expr.(*ast.Identifier); ok {
-		return &ast.NamedTypeExpr{
+		named := &ast.NamedTypeExpr{
 			Name: id,
 			Pos_: id.Pos(),
 		}
+		named.End_ = id.End() // reuse identifier's end position
+		return named
 	}
 	// Fallback or pass-through for other type shapes (like GenericTypeExpr)
-	return expr.(ast.TypeExpr)
+	if te, ok := expr.(ast.TypeExpr); ok {
+		return te
+	}
+	return nil
 }
 
 func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
@@ -330,13 +358,19 @@ func (p *Parser) parseFieldAccess(left ast.Expr) ast.Expr {
 	fa.Field = &ast.Identifier{
 		Value: p.curToken.Literal,
 		Pos_:  p.curPos(),
+		End_:  p.curEndPos(),
 	}
 
+	fa.End_ = p.curEndPos()
 	return fa
 }
 
 func (p *Parser) parseStringLiteral() ast.Expr {
-	return &ast.StringLiteral{Value: p.curToken.Literal, Pos_: p.curPos()}
+	return &ast.StringLiteral{
+		Value: p.curToken.Literal,
+		Pos_:  p.curPos(),
+		End_:  p.curEndPos(),
+	}
 }
 
 func (p *Parser) parseIndexExpression(left ast.Expr) ast.Expr {
@@ -368,12 +402,14 @@ func (p *Parser) parseIndexExpression(left ast.Expr) ast.Expr {
 			return nil
 		}
 
-		return &ast.SliceExpr{
+		slice := &ast.SliceExpr{
 			Left: left,
 			Low:  low,
 			High: high,
 			Pos_: left.Pos(),
 		}
+		slice.End_ = p.curEndPos()
+		return slice
 	}
 
 	// Normal index expression: arr[index]
@@ -381,11 +417,13 @@ func (p *Parser) parseIndexExpression(left ast.Expr) ast.Expr {
 		return nil
 	}
 
-	return &ast.IndexExpr{
+	indexExpr := &ast.IndexExpr{
 		Left:  left,
 		Index: low,
 		Pos_:  left.Pos(),
 	}
+	indexExpr.End_ = p.curEndPos()
+	return indexExpr
 }
 
 func (p *Parser) parseAwaitExpression() ast.Expr {
@@ -401,5 +439,6 @@ func (p *Parser) parseAwaitExpression() ast.Expr {
 	return &ast.AwaitExpr{
 		Value: value,
 		Pos_:  pos,
+		End_:  p.curEndPos(),
 	}
 }

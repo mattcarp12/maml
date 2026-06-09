@@ -108,6 +108,7 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 		Params:     params,
 		IsAsync:    isAsync,
 		Pos_:       pos,
+		End_:       p.curEndPos(),
 	}
 }
 
@@ -141,6 +142,7 @@ func (p *Parser) parseParam() *ast.Param {
 	// We expect the token to now sit on the parameter Name (e.g., 'x')
 	if p.curToken.Type != token.IDENT {
 		p.addError(fmt.Sprintf("expected parameter name, got %s", p.curToken.Type))
+		param.End_ = p.curEndPos()
 		return param
 	}
 	param.Name = p.curToken.Literal
@@ -148,6 +150,7 @@ func (p *Parser) parseParam() *ast.Param {
 	p.nextToken() // step off the parameter name
 	param.Type = p.parseTypeExpr()
 
+	param.End_ = p.curEndPos()
 	return param
 }
 
@@ -157,7 +160,9 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	if !p.expectPeek(token.IDENT) {
 		return nil
 	}
-	td.Name = &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+	id := &ast.Identifier{Value: p.curToken.Literal, Pos_: p.curPos()}
+	id.End_ = p.curEndPos()
+	td.Name = id
 
 	if !p.expectPeek(token.ASSIGN) {
 		return nil
@@ -177,48 +182,49 @@ func (p *Parser) parseTypeDecl() *ast.TypeDecl {
 	}
 
 	p.skipNewlines()
+	td.End_ = p.curEndPos()
 	return td
 }
 
 func (p *Parser) parseSumType() *ast.SumTypeExpr {
-    st := &ast.SumTypeExpr{Pos_: p.curPos()}
-    p.skipNewlines()
+	st := &ast.SumTypeExpr{Pos_: p.curPos()}
+	p.skipNewlines()
 
-    // Handle optional leading '|'
-    if p.curToken.Type == token.SEPARATOR {
-        p.nextToken()
-        p.skipNewlines()
-    }
+	// Handle optional leading '|'
+	if p.curToken.Type == token.SEPARATOR {
+		p.nextToken()
+		p.skipNewlines()
+	}
 
-    for {
-        if p.curToken.Type != token.IDENT {
-            p.addError("expected variant name identifier in sum type declaration")
-            return nil
-        }
+	for {
+		if p.curToken.Type != token.IDENT {
+			p.addError("expected variant name identifier in sum type declaration")
+			return nil
+		}
 
-        variant := p.parseSumVariant()
-        if variant == nil {
-            return nil
-        }
-        st.Variants = append(st.Variants, *variant)
+		variant := p.parseSumVariant()
+		if variant == nil {
+			return nil
+		}
+		st.Variants = append(st.Variants, *variant)
 
-        // After a variant, we must advance past it.
-        // parseSumVariant leaves curToken ON the last token of the variant
-        // (the IDENT for unit, ')' for tuple, '}' for struct).
-        // We need to move forward to see what comes next.
-        p.nextToken()    // ← THIS is the missing step
-        p.skipNewlines()
+		// After a variant, we must advance past it.
+		// parseSumVariant leaves curToken ON the last token of the variant
+		// (the IDENT for unit, ')' for tuple, '}' for struct).
+		// We need to move forward to see what comes next.
+		p.nextToken() // ← THIS is the missing step
+		p.skipNewlines()
 
-        if p.curToken.Type == token.SEPARATOR {
-            p.nextToken()
-            p.skipNewlines()
-        } else {
-            break
-        }
-    }
+		if p.curToken.Type == token.SEPARATOR {
+			p.nextToken()
+			p.skipNewlines()
+		} else {
+			break
+		}
+	}
 
-    st.End_ = p.curPos()
-    return st
+	st.End_ = p.curEndPos()
+	return st
 }
 
 func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
@@ -283,7 +289,7 @@ func (p *Parser) parseSumVariant() *ast.VariantTypeExpr {
 	// Case 3: Unit Variant -> Enum (No payload)
 	// If neither block runs, curToken remains safely on the variant IDENT.
 
-	variant.End_ = p.curPos()
+	variant.End_ = p.curEndPos()
 	return variant
 }
 
@@ -296,7 +302,7 @@ func (p *Parser) parseProductType() *ast.StructTypeExpr {
 	// curToken is '{'. If the NEXT token is '}', we are empty.
 	if p.peekToken.Type == token.RBRACE {
 		p.nextToken() // step onto '}'
-		pt.End_ = p.curPos()
+		pt.End_ = p.curEndPos()
 		return pt
 	}
 
@@ -332,6 +338,7 @@ func (p *Parser) parseProductType() *ast.StructTypeExpr {
 		return nil
 	}
 
+	pt.End_ = p.curEndPos()
 	return pt
 }
 
@@ -354,7 +361,9 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 		if baseType == nil {
 			return nil
 		}
-		return &ast.ArrayTypeExpr{Size: int(size), Base: baseType, Pos_: startPos}
+		array := &ast.ArrayTypeExpr{Size: int(size), Base: baseType, Pos_: startPos}
+		array.End_ = p.curEndPos()
+		return array
 	}
 
 	// Case 2: Standard Named Types like 'int', 'string', 'User'
@@ -367,10 +376,12 @@ func (p *Parser) parseTypeExpr() ast.TypeExpr {
 			return p.parseGenericTypeExpr(name, startPos)
 		}
 
-		return &ast.NamedTypeExpr{
-			Name: &ast.Identifier{Value: name, Pos_: startPos},
+		named := &ast.NamedTypeExpr{
+			Name: &ast.Identifier{Value: name, Pos_: startPos, End_: p.curEndPos()},
 			Pos_: startPos,
 		}
+		named.End_ = p.curEndPos()
+		return named
 	}
 
 	p.addError(fmt.Sprintf("expected a type, got %s", p.curToken.Type))
@@ -406,9 +417,11 @@ func (p *Parser) parseGenericTypeExpr(name string, pos ast.Position) *ast.Generi
 		return nil
 	}
 
-	return &ast.GenericTypeExpr{
-		Name: &ast.Identifier{Value: name, Pos_: pos},
+	generic := &ast.GenericTypeExpr{
+		Name: &ast.Identifier{Value: name, Pos_: pos, End_: p.curEndPos()},
 		Args: args,
 		Pos_: pos,
 	}
+	generic.End_ = p.curEndPos()
+	return generic
 }

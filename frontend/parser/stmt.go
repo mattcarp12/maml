@@ -46,9 +46,10 @@ func (p *Parser) parseBlockStmt() *ast.BlockStmt {
 
 	switch p.curToken.Type {
 	case token.RBRACE:
-		block.End_ = p.curPos()
+		block.End_ = p.curEndPos()
 	default:
 		p.addError(fmt.Sprintf("expected '}' to close block, got %s", p.curToken.Type))
+		block.End_ = p.curEndPos()
 	}
 
 	return block
@@ -114,6 +115,7 @@ func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 		Mutable: mutable,
 		Value:   value,
 		Pos_:    pos,
+		End_:    p.curEndPos(),
 	}
 }
 
@@ -127,6 +129,7 @@ func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 		return &ast.ReturnStmt{
 			Value: nil,
 			Pos_:  pos,
+			End_:  p.curEndPos(),
 		}
 	}
 
@@ -142,6 +145,7 @@ func (p *Parser) parseReturnStmt() *ast.ReturnStmt {
 	return &ast.ReturnStmt{
 		Value: value,
 		Pos_:  pos,
+		End_:  p.curEndPos(),
 	}
 }
 
@@ -161,6 +165,7 @@ func (p *Parser) parseYieldStmt() *ast.YieldStmt {
 	return &ast.YieldStmt{
 		Value: value,
 		Pos_:  pos,
+		End_:  p.curEndPos(),
 	}
 }
 
@@ -186,6 +191,7 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 			LValue: expr,
 			RValue: value,
 			Pos_:   pos,
+			End_:   p.curEndPos(),
 		}
 	case token.PUSH:
 		p.nextToken() // get onto '<<'
@@ -199,6 +205,7 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 			LValue: expr,
 			RValue: value,
 			Pos_:   pos,
+			End_:   p.curEndPos(),
 		}
 	}
 
@@ -208,6 +215,7 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 	return &ast.ExprStmt{
 		Value: expr,
 		Pos_:  pos,
+		End_:  p.curEndPos(),
 	}
 }
 
@@ -216,7 +224,12 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 
 	if p.peekToken.Type == token.LBRACE {
 		p.nextToken()
-		return &ast.ForStmt{Body: p.parseBlockStmt(), Pos_: pos}
+		body := p.parseBlockStmt()
+		return &ast.ForStmt{
+			Body: body,
+			Pos_: pos,
+			End_: p.curEndPos(),
+		}
 	}
 
 	hasParens := p.peekToken.Type == token.LPAREN
@@ -290,15 +303,24 @@ func (p *Parser) parseForStmt() *ast.ForStmt {
 		Post:      post,
 		Body:      body,
 		Pos_:      pos,
+		End_:      p.curEndPos(),
 	}
 }
 
 func (p *Parser) parseBreakStmt() ast.Stmt {
-	stmt := &ast.BreakStmt{Token: p.curToken}
+	stmt := &ast.BreakStmt{
+		Token: p.curToken,
+		Pos_:  p.curPos(),
+		End_:  p.curEndPos(),
+	}
 	return stmt
 }
 
 func (p *Parser) parseContinueStmt() ast.Stmt {
-	stmt := &ast.ContinueStmt{Token: p.curToken}
+	stmt := &ast.ContinueStmt{
+		Token: p.curToken,
+		Pos_:  p.curPos(),
+		End_:  p.curEndPos(),
+	}
 	return stmt
 }

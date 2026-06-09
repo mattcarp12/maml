@@ -8,7 +8,8 @@
 			"version": "18",
 		},
 		"ghcr.io/devcontainers/features/common-utils": {},
-		"ghcr.io/alexdenisov/features/feature-cmake": {}
+		"ghcr.io/alexdenisov/features/feature-cmake": {},
+		"ghcr.io/devcontainers/features/python": {},
 	},
 	"customizations": {
 		"vscode": {
@@ -16,12 +17,25 @@
 				"golang.go",
 				"ziglang.vscode-zig",
 				"llvm-vs-code-extensions.vscode-clangd",
-				"ms-vscode.cmake-tools"
+				"ms-vscode.cmake-tools",
+				"ms-python.python",
+				"charliermarsh.ruff",
+				"redhat.vscode-yaml"
 			]
+		},
+		"settings": {
+			"[python]": {
+				"editor.defaultFormatter": "charliermarsh.ruff",
+				"editor.formatOnSave": true,
+				"editor.codeActionsOnSave": {
+					"source.organizeImports": "always"
+				}
+			}
 		}
 	},
 	"containerEnv": {
-		"CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+		"CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+		"PIP_BREAK_SYSTEM_PACKAGES": "1"
 	},
 	"postCreateCommand": "bash .devcontainer/setup.sh"
 }

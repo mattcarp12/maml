@@ -8,18 +8,6 @@ import (
 	"github.com/mattcarp12/maml/frontend/token"
 )
 
-func (p *Program) Pos() Position {
-	if len(p.Decls) == 0 {
-		return Position{}
-	}
-	return p.Decls[0].Pos()
-}
-func (p *Program) End() Position {
-	if len(p.Decls) == 0 {
-		return Position{}
-	}
-	return p.Decls[len(p.Decls)-1].End()
-}
 func (p *Program) String() string {
 	var out bytes.Buffer
 	for i, d := range p.Decls {
@@ -49,10 +37,8 @@ func (p *Param) String() string {
 		p.Type.String(),
 	)
 }
-func (p *Param) Pos() Position  { return p.Pos_ }
-func (p *Param) End() Position  { return p.End_ }
-func (f *FnDecl) Pos() Position { return f.Pos_ }
-func (f *FnDecl) End() Position { return f.End_ }
+func (p *Param) Pos() Position { return p.Pos_ }
+func (p *Param) End() Position { return p.End_ }
 func (f *FnDecl) String() string {
 	var out bytes.Buffer
 	if f.IsAsync {
@@ -76,9 +62,6 @@ func (f *FnDecl) String() string {
 	out.WriteString(f.Body.String())
 	return out.String()
 }
-func (f *FnDecl) declNode()       {}
-func (t *TypeDecl) Pos() Position { return t.Pos_ }
-func (t *TypeDecl) End() Position { return t.End_ }
 func (t *TypeDecl) String() string {
 	return fmt.Sprintf(
 		"type %s = %s",
@@ -86,50 +69,15 @@ func (t *TypeDecl) String() string {
 		t.Rhs.String(),
 	)
 }
-func (t *TypeDecl) declNode()      {}
-func (a *AwaitExpr) Pos() Position { return a.Pos_ }
-func (a *AwaitExpr) End() Position { return a.Value.End() }
 func (a *AwaitExpr) String() string {
 	return fmt.Sprintf("(await %s)", a.Value.String())
 }
-func (a *AwaitExpr) exprNode()      {}
-func (i *Identifier) Pos() Position { return i.Pos_ }
-func (i *Identifier) End() Position {
-	return Position{
-		Line: i.Pos_.Line,
-		Col:  i.Pos_.Col + len(i.Value),
-	}
-}
 func (i *Identifier) String() string  { return i.Value }
-func (i *Identifier) exprNode()       {}
-func (il *IntLiteral) Pos() Position  { return il.Pos_ }
-func (il *IntLiteral) End() Position  { return il.End_ }
 func (il *IntLiteral) String() string { return fmt.Sprintf("%d", il.Value) }
-func (il *IntLiteral) exprNode()      {}
-func (b *BoolLiteral) Pos() Position  { return b.Pos_ }
-func (b *BoolLiteral) End() Position {
-	length := 4
-	if !b.Value {
-		length = 5
-	}
-	return Position{
-		Line: b.Pos_.Line,
-		Col:  b.Pos_.Col + length,
-	}
-}
-func (b *BoolLiteral) String() string   { return fmt.Sprintf("%t", b.Value) }
-func (b *BoolLiteral) exprNode()        {}
-func (sl *StringLiteral) Pos() Position { return sl.Pos_ }
-func (sl *StringLiteral) End() Position {
-	return Position{
-		Line: sl.Pos_.Line,
-		Col:  sl.Pos_.Col + len(sl.Value) + 2,
-	}
-}
+func (b *BoolLiteral) String() string { return fmt.Sprintf("%t", b.Value) }
 func (sl *StringLiteral) String() string {
 	return fmt.Sprintf(`"%s"`, sl.Value)
 }
-func (sl *StringLiteral) exprNode() {}
 
 func (ce *CompositeElement) String() string {
 	if ce.Key != nil {
@@ -137,23 +85,12 @@ func (ce *CompositeElement) String() string {
 	}
 	return ce.Value.String()
 }
-func (cl *CompositeLiteral) Pos() Position { return cl.Pos_ }
-func (cl *CompositeLiteral) End() Position { return cl.End_ }
 func (cl *CompositeLiteral) String() string {
 	var elems []string
 	for _, e := range cl.Elements {
 		elems = append(elems, e.String())
 	}
 	return fmt.Sprintf("%s{%s}", cl.TypeExpr.String(), strings.Join(elems, ", "))
-}
-func (cl *CompositeLiteral) exprNode() {}
-
-func (ce *CallExpr) Pos() Position { return ce.Pos_ }
-func (ce *CallExpr) End() Position {
-	if len(ce.Arguments) == 0 {
-		return ce.Function.End()
-	}
-	return ce.Arguments[len(ce.Arguments)-1].End()
 }
 func (ce *CallExpr) String() string {
 	var args []string
@@ -166,7 +103,6 @@ func (ce *CallExpr) String() string {
 		strings.Join(args, ", "),
 	)
 }
-func (ce *CallExpr) exprNode()    {}
 func (ca *CallArg) Pos() Position { return ca.Pos_ }
 func (ca *CallArg) End() Position {
 	if ca.Argument == nil {
@@ -183,8 +119,6 @@ func (ca *CallArg) String() string {
 	}
 	return prefix + ca.Argument.String()
 }
-func (ie *InfixExpr) Pos() Position { return ie.Left.Pos() }
-func (ie *InfixExpr) End() Position { return ie.Right.End() }
 func (ie *InfixExpr) String() string {
 	return fmt.Sprintf(
 		"(%s %s %s)",
@@ -193,15 +127,9 @@ func (ie *InfixExpr) String() string {
 		ie.Right.String(),
 	)
 }
-func (ie *InfixExpr) exprNode()      {}
-func (pe *PrefixExpr) Pos() Position { return pe.Pos_ }
-func (pe *PrefixExpr) End() Position { return pe.Right.End() }
 func (pe *PrefixExpr) String() string {
 	return fmt.Sprintf("(%s%s)", pe.Operator, pe.Right.String())
 }
-func (pe *PrefixExpr) exprNode()      {}
-func (fa *FieldAccess) Pos() Position { return fa.Pos_ }
-func (fa *FieldAccess) End() Position { return fa.Field.End() }
 func (fa *FieldAccess) String() string {
 	objStr := fa.Object.String()
 	if _, ok := fa.Object.(*FieldAccess); ok {
@@ -209,9 +137,6 @@ func (fa *FieldAccess) String() string {
 	}
 	return fmt.Sprintf("(%s.%s)", objStr, fa.Field.String())
 }
-func (fa *FieldAccess) exprNode()   {}
-func (ie *IndexExpr) Pos() Position { return ie.Pos_ }
-func (ie *IndexExpr) End() Position { return ie.Index.End() }
 func (ie *IndexExpr) String() string {
 	return fmt.Sprintf(
 		"(%s[%s])",
@@ -219,9 +144,6 @@ func (ie *IndexExpr) String() string {
 		ie.Index.String(),
 	)
 }
-func (ie *IndexExpr) exprNode()     {}
-func (se *SliceExpr) Pos() Position { return se.Pos_ }
-func (se *SliceExpr) End() Position { return se.High.End() }
 func (se *SliceExpr) String() string {
 	return fmt.Sprintf(
 		"(%s[%s:%s])",
@@ -229,14 +151,6 @@ func (se *SliceExpr) String() string {
 		se.Low.String(),
 		se.High.String(),
 	)
-}
-func (se *SliceExpr) exprNode()  {}
-func (ie *IfExpr) Pos() Position { return ie.Pos_ }
-func (ie *IfExpr) End() Position {
-	if ie.Alternative != nil {
-		return ie.Alternative.End()
-	}
-	return ie.Consequence.End()
 }
 func (ie *IfExpr) String() string {
 	var out bytes.Buffer
@@ -250,10 +164,6 @@ func (ie *IfExpr) String() string {
 	}
 	return out.String()
 }
-func (ie *IfExpr) exprNode() {}
-
-func (m *MatchExpr) Pos() Position { return m.Pos_ }
-func (m *MatchExpr) End() Position { return m.End_ }
 func (m *MatchExpr) String() string {
 	var out bytes.Buffer
 	out.WriteString("match ")
@@ -267,7 +177,6 @@ func (m *MatchExpr) String() string {
 	out.WriteString("}")
 	return out.String()
 }
-func (m *MatchExpr) exprNode() {}
 func (m *MatchArm) String() string {
 	return fmt.Sprintf(
 		"%s => %s,",
@@ -275,37 +184,15 @@ func (m *MatchArm) String() string {
 		m.Body.String(),
 	)
 }
-func (w *WildcardPattern) Pos() Position { return w.Pos_ }
-func (w *WildcardPattern) End() Position {
-	return Position{
-		Line: w.Pos_.Line,
-		Col:  w.Pos_.Col + 1,
-	}
-}
 func (w *WildcardPattern) String() string {
 	return "_"
-}
-func (w *WildcardPattern) patternNode()     {}
-func (ip *IdentifierPattern) Pos() Position { return ip.Pos_ }
-func (ip *IdentifierPattern) End() Position {
-	return Position{
-		Line: ip.Pos_.Line,
-		Col:  ip.Pos_.Col + len(ip.Name),
-	}
 }
 func (ip *IdentifierPattern) String() string {
 	return ip.Name
 }
-func (ip *IdentifierPattern) patternNode() {}
-func (l *LiteralPattern) Pos() Position    { return l.Pos_ }
-func (l *LiteralPattern) End() Position    { return l.End_ }
 func (l *LiteralPattern) String() string {
 	return l.Value.String()
 }
-func (l *LiteralPattern) patternNode() {}
-
-func (cp *CompositePattern) Pos() Position { return cp.Pos_ }
-func (cp *CompositePattern) End() Position { return cp.End_ }
 func (cp *CompositePattern) String() string {
 	var elems []string
 	for _, e := range cp.Elements {
@@ -317,10 +204,6 @@ func (cp *CompositePattern) String() string {
 	}
 	return fmt.Sprintf("%s{%s}", cp.TypeExpr.String(), strings.Join(elems, ", "))
 }
-func (cp *CompositePattern) patternNode() {}
-
-func (b *BlockStmt) Pos() Position { return b.Pos_ }
-func (b *BlockStmt) End() Position { return b.End_ }
 func (b *BlockStmt) String() string {
 	var out bytes.Buffer
 	out.WriteString("{\n")
@@ -332,10 +215,6 @@ func (b *BlockStmt) String() string {
 	out.WriteString("}")
 	return out.String()
 }
-func (b *BlockStmt) stmtNode()       {}
-func (b *BlockStmt) exprNode()       {}
-func (d *DeclareStmt) Pos() Position { return d.Pos_ }
-func (d *DeclareStmt) End() Position { return d.Value.End() }
 func (d *DeclareStmt) String() string {
 	op := token.DECLARE.String()
 	format := "%s %s %s"
@@ -344,9 +223,6 @@ func (d *DeclareStmt) String() string {
 	}
 	return fmt.Sprintf(format, d.Name, op, d.Value.String())
 }
-func (d *DeclareStmt) stmtNode()    {}
-func (a *AssignStmt) Pos() Position { return a.Pos_ }
-func (a *AssignStmt) End() Position { return a.RValue.End() }
 func (a *AssignStmt) String() string {
 	return fmt.Sprintf(
 		"%s = %s",
@@ -354,9 +230,6 @@ func (a *AssignStmt) String() string {
 		a.RValue.String(),
 	)
 }
-func (a *AssignStmt) stmtNode()        {}
-func (vps *VecPushStmt) Pos() Position { return vps.Pos_ }
-func (vps *VecPushStmt) End() Position { return vps.RValue.End() }
 func (vps *VecPushStmt) String() string {
 	return fmt.Sprintf(
 		"%s << %s",
@@ -364,30 +237,18 @@ func (vps *VecPushStmt) String() string {
 		vps.RValue.String(),
 	)
 }
-func (vps *VecPushStmt) stmtNode()  {}
-func (r *ReturnStmt) Pos() Position { return r.Pos_ }
-func (r *ReturnStmt) End() Position { return r.Value.End() }
 func (r *ReturnStmt) String() string {
 	return fmt.Sprintf(
 		token.RETURN.String()+" %s",
 		r.Value.String(),
 	)
 }
-func (r *ReturnStmt) stmtNode()     {}
-func (ys *YieldStmt) Pos() Position { return ys.Pos_ }
-func (ys *YieldStmt) End() Position { return ys.Value.End() }
 func (ys *YieldStmt) String() string {
 	return fmt.Sprintf("=> %s", ys.Value.String())
 }
-func (ys *YieldStmt) stmtNode()    {}
-func (es *ExprStmt) Pos() Position { return es.Pos_ }
-func (es *ExprStmt) End() Position { return es.Value.End() }
 func (es *ExprStmt) String() string {
 	return es.Value.String()
 }
-func (es *ExprStmt) stmtNode()   {}
-func (f *ForStmt) Pos() Position { return f.Pos_ }
-func (f *ForStmt) End() Position { return f.Body.End() }
 func (f *ForStmt) String() string {
 	return fmt.Sprintf(
 		"for (%s; %s; %s) %s",
@@ -397,48 +258,15 @@ func (f *ForStmt) String() string {
 		f.Body.String(),
 	)
 }
-func (f *ForStmt) stmtNode() {}
-func (s *BreakStmt) Pos() Position {
-	return Position{
-		Line: s.Token.Line,
-		Col:  s.Token.Col,
-	}
-}
-func (s *BreakStmt) End() Position {
-	return Position{
-		Line: s.Token.Line,
-		Col:  s.Token.Col + len(s.Token.Literal),
-	}
-}
 func (s *BreakStmt) String() string {
 	return s.Token.Literal
-}
-func (s *BreakStmt) stmtNode() {}
-func (s *ContinueStmt) Pos() Position {
-	return Position{
-		Line: s.Token.Line,
-		Col:  s.Token.Col,
-	}
-}
-func (s *ContinueStmt) End() Position {
-	return Position{
-		Line: s.Token.Line,
-		Col:  s.Token.Col + len(s.Token.Literal),
-	}
 }
 func (s *ContinueStmt) String() string {
 	return s.Token.Literal
 }
-func (s *ContinueStmt) stmtNode() {}
-
-func (n *NamedTypeExpr) Pos() Position { return n.Pos_ }
-func (n *NamedTypeExpr) End() Position { return n.End_ }
 func (n *NamedTypeExpr) String() string {
 	return n.Name.String()
 }
-func (n *NamedTypeExpr) typeNode()     {}
-func (a *ArrayTypeExpr) Pos() Position { return a.Pos_ }
-func (a *ArrayTypeExpr) End() Position { return a.End_ }
 func (a *ArrayTypeExpr) String() string {
 	return fmt.Sprintf(
 		"[%d]%s",
@@ -446,9 +274,6 @@ func (a *ArrayTypeExpr) String() string {
 		a.Base.String(),
 	)
 }
-func (a *ArrayTypeExpr) typeNode()      {}
-func (s *StructTypeExpr) Pos() Position { return s.Pos_ }
-func (s *StructTypeExpr) End() Position { return s.End_ }
 func (s *StructTypeExpr) String() string {
 	var out bytes.Buffer
 	out.WriteString("struct")
@@ -465,12 +290,9 @@ func (s *StructTypeExpr) String() string {
 	out.WriteString("}")
 	return out.String()
 }
-func (s *StructTypeExpr) typeNode() {}
 func (s *StructTypeField) String() string {
 	return fmt.Sprintf("%s: %s", s.Name, s.Type.String())
 }
-func (s *SumTypeExpr) Pos() Position { return s.Pos_ }
-func (s *SumTypeExpr) End() Position { return s.End_ }
 func (s *SumTypeExpr) String() string {
 	var out bytes.Buffer
 	out.WriteString("sum ")
@@ -493,7 +315,6 @@ func (s *SumTypeExpr) String() string {
 	out.WriteString("}")
 	return out.String()
 }
-func (s *SumTypeExpr) typeNode() {}
 func (v *VariantTypeExpr) String() string {
 	var out bytes.Buffer
 	out.WriteString(v.Name)
@@ -508,16 +329,9 @@ func (v *VariantTypeExpr) String() string {
 	}
 	return out.String()
 }
-
-func (tew *TypeExprWrapper) Pos() Position { return tew.Pos_ }
-func (tew *TypeExprWrapper) End() Position { return tew.TypeExpr.End() }
 func (tew *TypeExprWrapper) String() string {
 	return tew.TypeExpr.String()
 }
-func (tew *TypeExprWrapper) exprNode() {}
-
-func (g *GenericTypeExpr) Pos() Position { return g.Pos_ }
-func (g *GenericTypeExpr) End() Position { return g.End_ }
 func (g *GenericTypeExpr) String() string {
 	var parts []string
 	for _, arg := range g.Args {
@@ -528,4 +342,3 @@ func (g *GenericTypeExpr) String() string {
 		strings.Join(parts, ", "),
 	)
 }
-func (g *GenericTypeExpr) typeNode() {}

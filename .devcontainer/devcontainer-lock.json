@@ -20,6 +20,11 @@
       "resolved": "ghcr.io/devcontainers/features/go@sha256:d85e921f91b41340055bb12b325d9d551170ed04b3b832e33530bf42f167c032",
       "integrity": "sha256:d85e921f91b41340055bb12b325d9d551170ed04b3b832e33530bf42f167c032"
     },
+    "ghcr.io/devcontainers/features/python": {
+      "version": "1.8.0",
+      "resolved": "ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511",
+      "integrity": "sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511"
+    },
     "ghcr.io/postfinance/devcontainer-features/zig": {
       "version": "1.0.0",
       "resolved": "ghcr.io/postfinance/devcontainer-features/zig@sha256:53805c3400c320b5834ab03460410d47a6231f885924746c15f696ee8fbb3e02",
