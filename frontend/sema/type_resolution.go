@@ -53,3 +53,22 @@ func (a *Analyzer) lookupCustomType(name string) types.Type {
 	}
 	return nil
 }
+
+func (a *Analyzer) lookupStruct(name string) *types.StructType {
+	t := a.lookupCustomType(name)
+	if t == nil {
+		return nil
+	}
+	st, _ := t.(*types.StructType)
+	return st
+}
+
+func (a *Analyzer) getMissingFields(st *types.StructType, seen map[string]bool) []string {
+	var missing []string
+	for _, f := range st.Fields {
+		if !seen[f.Name] {
+			missing = append(missing, f.Name)
+		}
+	}
+	return missing
+}

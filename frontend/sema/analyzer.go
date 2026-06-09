@@ -8,17 +8,23 @@ import (
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
+// =============================================================================
+// Analyzer Core
+// =============================================================================
+
 type Analyzer struct {
 	scope          *Scope
 	errors         []ast.CompileError
 	expectedReturn types.Type
 	currentFn      *ast.FnDecl
+	registry       *Registry // NEW: The declarative rule table
 }
 
 func New() *Analyzer {
 	return &Analyzer{
-		scope:  newGlobalScope(),
-		errors: []ast.CompileError{},
+		scope:    newGlobalScope(),
+		errors:   []ast.CompileError{},
+		registry: newRegistry(), // NEW: Initialize the rules once at startup
 	}
 }
 
@@ -32,9 +38,21 @@ func (a *Analyzer) Analyze(program *ast.Program) (*tast.Program, []ast.CompileEr
 	a.registerFunctions(program)
 
 	// 2. Second Pass: Type-check bodies and construct the TAST
+	// This delegates to our mapper.go architecture, firing the registry rules.
 	tastDecls := a.buildDeclarations(program)
 
 	return &tast.Program{Decls: tastDecls}, a.errors
+}
+
+// errorf appends a formatting string to the analyzer's error list.
+// In the new architecture, rules do not call this directly; they return Violations,
+// which mapper.go drains into errorf.
+func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
+	a.errors = append(a.errors, ast.CompileError{
+		Stage: "Sema",
+		Pos:   pos,
+		Msg:   fmt.Sprintf(format, args...),
+	})
 }
 
 // =============================================================================
@@ -159,112 +177,4 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	}
 
 	a.scope.symbols[v.Name] = sym
-}
-
-// ==========================================================================
-// Pass 2: Semantic checker
-// ==========================================================================
-
-func (a *Analyzer) buildDeclarations(program *ast.Program) []tast.Decl {
-	var decls []tast.Decl
-	for _, decl := range program.Decls {
-		switch d := decl.(type) {
-		case *ast.FnDecl:
-			decls = append(decls, a.buildFnBody(d))
-		case *ast.TypeDecl:
-			decls = append(decls, a.buildTypeDecl(d))
-		default:
-			a.errorf(decl.Pos(), "unsupported declaration type: %T", decl)
-		}
-	}
-	return decls
-}
-
-func (a *Analyzer) buildTypeDecl(td *ast.TypeDecl) *tast.TypeDecl {
-	// 1. Retrieve the fully resolved type from Pass 1
-	resolvedType := a.lookupCustomType(td.Name.Value)
-
-	// 2. Create the permanently bound symbol for this type declaration
-	sym := &types.Symbol{
-		Kind: types.VarSymbol,
-		Name: td.Name.Value,
-		Type: resolvedType,
-	}
-
-	// 3. Construct the TAST node, completely discarding the AST Rhs tree
-	return &tast.TypeDecl{
-		Pos_: td.Pos_,
-		End_: td.End_,
-		Name: &tast.Identifier{
-			Pos_:  td.Name.Pos_,
-			Value: td.Name.Value,
-			Type:  resolvedType,
-		},
-		Type:   resolvedType,
-		Symbol: sym,
-	}
-}
-
-func (a *Analyzer) buildFnBody(v *ast.FnDecl) *tast.FnDecl {
-	a.currentFn = v
-	defer func() { a.currentFn = nil }()
-
-	// 1. Retrieve the permanently bound function symbol from Pass 1
-	fnSym := a.resolve(v.Name)
-	fnType := fnSym.Type.(*types.FunctionType)
-
-	// Set the expected return type so inner ReturnStmts can validate against it
-	a.expectedReturn = fnType.Return
-
-	// 2. Prepare the local scope for the function body
-	a.pushScope()
-	defer a.popScope()
-
-	// 3. Hydrate the parameters and inject them into the local scope
-	tastParams := make([]*tast.Param, len(v.Params))
-	for i, p := range v.Params {
-		paramSym := &types.Symbol{
-			Kind:      types.VarSymbol,
-			Name:      p.Name,
-			Type:      fnType.Params[i],
-			Mutable:   p.Mut,
-			ParamMode: fnType.ParamModes[i],
-		}
-
-		a.scope.symbols[p.Name] = paramSym
-
-		tastParams[i] = &tast.Param{
-			Pos_:   p.Pos_,
-			End_:   p.End_,
-			Name:   p.Name,
-			Type:   fnType.Params[i],
-			Symbol: paramSym,
-		}
-	}
-
-	// 4. Construct the strictly-typed block statement (the body)
-	var tastBody *tast.BlockStmt
-	if v.Body != nil {
-		tastBody = a.buildBlockStmt(v.Body)
-	}
-
-	// 5. Return the fully-hydrated TAST Function Declaration
-	return &tast.FnDecl{
-		Pos_:       v.Pos_,
-		End_:       v.End_,
-		Name:       v.Name,
-		Params:     tastParams,
-		ReturnType: fnType.Return,
-		Body:       tastBody,
-		IsAsync:    v.IsAsync,
-		Symbol:     fnSym,
-	}
-}
-
-func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
-	a.errors = append(a.errors, ast.CompileError{
-		Stage: "Sema",
-		Pos:   pos,
-		Msg:   fmt.Sprintf(format, args...),
-	})
 }

@@ -100,58 +100,55 @@ func (a *Analyzer) resolveBuiltinGeneric(expr *ast.GenericTypeExpr) types.Type {
 	return builtin.Build(args)
 }
 
-func (a *Analyzer) buildMapLiteral(e *ast.CompositeLiteral, mapTy types.MapType) *tast.MapLiteral {
+func (a *Analyzer) mapMapLiteral(e *ast.CompositeLiteral, mapTy types.MapType) *tast.MapLiteral {
 	var tastElements []tast.MapElement
 	for _, elems := range e.Elements {
 		if elems.Key == nil {
+			// Structural requirement, safe to keep as a direct error
 			a.errorf(elems.Pos_, "map literals require explicit key-value pairs")
 			continue
 		}
 
-		// 1. Evaluate and check the Key
-		keyNode := a.buildExpr(elems.Key)
-		keyType := tast.TypeOf(keyNode)
-		if !keyType.Equals(mapTy.Key) && !types.IsUnknown(keyType) {
-			a.errorf(elems.Key.Pos(), "map key type mismatch: expected '%s', got '%s'", mapTy.Key.String(), keyType.String())
-		}
+		keyNode := a.mapExpr(elems.Key)
+		valNode := a.mapExpr(elems.Value)
 
-		// 2. Evaluate and check the Value
-		valNode := a.buildExpr(elems.Value)
-		valType := tast.TypeOf(valNode)
-		if !valType.Equals(mapTy.Value) && !types.IsUnknown(valType) {
-			a.errorf(elems.Value.Pos(), "map value type mismatch: expected '%s', got '%s'", mapTy.Value.String(), valType.String())
-		}
 		tastElements = append(tastElements, tast.MapElement{
 			Key:   keyNode,
 			Value: valNode,
 		})
 	}
-	return &tast.MapLiteral{
+
+	node := &tast.MapLiteral{
 		Pos_:     e.Pos_,
 		End_:     e.End_,
 		Elements: tastElements,
 		Type:     mapTy,
 	}
+
+	// Fire the rules!
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
 }
 
-func (a *Analyzer) buildVecLiteral(e *ast.CompositeLiteral, vecTy types.VectorType) *tast.VecLiteral {
+func (a *Analyzer) mapVecLiteral(e *ast.CompositeLiteral, vecTy types.VectorType) *tast.VecLiteral {
 	var tastElements []tast.Expr
 	for _, elems := range e.Elements {
-		// Vectors shouldn't have named keys, just values.
 		if elems.Key != nil {
+			// Structural requirement
 			a.errorf(elems.Key.Pos(), "vector literals should only contain values, not key-value pairs")
 		}
-		valNode := a.buildExpr(elems.Value)
-		valType := tast.TypeOf(valNode)
-		if !valType.Equals(vecTy.Base) && !types.IsUnknown(valType) {
-			a.errorf(elems.Value.Pos(), "vector element type mismatch: expected '%s', got '%s'", vecTy.Base.String(), valType.String())
-		}
+		valNode := a.mapExpr(elems.Value)
 		tastElements = append(tastElements, valNode)
 	}
-	return &tast.VecLiteral{
+
+	node := &tast.VecLiteral{
 		Pos_:     e.Pos_,
 		End_:     e.End_,
 		Elements: tastElements,
 		Type:     vecTy,
 	}
+
+	// Fire the rules!
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
 }
