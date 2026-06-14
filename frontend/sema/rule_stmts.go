@@ -95,7 +95,7 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 	// Map-index write: strip the Option<V> wrapper that map reads impose.
 	expectedType := lvalType
 	if idxExpr, ok := node.LValue.(*tast.IndexExpr); ok {
-		if mapTy, isMap := tast.TypeOf(idxExpr.Left).(types.MapType); isMap {
+		if mapTy, isMap := tast.TypeOf(idxExpr.Left).(*types.MapType); isMap {
 			expectedType = mapTy.Value
 		}
 	}
@@ -119,7 +119,7 @@ type VecPushLValueMustBeVector struct{}
 func (r VecPushLValueMustBeVector) Name() string { return "vec-push-lvalue-must-be-vector" }
 
 func (r VecPushLValueMustBeVector) Check(node *tast.VecPushStmt, ctx *RuleContext) []Violation {
-	if _, ok := tast.TypeOf(node.LValue).(types.VectorType); !ok {
+	if _, ok := tast.TypeOf(node.LValue).(*types.VectorType); !ok {
 		if !types.IsUnknown(tast.TypeOf(node.LValue)) {
 			return []Violation{violation(node.Pos_, "cannot push to a non-Vector")}
 		}
@@ -150,7 +150,7 @@ type VecPushTypeCompatibility struct{}
 func (r VecPushTypeCompatibility) Name() string { return "vec-push-type-compatibility" }
 
 func (r VecPushTypeCompatibility) Check(node *tast.VecPushStmt, ctx *RuleContext) []Violation {
-	vecTy, ok := tast.TypeOf(node.LValue).(types.VectorType)
+	vecTy, ok := tast.TypeOf(node.LValue).(*types.VectorType)
 	if !ok {
 		// VecPushLValueMustBeVector already reported this.
 		return nil
@@ -193,7 +193,7 @@ func (r ReturnTypeCompatibility) Check(node *tast.ReturnStmt, ctx *RuleContext) 
 	// Async functions declare Future<T> as their return type, but the body
 	// uses bare `return <expr of type T>`. Unwrap one level.
 	if ctx.IsAsync {
-		if futTy, ok := expected.(types.FutureType); ok {
+		if futTy, ok := expected.(*types.FutureType); ok {
 			expected = futTy.Base
 		}
 	}

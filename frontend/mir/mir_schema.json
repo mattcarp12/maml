@@ -1,0 +1,147 @@
+{
+  "nodes": {
+    "Register": {
+      "interfaces": ["Value"],
+      "fields": { "Name": "string", "Type": "types.Type" }
+    },
+    "IntConstant": {
+      "interfaces": ["Value"],
+      "fields": { "Value": "int64", "Type": "types.Type" }
+    },
+    "BoolConstant": {
+      "interfaces": ["Value"],
+      "fields": { "Value": "bool", "Type": "types.Type" }
+    },
+    "StringConstant": {
+      "interfaces": ["Value"],
+      "fields": { "Value": "string", "Type": "types.Type" }
+    },
+
+    "AssignInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "RValue": "Value" }
+    },
+    "IndexAssignInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Target": "string", "TargetType": "types.Type", "Index": "Value", "Value": "Value" }
+    },
+    "StructInitInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "FieldName": "string", "FieldIndex": "int", "Value": "Value", "VariantLayout": "[]types.Type" }
+    },
+    "FieldReadInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Object": "Value", "FieldName": "string", "FieldIndex": "int", "Type": "types.Type", "VariantLayout": "[]types.Type" }
+    },
+    "ArrayInitInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Index": "int", "Value": "Value" }
+    },
+    "SliceInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Left": "Value", "ContainerType": "types.Type", "Low": "Value", "High": "Value", "ResultType": "types.Type" }
+    },
+    "BinaryOpInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Operator": "string", "Left": "Value", "Right": "Value", "Type": "types.Type" }
+    },
+    "UnaryOpInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Operator": "string", "Operand": "Value", "Type": "types.Type" }
+    },
+    "IndexReadInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Source": "Value", "SourceType": "types.Type", "Index": "Value", "Type": "types.Type" }
+    },
+    "CallInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Function": "Value", "Arguments": "[]MIRCallArg", "Type": "types.Type" }
+    },
+    "VariantInitInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "VariantName": "string", "Discriminant": "int", "Payloads": "[]Value", "Type": "types.Type" }
+    },
+    "VariantReadInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Object": "Value", "VariantName": "string", "PayloadIndex": "int", "Type": "types.Type" }
+    },
+    "VariantDiscriminantInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Object": "Value", "Type": "types.Type" }
+    },
+    "CastInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Src": "Value", "Type": "types.Type" }
+    },
+    "LoadPtrInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Ptr": "Value", "Type": "types.Type" }
+    },
+    "StoreInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "DstPtr": "string", "Value": "Value", "Type": "types.Type" }
+    },
+    "TempDeclInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Name": "string", "Type": "types.Type" }
+    },
+    "CopyInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Src": "string" }
+    },
+    "MoveInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Src": "string" }
+    },
+    "RefAllocInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Dst": "string", "Type": "types.Type" }
+    },
+    "RefIncInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Src": "string" }
+    },
+    "RefDecInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Src": "string" }
+    },
+    "MutBorrowInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Src": "string", "Dst": "string" }
+    },
+    "CoroPrologueInst": {
+      "interfaces": ["Instruction"],
+      "fields": {}
+    },
+    "KeepAliveInst": {
+      "interfaces": ["Instruction"],
+      "fields": { "Src": "string" }
+    },
+
+    "ReturnTerminator": {
+      "interfaces": ["Terminator"],
+      "fields": { "Value": "Value" }
+    },
+    "JumpTerminator": {
+      "interfaces": ["Terminator"],
+      "fields": { "Target": "BlockID" }
+    },
+    "BranchTerminator": {
+      "interfaces": ["Terminator"],
+      "fields": { "Condition": "Value", "TrueTarget": "BlockID", "FalseTarget": "BlockID" }
+    },
+    "UnreachableTerminator": {
+      "interfaces": ["Terminator"],
+      "fields": {}
+    },
+    "CoroSuspendTerminator": {
+      "interfaces": ["Terminator"],
+      "fields": { "ResumeBlock": "BlockID", "CleanupBlock": "BlockID", "SuspendBlock": "BlockID" }
+    }
+  },
+  "helpers": {
+    "MIRCallArg": {
+      "fields": { "Argument": "Value", "Mut": "bool" }
+    }
+  }
+}

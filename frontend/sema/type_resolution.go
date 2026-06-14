@@ -34,7 +34,7 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 			return types.UnknownType{}
 		}
 	case *ast.ArrayTypeExpr:
-		return types.ArrayType{
+		return &types.ArrayType{
 			Base: a.resolveAstType(e.Base),
 			Size: int(e.Size),
 		}

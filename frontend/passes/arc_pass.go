@@ -3,7 +3,6 @@ package passes
 import (
 	"sort"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -58,8 +57,8 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 			// B. Retain Injection (Shared Aliases)
 			// Assigning a reference type via a plain identifier creates an immutable shared alias.
 			if assign, ok := inst.(*mir.AssignInst); ok && isRef(assign.Dst) {
-				if ident, isIdent := assign.RValue.(*hir.Identifier); isIdent {
-					newStmts = append(newStmts, &mir.RefIncInst{Src: ident.Value})
+				if reg, isReg := assign.RValue.(*mir.Register); isReg {
+					newStmts = append(newStmts, &mir.RefIncInst{Src: reg.Name})
 				}
 			}
 		}
@@ -75,7 +74,7 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult) {
 			if !liveness.LiveOut[block.ID][v] {
 				isReturned := false
 				if ret, ok := block.Terminator.(*mir.ReturnTerminator); ok && ret.Value != nil {
-					if ident, isIdent := ret.Value.(*hir.Identifier); isIdent && ident.Value == v {
+					if reg, isReg := ret.Value.(*mir.Register); isReg && reg.Name == v {
 						isReturned = true
 					}
 				}

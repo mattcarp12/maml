@@ -487,11 +487,11 @@ func (a *Analyzer) MapCompositeLiteral(e *ast.CompositeLiteral) tast.Node {
 		return a.mapStructLiteral(e, ty)
 	case *types.SumType:
 		return a.mapStructVariantLiteral(e, ty)
-	case types.ArrayType:
+	case *types.ArrayType:
 		return a.mapArrayLiteral(e, ty)
-	case types.VectorType:
+	case *types.VectorType:
 		return a.mapVecLiteral(e, ty)
-	case types.MapType:
+	case *types.MapType:
 		return a.mapMapLiteral(e, ty)
 	default:
 		if !types.IsUnknown(resolvedType) {
@@ -546,12 +546,12 @@ func (a *Analyzer) MapSliceExpr(e *ast.SliceExpr) tast.Node {
 
 	var resultType types.Type = types.UnknownType{}
 	switch ty := leftType.(type) {
-	case types.ArrayType:
-		resultType = types.ViewType{Base: ty.Base}
-	case types.VectorType:
-		resultType = types.ViewType{Base: ty.Base}
-	case types.ViewType:
-		resultType = types.ViewType{Base: ty.Base}
+	case *types.ArrayType:
+		resultType = &types.ViewType{Base: ty.Base}
+	case *types.VectorType:
+		resultType = &types.ViewType{Base: ty.Base}
+	case *types.ViewType:
+		resultType = &types.ViewType{Base: ty.Base}
 	case types.StringType:
 		resultType = types.StringType{}
 	default:
@@ -572,7 +572,7 @@ func (a *Analyzer) MapAwaitExpr(e *ast.AwaitExpr) tast.Node {
 	valType := tast.TypeOf(value)
 
 	var resultType types.Type = types.UnknownType{}
-	if futTy, ok := valType.(types.FutureType); ok {
+	if futTy, ok := valType.(*types.FutureType); ok {
 		resultType = futTy.Base
 	} else if !types.IsUnknown(valType) {
 		a.errorf(e.Pos(), "cannot await non-Future type '%s'", valType.String())
@@ -741,7 +741,7 @@ func (a *Analyzer) mapStructVariantLiteral(e *ast.CompositeLiteral, ty *types.Su
 	}
 }
 
-func (a *Analyzer) mapArrayLiteral(e *ast.CompositeLiteral, ty types.ArrayType) *tast.ArrayLiteral {
+func (a *Analyzer) mapArrayLiteral(e *ast.CompositeLiteral, ty *types.ArrayType) *tast.ArrayLiteral {
 	if ty.Base == nil || types.IsUnknown(ty.Base) {
 		return &tast.ArrayLiteral{Pos_: e.Pos_, Type: types.UnknownType{}}
 	}
@@ -996,13 +996,13 @@ func inferPrefixType(op string, right types.Type) types.Type {
 
 func inferIndexType(leftType types.Type) types.Type {
 	switch ty := leftType.(type) {
-	case types.ArrayType:
+	case *types.ArrayType:
 		return ty.Base
-	case types.ViewType:
+	case *types.ViewType:
 		return ty.Base
-	case types.VectorType:
+	case *types.VectorType:
 		return ty.Base
-	case types.MapType:
+	case *types.MapType:
 		return types.NewOptionType(ty.Value) // map reads return Option<V>
 	case types.StringType:
 		return types.IntType{} // characters are returned as int

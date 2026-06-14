@@ -6,7 +6,6 @@
 #include <llvm/IR/Module.h>
 
 #include <memory>
-#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -18,8 +17,8 @@ class ErrorHandler {
   bool hasError = false;
 
  public:
-  void report(std::string_view message, const nlohmann::json &node = nullptr);
-  void fatal(std::string_view message, const nlohmann::json &node = nullptr);
+  void report(std::string_view message);
+  void fatal(std::string_view message);
   bool hasErrors() const { return hasError; }
 };
 
@@ -28,13 +27,9 @@ struct StringViewHash {
   std::size_t operator()(std::string_view sv) const { return std::hash<std::string_view>{}(sv); }
 };
 
-// Owns its string keys; supports heterogeneous string_view lookup.
 template <typename V>
 using FastMap = std::unordered_map<std::string, V, StringViewHash, std::equal_to<>>;
 
-// Keys must be string_views into storage that outlives this map.
-// Only use for tables populated from static/constexpr data (e.g. rt::
-// constants).
 template <typename V>
 using ViewMap = std::unordered_map<std::string_view, V>;
 
@@ -43,19 +38,15 @@ class CodegenContext {
   llvm::LLVMContext Context;
   std::unique_ptr<llvm::Module> Module;
   std::unique_ptr<llvm::IRBuilder<>> Builder;
-
   ErrorHandler Error;
 
   FastMap<llvm::Type *> TypeCache;
   ViewMap<llvm::Value *> SymbolTable;
   std::vector<FastMap<llvm::Value *>> SymbolEnv;
-
   std::unordered_map<int, llvm::BasicBlock *> Blocks;
-
   std::vector<llvm::BasicBlock *> LoopExitStack;
 
   CodegenContext(const std::string &moduleName);
-
   void pushScope();
   void popScope();
   llvm::Value *resolveSymbol(std::string_view name);
@@ -63,4 +54,4 @@ class CodegenContext {
 
 }  // namespace maml
 
-#endif  // MAML_CODEGEN_CONTEXT_H
+#endif

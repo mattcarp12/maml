@@ -27,7 +27,7 @@ func TestARC_LocalLifecycle(t *testing.T) {
 	g.Blocks[0] = b0
 
 	// mut v := Vec<int>{}
-	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "v", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "v", Type: &types.VectorType{}})
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	// Run dataflow dependencies
@@ -46,12 +46,12 @@ func TestARC_LocalLifecycle(t *testing.T) {
 func TestARC_ParameterProtection(t *testing.T) {
 	g := mir.NewGraph()
 	g.Entry = 0
-	g.Params = []mir.Param{{"param_vec", types.VectorType{}}} // Tracked as function parameter
+	g.Params = []mir.Param{{"param_vec", &types.VectorType{}}} // Tracked as function parameter
 	b0 := &mir.BasicBlock{ID: 0}
 	g.Blocks[0] = b0
 
 	// Parameter is registered as temporary inside the function scope but is live-in
-	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "param_vec", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "param_vec", Type: &types.VectorType{}})
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	livenessRes := AnalyzeLiveness(g)
@@ -72,7 +72,7 @@ func TestARC_ViewTypeExclusion(t *testing.T) {
 	g.Blocks[0] = b0
 
 	// mut view := slice
-	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "my_view", Type: types.ViewType{}})
+	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "my_view", Type: &types.ViewType{}})
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	livenessRes := AnalyzeLiveness(g)

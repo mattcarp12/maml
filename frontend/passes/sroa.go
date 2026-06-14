@@ -3,7 +3,6 @@ package passes
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -115,18 +114,18 @@ func Optimize(g *mir.Graph) bool {
 				}
 
 			case *mir.FieldReadInst:
-				if id, ok := i.Object.(*hir.Identifier); ok {
-					if _, promotable := candidates[id.Value]; promotable {
+				if reg, ok := i.Object.(*mir.Register); ok {
+					if _, promotable := candidates[reg.Name]; promotable {
 						// SHRED: Replace `v = pt.x` with `v = pt_x`
-						scalarName := generateScalarName(id.Value, i.FieldName)
+						scalarName := generateScalarName(reg.Name, i.FieldName)
 
 						// Because this is replacing a read, we inject an AssignInst where the
 						// RValue is a synthesized identifier pointing to our new scalar variable.
 						newStatements = append(newStatements, &mir.AssignInst{
 							Dst: i.Dst,
-							RValue: &hir.Identifier{
-								Value: scalarName,
-								Type:  i.Type,
+							RValue: &mir.Register{
+								Name: scalarName,
+								Type: i.Type,
 							},
 						})
 						changed = true
@@ -148,12 +147,12 @@ func Optimize(g *mir.Graph) bool {
 // disqualifyOperand checks if an operand references a struct candidate.
 // If it does, that struct is being used as a whole aggregate (escaping local bounds),
 // so it must be disqualified from SROA.
-func disqualifyOperand(op hir.Operand, candidates map[string]*types.StructType) {
+func disqualifyOperand(op mir.Value, candidates map[string]*types.StructType) {
 	if op == nil {
 		return
 	}
-	if ident, ok := op.(*hir.Identifier); ok {
-		delete(candidates, ident.Value)
+	if reg, ok := op.(*mir.Register); ok {
+		delete(candidates, reg.Name)
 	}
 }
 

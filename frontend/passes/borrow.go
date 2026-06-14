@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -263,9 +262,9 @@ func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 	}
 }
 
-func (a *Analyzer) checkOperandAccess(op hir.Operand, state *BlockState, pos ast.Position) {
-	if ident, ok := op.(*hir.Identifier); ok {
-		a.checkStringAccess(ident.Value, state, pos)
+func (a *Analyzer) checkOperandAccess(op mir.Value, state *BlockState, pos ast.Position) {
+	if reg, ok := op.(*mir.Register); ok {
+		a.checkStringAccess(reg.Name, state, pos)
 	}
 }
 

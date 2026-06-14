@@ -139,10 +139,6 @@ func (a *Analyzer) registerFunctions(program *ast.Program) {
 }
 
 func (a *Analyzer) registerFunction(v *ast.FnDecl) {
-	if v.Name == "main" && v.IsAsync {
-		a.errorf(v.Pos(), "the 'main' function cannot be async; you must manually spawn tasks and run the executor")
-	}
-
 	paramTypes := make([]types.Type, len(v.Params))
 	paramModes := make([]types.ParamMode, len(v.Params))
 
@@ -160,7 +156,7 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	if v.ReturnType != nil {
 		returnType = a.resolveAstType(v.ReturnType)
 		if v.IsAsync {
-			returnType = types.FutureType{Base: returnType}
+			returnType = &types.FutureType{Base: returnType}
 		}
 	}
 

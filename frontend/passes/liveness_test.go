@@ -5,7 +5,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -37,16 +36,16 @@ func TestLiveness_LoopVariable(t *testing.T) {
 	g.Blocks[2] = b2
 
 	// Block 0: x = RefAlloc
-	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "x", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.RefAllocInst{Dst: "x", Type: &types.VectorType{}})
 	b0.Terminator = &mir.JumpTerminator{Target: 1}
 
 	// Block 1: Loop Header uses 'x'
 	// We mimic a use via an AssignInst read or passing it somewhere
 	b1.Statements = append(b1.Statements, &mir.AssignInst{
-		Dst: "temp",
-		RValue: &hir.Identifier{Value: "x", Type: types.VectorType{}},
+		Dst:    "temp",
+		RValue: &mir.Register{Name: "x", Type: &types.VectorType{}},
 	})
-	b1.Terminator = &mir.BranchTerminator{Condition: &hir.Identifier{Value: "cond"}, TrueTarget: 1, FalseTarget: 2}
+	b1.Terminator = &mir.BranchTerminator{Condition: &mir.Register{Name: "cond"}, TrueTarget: 1, FalseTarget: 2}
 
 	// Block 2: Exit
 	b2.Terminator = &mir.ReturnTerminator{}

@@ -1,131 +1,140 @@
+// =============================================================================
+// backend/src/TypeLowering.cpp
+// =============================================================================
+
 #include "TypeLowering.h"
 
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Module.h>
 
-#include <algorithm>
-#include <numeric>
 #include <string_view>
-#include <unordered_map>
+
+#include "mir/types_generated.hpp"
 
 namespace maml {
 
+// Forward declaration to allow recursive type resolution inside the visitor
+llvm::Type* llvmTypeForVariant(CodegenContext& ctx, const maml::Type& generatedType);
+
 // -----------------------------------------------------------------------------
-// Private String-to-Enum Parser
+// std::visit Router Engine
 // -----------------------------------------------------------------------------
 
-static TypeKind parseTypeKind(std::string_view kindStr) {
-  static const std::unordered_map<std::string_view, TypeKind> kindMap = {
-      {"struct", TypeKind::Struct}, {"sum_type", TypeKind::SumType}, {"array", TypeKind::Array},
-      {"vector", TypeKind::Vector}, {"view", TypeKind::View},        {"map", TypeKind::Map},
-      {"future", TypeKind::Future}};
+struct TypeVisitor {
+  CodegenContext& ctx;
 
-  auto it = kindMap.find(kindStr);
-  if (it != kindMap.end()) {
-    return it->second;
+  // --- Primitives ---
+  llvm::Type* operator()(const IntType&) { return llvm::Type::getInt32Ty(ctx.Context); }
+  llvm::Type* operator()(const BoolType&) { return llvm::Type::getInt1Ty(ctx.Context); }
+  llvm::Type* operator()(const UnitType&) { return llvm::Type::getVoidTy(ctx.Context); }
+  llvm::Type* operator()(const AnyType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const PtrType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const UnknownType&) {
+    ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
+    return nullptr;
   }
-  return TypeKind::Unknown;
-}
 
-// -----------------------------------------------------------------------------
-// Private Sub-Routers for Type Mapping
-// -----------------------------------------------------------------------------
-
-static llvm::Type *lowerPrimitiveType(CodegenContext &ctx, std::string_view kind, const nlohmann::json &typeJson) {
-  if (kind == "i32") {
-    return llvm::Type::getInt32Ty(ctx.Context);
-  } else if (kind == "i1") {
-    return llvm::Type::getInt1Ty(ctx.Context);
-  } else if (kind == "void") {
-    return llvm::Type::getVoidTy(ctx.Context);
-  } else if (kind == "ptr" || kind == "any") {
-    return llvm::PointerType::getUnqual(ctx.Context);
-  } else if (kind == "string") {
+  llvm::Type* operator()(const StringType&) {
+    // String is a fat pointer: { ptr, i32 len }
     return llvm::StructType::get(ctx.Context,
                                  {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)});
   }
 
-  ctx.Error.fatal("Unknown primitive type descriptor: " + std::string(kind), typeJson);
-  return nullptr;
-}
+  // --- Composites ---
+  llvm::Type* operator()(const StructType& t) {
+    llvm::StructType* existingST = llvm::StructType::getTypeByName(ctx.Context, t.name);
+    if (existingST && !existingST->isOpaque()) {
+      return existingST;
+    }
 
-static llvm::Type *lowerStructType(CodegenContext &ctx, const nlohmann::json &typeJson) {
-  if (!typeJson.contains("fields") || typeJson["fields"].is_null()) {
-    return llvm::PointerType::getUnqual(ctx.Context);
+    std::vector<llvm::Type*> fieldTypes;
+    fieldTypes.reserve(t.fields.size());
+
+    for (const auto& field : t.fields) {
+      fieldTypes.push_back(llvmTypeForVariant(ctx, *field.type));
+    }
+
+    llvm::StructType* st = existingST ? existingST : llvm::StructType::create(ctx.Context, t.name);
+
+    // Note: isPacked=false tells LLVM to apply standard alignment padding.
+    // If MAML dictates a custom packed layout, the Go exporter must pass the fields in the exact sorted order.
+    st->setBody(fieldTypes, /*isPacked=*/false);
+    return st;
   }
 
-  std::string structName = typeJson.value("name", "__anon_struct");
+  llvm::Type* operator()(const SumType& t) {
+    llvm::StructType* existingST = llvm::StructType::getTypeByName(ctx.Context, t.base_name);
+    if (existingST && !existingST->isOpaque()) {
+      return existingST;
+    }
 
-  llvm::StructType *existingST = llvm::StructType::getTypeByName(ctx.Context, structName);
-  if (existingST && !existingST->isOpaque()) {
-    return existingST;
+    // We must dynamically compute the maximum payload size across all variants
+    // using LLVM's target-aware DataLayout, since the frontend no longer hardcodes it.
+    uint64_t maxPayloadSize = 0;
+    const llvm::DataLayout& DL = ctx.Module->getDataLayout();
+
+    for (const auto& variant : t.variants) {
+      std::vector<llvm::Type*> payloadFields;
+
+      // Variants can hold named fields...
+      for (const auto& f : variant.fields) {
+        payloadFields.push_back(llvmTypeForVariant(ctx, *f.type));
+      }
+      // ...or unnamed tuple types
+      for (const auto& tupleTy : variant.tuple_types) {
+        payloadFields.push_back(llvmTypeForVariant(ctx, *tupleTy));
+      }
+
+      if (!payloadFields.empty()) {
+        llvm::StructType* variantTy = llvm::StructType::get(ctx.Context, payloadFields, false);
+        uint64_t variantSize = DL.getTypeAllocSize(variantTy);
+        if (variantSize > maxPayloadSize) {
+          maxPayloadSize = variantSize;
+        }
+      }
+    }
+
+    // Calculate how many i64 blocks we need to hold the largest payload
+    uint64_t numBlocks = (maxPayloadSize + 7) / 8;
+
+    llvm::Type* discrimTy = llvm::Type::getInt32Ty(ctx.Context);
+    llvm::Type* payloadTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(ctx.Context), numBlocks);
+
+    llvm::StructType* st = existingST ? existingST : llvm::StructType::create(ctx.Context, t.base_name);
+    st->setBody({discrimTy, payloadTy}, /*isPacked=*/false);
+    return st;
   }
 
-  const auto &fieldsJson = typeJson["fields"];
+  // --- Containers ---
+  llvm::Type* operator()(const ArrayType& t) { return llvm::ArrayType::get(llvmTypeForVariant(ctx, *t.base), t.size); }
 
-  std::vector<size_t> order(fieldsJson.size());
-  std::iota(order.begin(), order.end(), 0);
-  std::sort(order.begin(), order.end(),
-            [&](size_t a, size_t b) { return fieldsJson[a]["index"].get<int>() < fieldsJson[b]["index"].get<int>(); });
-
-  std::vector<llvm::Type *> fieldTypes;
-  fieldTypes.reserve(fieldsJson.size());
-  for (size_t i : order) {
-    fieldTypes.push_back(llvmTypeFor(ctx, fieldsJson[i]["type"]));
+  llvm::Type* operator()(const ViewType&) {
+    // View is a slice fat pointer: { raw_ptr, data_ptr, len, cap }
+    return llvm::StructType::get(ctx.Context, {
+                                                  llvm::PointerType::getUnqual(ctx.Context),
+                                                  llvm::PointerType::getUnqual(ctx.Context),
+                                                  llvm::Type::getInt32Ty(ctx.Context),
+                                                  llvm::Type::getInt32Ty(ctx.Context),
+                                              });
   }
 
-  llvm::StructType *st = existingST ? existingST : llvm::StructType::create(ctx.Context, structName);
-  st->setBody(fieldTypes, /*isPacked=*/false);
-  return st;
-}
+  // Heap-allocated dynamic containers decay to simple pointers in the LLVM IR
+  llvm::Type* operator()(const VectorType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const MapType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const FutureType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+};
 
-static llvm::Type *lowerSumType(CodegenContext &ctx, const nlohmann::json &typeJson) {
-  std::string structName = typeJson.value("name", "__anon_sum_type");
-
-  llvm::StructType *existingST = llvm::StructType::getTypeByName(ctx.Context, structName);
-  if (existingST && !existingST->isOpaque()) {
-    return existingST;
-  }
-
-  int totalSize = typeJson.value("size", 8);
-  int payloadSize = totalSize > 4 ? totalSize - 4 : 0;
-  int numBlocks = (payloadSize + 7) / 8;
-
-  llvm::Type *discrimTy = llvm::Type::getInt32Ty(ctx.Context);
-  llvm::Type *payloadTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(ctx.Context), numBlocks);
-
-  llvm::StructType *st = existingST ? existingST : llvm::StructType::create(ctx.Context, structName);
-  st->setBody({discrimTy, payloadTy}, /*isPacked=*/false);
-  return st;
-}
-
-static llvm::Type *lowerArrayType(CodegenContext &ctx, const nlohmann::json &typeJson) {
-  if (!typeJson.contains("elem_type")) {
-    ctx.Error.fatal("Array type missing explicit 'elem_type' metadata specification", typeJson);
-    return llvm::Type::getVoidTy(ctx.Context);
-  }
-  llvm::Type *elemTy = llvmTypeFor(ctx, typeJson["elem_type"]);
-  int size = typeJson.value("size", 0);
-  return llvm::ArrayType::get(elemTy, size);
-}
-
-static llvm::Type *lowerDynamicContainerType(CodegenContext &ctx) { return llvm::PointerType::getUnqual(ctx.Context); }
-
-static llvm::Type *lowerViewType(CodegenContext &ctx) {
-  // Views remain lightweight stack-allocated fat-pointer value structs
-  return llvm::StructType::get(ctx.Context, {
-                                                llvm::PointerType::getUnqual(ctx.Context),  // field 0: raw_ptr
-                                                llvm::PointerType::getUnqual(ctx.Context),  // field 1: data_ptr
-                                                llvm::Type::getInt32Ty(ctx.Context),        // field 2: len
-                                                llvm::Type::getInt32Ty(ctx.Context),        // field 3: cap
-                                            });
+// Helper function to initiate the std::visit loop
+llvm::Type* llvmTypeForVariant(CodegenContext& ctx, const maml::Type& generatedType) {
+  return std::visit(TypeVisitor{ctx}, generatedType.inner);
 }
 
 // -----------------------------------------------------------------------------
 // Public AST/MIR Type Router Entry Point
 // -----------------------------------------------------------------------------
 
-llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
+llvm::Type* llvmTypeFor(CodegenContext& ctx, const nlohmann::json& typeJson) {
   if (typeJson.is_null()) {
     return llvm::Type::getVoidTy(ctx.Context);
   }
@@ -136,55 +145,35 @@ llvm::Type *llvmTypeFor(CodegenContext &ctx, const nlohmann::json &typeJson) {
     return cached->second;
   }
 
-  llvm::Type *resultType = nullptr;
-
-  // 1. Primitive Strings Router
-  if (typeJson.is_string()) {
-    std::string_view kind = typeJson.get<std::string_view>();
-    resultType = lowerPrimitiveType(ctx, kind, typeJson);
+  // 1. Parse the JSON directly into the schema-generated C++ structs.
+  // If the frontend exported malformed MIR that violates the YAML schema,
+  // nlohmann::json will throw a safe exception here.
+  maml::Type safeType;
+  try {
+    safeType = typeJson.get<maml::Type>();
+  } catch (const std::exception& e) {
+    ctx.Error.fatal(std::string("Schema Deserialization Error: ") + e.what());
+    return nullptr;
   }
-  // 2. Compound Objects Router
-  else if (typeJson.is_object()) {
-    if (!typeJson.contains("kind")) {
-      ctx.Error.fatal("Compound metadata object missing explicit 'kind' discriminator", typeJson);
-      return llvm::Type::getVoidTy(ctx.Context);
-    }
 
-    std::string_view kindStr = typeJson["kind"].get<std::string_view>();
-    TypeKind kind = parseTypeKind(kindStr);
-
-    switch (kind) {
-      case TypeKind::Struct:
-        resultType = lowerStructType(ctx, typeJson);
-        break;
-      case TypeKind::SumType:
-        resultType = lowerSumType(ctx, typeJson);
-        break;
-      case TypeKind::Array:
-        resultType = lowerArrayType(ctx, typeJson);
-        break;
-      case TypeKind::Vector:
-      case TypeKind::Map:
-      case TypeKind::Future:
-        resultType = lowerDynamicContainerType(ctx);
-        break;
-      case TypeKind::View:
-        resultType = lowerViewType(ctx);
-        break;
-      case TypeKind::Unknown:
-      default:
-        ctx.Error.fatal("Unrecognized compound type definition kind reached switch: " + std::string(kindStr), typeJson);
-        break;
-    }
-  } else {
-    ctx.Error.fatal("Malformed type structure specification reached backend pipeline", typeJson);
-  }
+  // 2. Dispatch the type to LLVM safely using std::visit
+  llvm::Type* resultType = llvmTypeForVariant(ctx, safeType);
 
   if (resultType) {
     ctx.TypeCache[cacheKey] = resultType;
   }
 
   return resultType;
+}
+
+std::string_view getTypeKind(const nlohmann::json& typeJson) {
+  if (typeJson.is_string()) {
+    return typeJson.get<std::string_view>();
+  }
+  if (typeJson.is_object() && typeJson.contains("kind")) {
+    return typeJson["kind"].get<std::string_view>();
+  }
+  return "";
 }
 
 }  // namespace maml

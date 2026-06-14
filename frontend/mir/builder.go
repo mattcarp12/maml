@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mattcarp12/maml/frontend/hir"
-
+	"github.com/mattcarp12/maml/frontend/layout"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -75,6 +75,7 @@ type Builder struct {
 	tempCount int
 	symNames  map[*types.Symbol]string
 	nameFreq  map[string]int
+	Target    *layout.Target
 }
 
 // buildFn translates a hierarchical HIR function into a flat MIR Control Flow Graph.
@@ -83,6 +84,7 @@ func buildFn(fn *hir.FnDecl) *Graph {
 		graph:    NewGraph(),
 		symNames: make(map[*types.Symbol]string),
 		nameFreq: make(map[string]int),
+		Target:   layout.DefaultTarget, // TODO - allow different targets to be passed.
 	}
 
 	// Register function parameters so they keep their original names
@@ -107,7 +109,7 @@ func buildFn(fn *hir.FnDecl) *Graph {
 	// Traverse the AST function body
 	finalBlock := b.buildBlockStmt(fn.Body, entry)
 
-	// FIXED: If the trailing basic block was left completely open/unterminated,
+	// If the trailing basic block was left completely open/unterminated,
 	// inject an implicit ReturnTerminator to seal the block control-flow sequence cleanly.
 	if finalBlock != nil && finalBlock.Terminator == nil {
 		finalBlock.Terminator = &ReturnTerminator{}
@@ -190,11 +192,11 @@ func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
 }
 
 func (b *Builder) buildReturnStmt(stmt *hir.ReturnStmt, current *BasicBlock) *BasicBlock {
-	var flatRet hir.Operand = nil
+	var flatRet Value = nil
 	if stmt.Value != nil {
 		flatRet, current = b.flattenExpr(stmt.Value, current)
-		if ident, ok := flatRet.(*hir.Identifier); ok {
-			if _, isU := ident.Type.(types.UnitType); isU {
+		if reg, ok := flatRet.(*Register); ok {
+			if _, isU := reg.Type.(types.UnitType); isU {
 				flatRet = nil
 			}
 		}
@@ -206,19 +208,19 @@ func (b *Builder) buildReturnStmt(stmt *hir.ReturnStmt, current *BasicBlock) *Ba
 func (b *Builder) buildLoopStmt(stmt *hir.LoopStmt, current *BasicBlock) *BasicBlock {
 	condBlock := b.newBlock()
 	bodyBlock := b.newBlock()
-	postBlock := b.newBlock() // NEW: Dedicated block for the increment step
+	postBlock := b.newBlock() // Dedicated block for the increment step
 	exitBlock := b.newBlock()
 
 	// 1. Enter loop by jumping to condition
 	current.Terminator = &JumpTerminator{Target: condBlock.ID}
 
 	// 2. Evaluate Condition
-	var flatCond hir.Operand
+	var flatCond Value
 	condEvalBlock := condBlock
 	if stmt.Condition != nil {
 		flatCond, condEvalBlock = b.flattenExpr(stmt.Condition, condBlock)
 	} else {
-		flatCond = &hir.BoolLiteral{Value: true, Type: types.BoolType{}}
+		flatCond = &BoolConstant{Value: true, Type: types.BoolType{}}
 	}
 
 	condEvalBlock.Terminator = &BranchTerminator{
@@ -275,15 +277,17 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 		flatRHS, current := b.flattenExpr(stmt.RValue, current)
 
 		targetName := ""
-		if id, isId := flatTarget.(*hir.Identifier); isId {
-			targetName = id.Value
+		var targetType types.Type
+		if reg, isReg := flatTarget.(*Register); isReg {
+			targetName = reg.Name
+			targetType = reg.Type
 		} else {
-			targetName = flatTarget.String()
+			panic(fmt.Sprintf("Unsupported target for IndexExpr: %T\n", flatTarget))
 		}
 
 		current.Statements = append(current.Statements, &IndexAssignInst{
 			Target:     targetName,
-			TargetType: flatTarget.(*hir.Identifier).Type,
+			TargetType: targetType,
 			Index:      flatIdx,
 			Value:      flatRHS,
 		})
@@ -298,12 +302,11 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 
 	// 1. Extract the true variable name and its type safely
 	if flatLHS != nil {
-		if id, ok := flatLHS.(*hir.Identifier); ok && id != nil {
-			dstName = id.Value
-			dstType = id.Type // Preserves exact structural type (Struct, SumType, etc.)
+		if reg, ok := flatLHS.(*Register); ok && reg != nil {
+			dstName = reg.Name
+			dstType = reg.Type // Preserves exact structural type (Struct, SumType, etc.)
 		} else {
-			dstName = flatLHS.String() // Fallback for complex lowered pointers or stringified symbols
-			dstType = types.UnknownType{}
+			panic(fmt.Sprintf("Unsupported LHS for AssignStmt: %T\n", flatLHS))
 		}
 	}
 
@@ -312,14 +315,14 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 		return current
 	}
 
-	// 2. ABI Routing: Perform direct transfers instead of wrapping in a TempDeclInst
-	if ident, isIdent := flatRHS.(*hir.Identifier); isIdent && ident != nil && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
+	// 2. ABI Routing: Perform direct transfers
+	if reg, isReg := flatRHS.(*Register); isReg && reg != nil {
 		if dstType != nil && dstType.IsReferenceType() {
 			// Affine transfer of ownership
-			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: ident.Value})
+			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: reg.Name})
 		} else {
 			// Primitive duplication
-			current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: ident.Value})
+			current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: reg.Name})
 		}
 	} else if flatRHS != nil {
 		// Pure flat expression evaluation assignment
@@ -334,7 +337,7 @@ func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBloc
 		return current
 	}
 
-	var flatMap, flatVal hir.Operand
+	var flatMap, flatVal Value
 	flatMap, current = b.flattenExpr(stmt.Map, current)
 	flatVal, current = b.flattenExpr(stmt.Value, current)
 
@@ -346,7 +349,7 @@ func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBloc
 	// EMIT EXACTLY 6 ARGUMENTS FOR ZIG ABI
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      putTmp,
-		Function: &hir.Identifier{Value: "maml_map_put", Type: types.UnknownType{}},
+		Function: &Register{Name: "maml_map_put", Type: types.UnknownType{}},
 		Arguments: []MIRCallArg{
 			{Argument: flatMap, Mut: true},
 			{Argument: hashVal},
@@ -366,7 +369,7 @@ func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock)
 		return current
 	}
 
-	var flatVec, flatIdx, flatVal hir.Operand
+	var flatVec, flatIdx, flatVal Value
 
 	// 1. Flatten the receiver, index, and value into atomic operands
 	flatVec, current = b.flattenExpr(stmt.Vec, current)
@@ -383,7 +386,7 @@ func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock)
 	// 3. Emit the runtime call to mutate the vector in-place
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      setTmp,
-		Function: &hir.Identifier{Value: "maml_vec_set", Type: types.UnknownType{}},
+		Function: &Register{Name: "maml_vec_set", Type: types.UnknownType{}},
 		Arguments: []MIRCallArg{
 			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
 			{Argument: flatIdx},            // The integer index
@@ -400,7 +403,7 @@ func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *
 		return current
 	}
 
-	var flatVec, flatVal hir.Operand
+	var flatVec, flatVal Value
 
 	// 1. Flatten the receiver, index, and value into atomic operands
 	flatVec, current = b.flattenExpr(stmt.Vec, current)
@@ -416,7 +419,7 @@ func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *
 	// 3. Emit the runtime call to mutate the vector in-place
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      setTmp,
-		Function: &hir.Identifier{Value: "maml_vec_push", Type: types.UnknownType{}},
+		Function: &Register{Name: "maml_vec_push", Type: types.UnknownType{}},
 		Arguments: []MIRCallArg{
 			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
 			{Argument: flatVal},            // The value to write
@@ -427,7 +430,7 @@ func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *
 	return current
 }
 
-func (b *Builder) emitMemoryTransfer(dst string, flatRHS hir.Operand, dstSym *types.Symbol, current *BasicBlock) {
+func (b *Builder) emitMemoryTransfer(dst string, flatRHS Value, dstSym *types.Symbol, current *BasicBlock) {
 	// Emit an allocation-agnostic temporary declaration
 	var t types.Type = types.UnknownType{}
 	if dstSym != nil {
@@ -439,11 +442,11 @@ func (b *Builder) emitMemoryTransfer(dst string, flatRHS hir.Operand, dstSym *ty
 		Type: t,
 	})
 
-	if ident, isIdent := flatRHS.(*hir.Identifier); isIdent && ident.Symbol != nil && ident.Symbol.Kind == types.VarSymbol {
+	if reg, isReg := flatRHS.(*Register); isReg {
 		if t.IsReferenceType() {
-			current.Statements = append(current.Statements, &MoveInst{Dst: dst, Src: ident.Value})
+			current.Statements = append(current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
 		} else {
-			current.Statements = append(current.Statements, &CopyInst{Dst: dst, Src: ident.Value})
+			current.Statements = append(current.Statements, &CopyInst{Dst: dst, Src: reg.Name})
 		}
 	} else {
 		current.Statements = append(current.Statements, &AssignInst{Dst: dst, RValue: flatRHS})

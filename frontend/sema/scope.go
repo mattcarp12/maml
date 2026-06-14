@@ -47,7 +47,7 @@ func newGlobalScope() *Scope {
 		Kind: types.FuncSymbol,
 		Name: "spawn",
 		Type: &types.FunctionType{
-			Params:     []types.Type{types.FutureType{Base: types.AnyType{}}},
+			Params:     []types.Type{&types.FutureType{Base: types.AnyType{}}},
 			ParamModes: []types.ParamMode{types.ParamBorrow},
 			Return:     types.UnitType{},
 		},

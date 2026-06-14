@@ -8,7 +8,6 @@
 package passes
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -98,9 +97,9 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 	defSet := make(map[string]bool)
 
 	// Local helper closures
-	addUse := func(op hir.Operand) {
-		if ident, ok := op.(*hir.Identifier); ok && ident != nil {
-			useSet[ident.Value] = true
+	addUse := func(op mir.Value) {
+		if reg, ok := op.(*mir.Register); ok && reg != nil {
+			useSet[reg.Name] = true
 		}
 	}
 

@@ -15,7 +15,7 @@ var builtinGenerics = map[string]builtinGeneric{
 	"Vec": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return types.VectorType{
+			return &types.VectorType{
 				Base: args[0],
 			}
 		},
@@ -23,7 +23,7 @@ var builtinGenerics = map[string]builtinGeneric{
 	"Map": {
 		Arity: 2,
 		Build: func(args []types.Type) types.Type {
-			return types.MapType{
+			return &types.MapType{
 				Key:   args[0],
 				Value: args[1],
 			}
@@ -47,7 +47,7 @@ var builtinGenerics = map[string]builtinGeneric{
 	"Future": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return types.FutureType{
+			return &types.FutureType{
 				Base: args[0],
 			}
 		},
@@ -55,7 +55,7 @@ var builtinGenerics = map[string]builtinGeneric{
 	"View": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return types.ViewType{
+			return &types.ViewType{
 				Base: args[0],
 			}
 		},
@@ -100,7 +100,7 @@ func (a *Analyzer) resolveBuiltinGeneric(expr *ast.GenericTypeExpr) types.Type {
 	return builtin.Build(args)
 }
 
-func (a *Analyzer) mapMapLiteral(e *ast.CompositeLiteral, mapTy types.MapType) *tast.MapLiteral {
+func (a *Analyzer) mapMapLiteral(e *ast.CompositeLiteral, mapTy *types.MapType) *tast.MapLiteral {
 	var tastElements []tast.MapElement
 	for _, elems := range e.Elements {
 		if elems.Key == nil {
@@ -130,7 +130,7 @@ func (a *Analyzer) mapMapLiteral(e *ast.CompositeLiteral, mapTy types.MapType) *
 	return node
 }
 
-func (a *Analyzer) mapVecLiteral(e *ast.CompositeLiteral, vecTy types.VectorType) *tast.VecLiteral {
+func (a *Analyzer) mapVecLiteral(e *ast.CompositeLiteral, vecTy *types.VectorType) *tast.VecLiteral {
 	var tastElements []tast.Expr
 	for _, elems := range e.Elements {
 		if elems.Key != nil {

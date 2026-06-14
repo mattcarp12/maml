@@ -307,13 +307,13 @@ func (r IndexExprTypeCompatibility) Check(node *tast.IndexExpr, ctx *RuleContext
 	var violations []Violation
 
 	switch ty := leftType.(type) {
-	case types.ArrayType, types.ViewType, types.VectorType, types.StringType:
+	case *types.ArrayType, *types.ViewType, *types.VectorType, types.StringType:
 		if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
 			violations = append(violations, violation(node.Index.Pos(),
 				"index must be an integer, got '%s'", idxType.String(),
 			))
 		}
-	case types.MapType:
+	case *types.MapType:
 		if !idxType.Equals(ty.Key) && !types.IsUnknown(idxType) && !types.IsUnknown(ty.Key) {
 			violations = append(violations, violation(node.Index.Pos(),
 				"map index must be of type '%s', got '%s'",

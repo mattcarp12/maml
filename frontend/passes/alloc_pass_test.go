@@ -3,7 +3,6 @@ package passes
 import (
 	"testing"
 
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -45,9 +44,9 @@ func TestB_ReturnEscape(t *testing.T) {
 	g.Blocks[0] = b0
 
 	// mut v := Vec<int>{}
-	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: &types.VectorType{}})
 	// return v
-	b0.Terminator = &mir.ReturnTerminator{Value: &hir.Identifier{Value: "v", Type: types.VectorType{}}}
+	b0.Terminator = &mir.ReturnTerminator{Value: &mir.Register{Name: "v", Type: &types.VectorType{}}}
 
 	escapes := AnalyzeEscape(g)
 	LowerAllocations(g, escapes)
@@ -64,12 +63,12 @@ func TestC_CallEscape(t *testing.T) {
 	g.Entry = 0
 	g.Blocks[0] = b0
 
-	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: &types.VectorType{}})
 	// pass_vec(mut v)
 	b0.Statements = append(b0.Statements, &mir.CallInst{
-		Function: &hir.Identifier{Value: "pass_vec", Type: types.UnitType{}},
+		Function: &mir.Register{Name: "pass_vec", Type: types.UnitType{}},
 		Arguments: []mir.MIRCallArg{
-			{Argument: &hir.Identifier{Value: "v", Type: types.VectorType{}}},
+			{Argument: &mir.Register{Name: "v", Type: &types.VectorType{}}},
 		},
 	})
 	b0.Terminator = &mir.ReturnTerminator{}
@@ -90,7 +89,7 @@ func TestD_EscapeReassignLoop(t *testing.T) {
 	g.Blocks[0] = b0
 
 	// Local Vec created inside a loop body that never leaves function boundary
-	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: types.VectorType{}})
+	b0.Statements = append(b0.Statements, &mir.TempDeclInst{Name: "v", Type: &types.VectorType{}})
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	escapes := AnalyzeEscape(g)

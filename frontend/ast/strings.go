@@ -37,8 +37,6 @@ func (p *Param) String() string {
 		p.Type.String(),
 	)
 }
-func (p *Param) Pos() Position { return p.Pos_ }
-func (p *Param) End() Position { return p.End_ }
 func (f *FnDecl) String() string {
 	var out bytes.Buffer
 	if f.IsAsync {
@@ -102,13 +100,6 @@ func (ce *CallExpr) String() string {
 		ce.Function.String(),
 		strings.Join(args, ", "),
 	)
-}
-func (ca *CallArg) Pos() Position { return ca.Pos_ }
-func (ca *CallArg) End() Position {
-	if ca.Argument == nil {
-		return ca.Pos_
-	}
-	return ca.Argument.End()
 }
 func (ca *CallArg) String() string {
 	prefix := ""

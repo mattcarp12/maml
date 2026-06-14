@@ -1,176 +1,169 @@
-#include <llvm/IR/DataLayout.h>
-
 #include "ExprGenerator.h"
 #include "RuntimeConstants.h"
-#include "StmtGenerator.h"
 #include "TypeLowering.h"
 
 namespace maml {
 
-// -----------------------------------------------------------------------------
-// Private, Isolated Instruction Helpers
-// -----------------------------------------------------------------------------
-
-static void handleTempDecl(CodegenContext &ctx, const nlohmann::json &stmt) {
-  llvm::Type *ty = llvmTypeFor(ctx, stmt["type"]);
-  std::string name = stmt["name"].get<std::string>();
+void handle(CodegenContext &ctx, const mir::TempDeclInst &inst) {
+  llvm::Type *ty = llvmTypeFor(ctx, inst.type);
   if (ty->isVoidTy()) return;
-
   llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
-  llvm::BasicBlock &entryBlock = parentFn->getEntryBlock();
-  llvm::IRBuilder<> TmpBuilder(&entryBlock, entryBlock.begin());
-
-  llvm::AllocaInst *alloca = TmpBuilder.CreateAlloca(ty, nullptr, name);
+  llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
+  llvm::AllocaInst *alloca = TmpBuilder.CreateAlloca(ty, nullptr, inst.name);
   TmpBuilder.CreateStore(llvm::Constant::getNullValue(ty), alloca);
-  ctx.SymbolEnv.back()[name] = alloca;
+  ctx.SymbolEnv.back()[inst.name] = alloca;
 }
 
-static void handleAssign(CodegenContext &ctx, const nlohmann::json &stmt) {
-  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
-  std::string dst = stmt["dst"].get<std::string>();
-  llvm::Value *target = ctx.resolveSymbol(dst);
-
+void handle(CodegenContext &ctx, const mir::AssignInst &inst) {
+  llvm::Value *val = evaluateValue(ctx, inst.r_value);
+  llvm::Value *target = ctx.resolveSymbol(inst.dst);
   if (!target) {
-    if (val && !val->getType()->isVoidTy()) {
-      ctx.Error.fatal("Assignment to unknown variable: " + dst, stmt);
-    }
+    ctx.Error.fatal("Assignment to unknown variable: " + inst.dst);
     return;
   }
   if (!val || val->getType()->isVoidTy()) return;
-
   ctx.Builder->CreateStore(val, target);
 }
 
-static void handleCopyOrMove(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt["dst"].get<std::string>();
-  std::string src = stmt["src"].get<std::string>();
-  llvm::Value *dstVal = ctx.resolveSymbol(dst);
-  llvm::Value *srcVal = ctx.resolveSymbol(src);
+void handle(CodegenContext &ctx, const mir::CopyInst &inst) {
+  llvm::Value *dstVal = ctx.resolveSymbol(inst.dst);
+  llvm::Value *srcVal = ctx.resolveSymbol(inst.src);
+  if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(srcVal)) {
+    llvm::Value *loaded = ctx.Builder->CreateLoad(srcAlloca->getAllocatedType(), srcAlloca);
+    ctx.Builder->CreateStore(loaded, dstVal);
+  } else if (srcVal) {
+    ctx.Builder->CreateStore(srcVal, dstVal);
+  }
+}
 
+void handle(CodegenContext &ctx, const mir::MoveInst &inst) {
+  llvm::Value *dstVal = ctx.resolveSymbol(inst.dst);
+  llvm::Value *srcVal = ctx.resolveSymbol(inst.src);
   if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(srcVal)) {
     llvm::Value *loaded = ctx.Builder->CreateLoad(srcAlloca->getAllocatedType(), srcAlloca);
     ctx.Builder->CreateStore(loaded, dstVal);
   }
 }
 
-static void handleLoadPtr(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt["dst"].get<std::string>();
-  llvm::Value *ptrVal = evaluateExpression(ctx, stmt["ptr"]);
-  llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
-
-  llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, ptrVal, dst + "_load");
-  ctx.SymbolEnv.back()[dst] = loadedVal;
+void handle(CodegenContext &ctx, const mir::LoadPtrInst &inst) {
+  llvm::Value *ptrVal = evaluateValue(ctx, inst.ptr);
+  llvm::Type *targetTy = llvmTypeFor(ctx, inst.type);
+  llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, ptrVal, inst.dst + "_load");
+  ctx.SymbolEnv.back()[inst.dst] = loadedVal;
 }
 
-static void handleStore(CodegenContext &ctx, const nlohmann::json &stmt) {
-  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
-  std::string dst_ptr_name = stmt["dst_ptr"].get<std::string>();
-  llvm::Value *dstPtr = ctx.resolveSymbol(dst_ptr_name);
+void handle(CodegenContext &ctx, const mir::StoreInst &inst) {
+  llvm::Value *val = evaluateValue(ctx, inst.value);
+  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst_ptr);
   if (!dstPtr) {
-    ctx.Error.fatal("store: destination pointer not found: " + dst_ptr_name, stmt);
+    ctx.Error.fatal("store: destination pointer not found: " + inst.dst_ptr);
     return;
   }
   ctx.Builder->CreateStore(val, dstPtr);
 }
 
-static void handleRefAlloc(CodegenContext &ctx, const nlohmann::json &stmt) {
-  llvm::Type *ty = llvmTypeFor(ctx, stmt["type"]);
-  std::string dst = stmt["dst"].get<std::string>();
-
+void handle(CodegenContext &ctx, const mir::RefAllocInst &inst) {
+  llvm::Type *ty = llvmTypeFor(ctx, inst.type);
   llvm::Function *allocFn = ctx.Module->getFunction(rt::ALLOC);
   llvm::DataLayout DL(ctx.Module.get());
-  uint64_t size = DL.getTypeAllocSize(ty);
-  llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), size);
-  llvm::Value *heapPtr = ctx.Builder->CreateCall(allocFn, {sizeVal}, dst + "_heap");
-  llvm::Value *dstTarget = ctx.resolveSymbol(dst);
-  ctx.Builder->CreateStore(heapPtr, dstTarget);
+  llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), DL.getTypeAllocSize(ty));
+  llvm::Value *heapPtr = ctx.Builder->CreateCall(allocFn, {sizeVal}, inst.dst + "_heap");
+  ctx.Builder->CreateStore(heapPtr, ctx.resolveSymbol(inst.dst));
 }
 
-static void handleRefDec(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string src = stmt["src"].get<std::string>();
-  if (llvm::Value *srcTarget = ctx.resolveSymbol(src)) {
-    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcTarget)) {
-      llvm::Value *loaded = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
-      llvm::Value *ptrToRelease = loaded;
+void handle(CodegenContext &ctx, const mir::RefDecInst &inst) {
+  // Look up the symbol safely
+  llvm::Value *targetVar = ctx.resolveSymbol(inst.src);
+  if (!targetVar) {
+    // Optional: warn or fail if the symbol doesn't exist
+    return;
+  }
 
-      // NEW: If the type is a fat pointer (struct), extract the raw pointer (field 0)
-      if (loaded->getType()->isStructTy()) {
-        ptrToRelease = ctx.Builder->CreateExtractValue(loaded, 0);
-      }
+  llvm::Value *valToManage = targetVar;
 
-      llvm::Function *releaseFn = ctx.Module->getFunction(rt::RELEASE);
-      if (releaseFn) ctx.Builder->CreateCall(releaseFn, {ptrToRelease});
+  // 1. Resolve Alloca vs SSA:
+  // If the symbol is a stack allocation, we must load the actual value from it first.
+  // If it's already an SSA value (like from a load_ptr), we just use it directly.
+  if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetVar)) {
+    valToManage = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca, inst.src + "_load_for_release");
+  }
+
+  llvm::Type *ty = valToManage->getType();
+  llvm::Value *rawPtr = nullptr;
+
+  // 2. Extract the actual heap pointer based on the type
+  if (ty->isStructTy()) {
+    // For fat pointers (like your String struct { ptr, i32 }), the heap pointer is at index 0
+    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0}, inst.src + "_raw_ptr");
+  } else if (ty->isPointerTy()) {
+    // For standard opaque pointers (like Map, Vec, or unboxed objects)
+    rawPtr = valToManage;
+  }
+
+  // 3. Emit the Release call safely
+  if (rawPtr) {
+    llvm::Function *releaseFn = ctx.Module->getFunction("maml_release");
+    if (!releaseFn) {
+      ctx.Error.fatal("maml_release function not found in module. Ensure RuntimeConstants.h is linked.");
+      return;
     }
+
+    ctx.Builder->CreateCall(releaseFn, rawPtr);
   }
 }
 
-static void handleRefInc(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string src = stmt["src"].get<std::string>();
-  if (llvm::Value *srcTarget = ctx.resolveSymbol(src)) {
-    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(srcTarget)) {
-      llvm::Value *loaded = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
-      llvm::Value *ptrToRetain = loaded;
+void handle(CodegenContext &ctx, const mir::RefIncInst &inst) {
+  llvm::Value *targetVar = ctx.resolveSymbol(inst.src);
+  if (!targetVar) return;
 
-      // NEW: Extract raw pointer for retains as well
-      if (loaded->getType()->isStructTy()) {
-        ptrToRetain = ctx.Builder->CreateExtractValue(loaded, 0);
-      }
+  llvm::Value *valToManage = targetVar;
 
-      llvm::Function *retainFn = ctx.Module->getFunction(rt::RETAIN);
-      if (retainFn) ctx.Builder->CreateCall(retainFn, {ptrToRetain});
-    }
+  // 1. If the symbol is an Alloca, we must load the actual value from the stack first
+  if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetVar)) {
+    valToManage = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
+  }
+
+  llvm::Type *ty = valToManage->getType();
+  llvm::Value *rawPtr = nullptr;
+
+  // 2. Extract the actual heap pointer
+  if (ty->isStructTy()) {
+    // For fat pointers like String { ptr, len }, the heap pointer is at index 0
+    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0});
+  } else if (ty->isPointerTy()) {
+    // For standard pointers like Map or Vec
+    rawPtr = valToManage;
+  }
+
+  // 3. Emit the Retain call safely
+  if (rawPtr) {
+    llvm::Function *retainFn = ctx.Module->getFunction("maml_retain");
+    ctx.Builder->CreateCall(retainFn, rawPtr);
   }
 }
 
-static void handleCast(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt["dst"].get<std::string>();
-  llvm::Value *srcVal = evaluateExpression(ctx, stmt["src"]);
-  llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
+void handle(CodegenContext &ctx, const mir::CastInst &inst) {
+  llvm::Value *srcVal = evaluateValue(ctx, inst.src);
+  llvm::Type *targetTy = llvmTypeFor(ctx, inst.type);
   llvm::Value *castVal = nullptr;
 
   if (srcVal->getType()->isIntegerTy() && targetTy->isIntegerTy()) {
-    castVal = ctx.Builder->CreateZExtOrTrunc(srcVal, targetTy, dst + "_cast");
+    castVal = ctx.Builder->CreateZExtOrTrunc(srcVal, targetTy, inst.dst + "_cast");
   } else if (srcVal->getType()->isPointerTy() && targetTy->isPointerTy()) {
-    castVal = ctx.Builder->CreatePointerCast(srcVal, targetTy, dst + "_cast");
+    castVal = ctx.Builder->CreatePointerCast(srcVal, targetTy, inst.dst + "_cast");
   } else if (srcVal->getType()->isIntegerTy() && targetTy->isPointerTy()) {
-    castVal = ctx.Builder->CreateIntToPtr(srcVal, targetTy, dst + "_cast");
+    castVal = ctx.Builder->CreateIntToPtr(srcVal, targetTy, inst.dst + "_cast");
   } else if (srcVal->getType()->isPointerTy() && targetTy->isIntegerTy()) {
-    castVal = ctx.Builder->CreatePtrToInt(srcVal, targetTy, dst + "_cast");
+    castVal = ctx.Builder->CreatePtrToInt(srcVal, targetTy, inst.dst + "_cast");
   } else {
-    ctx.Error.fatal("cast: unsupported cast operation", stmt);
+    ctx.Error.fatal("cast: unsupported cast operation");
     return;
   }
-  ctx.SymbolEnv.back()[dst] = castVal;
+  ctx.SymbolEnv.back()[inst.dst] = castVal;
 }
 
-// -----------------------------------------------------------------------------
-// Public Cluster Entry Point
-// -----------------------------------------------------------------------------
-
-void compileMemoryOps(CodegenContext &ctx, MirOp op, const nlohmann::json &stmt) {
-  switch (op) {
-    case MirOp::TempDecl:
-      return handleTempDecl(ctx, stmt);
-    case MirOp::Assign:
-      return handleAssign(ctx, stmt);
-    case MirOp::Copy:
-    case MirOp::Move:
-      return handleCopyOrMove(ctx, stmt);
-    case MirOp::LoadPtr:
-      return handleLoadPtr(ctx, stmt);
-    case MirOp::Store:
-      return handleStore(ctx, stmt);
-    case MirOp::RefAlloc:
-      return handleRefAlloc(ctx, stmt);
-    case MirOp::RefInc:
-      return handleRefInc(ctx, stmt);
-    case MirOp::RefDec:
-      return handleRefDec(ctx, stmt);
-    case MirOp::Cast:
-      return handleCast(ctx, stmt);
-    default:
-      break;
-  }
-}
+void handle(CodegenContext &ctx, const mir::MutBorrowInst &inst) { /* No-op in backend */ }
+void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) { /* Not implemented */ }
+void handle(CodegenContext &ctx, const mir::KeepAliveInst &inst) { /* No-op in backend */ }
 
 }  // namespace maml

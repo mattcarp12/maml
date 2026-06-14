@@ -1,7 +1,6 @@
 package passes
 
 import (
-	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -50,10 +49,10 @@ func (a *EscapeAnalyzer) analyzeTerminator(term mir.Terminator) bool {
 	// Only variables returned from the function that are reference types
 	// (or contain references) need to escape to the heap. Primitive copies do not.
 	if ret, ok := term.(*mir.ReturnTerminator); ok && ret.Value != nil {
-		if ident, isIdent := ret.Value.(*hir.Identifier); isIdent {
-			if ident.Type != nil && ident.Type.IsReferenceType() {
-				if a.EscapeMap[ident.Value] != StateHeap {
-					a.EscapeMap[ident.Value] = StateHeap
+		if reg, isReg := ret.Value.(*mir.Register); isReg {
+			if reg.Type != nil && reg.Type.IsReferenceType() {
+				if a.EscapeMap[reg.Name] != StateHeap {
+					a.EscapeMap[reg.Name] = StateHeap
 					changed = true
 				}
 			}
@@ -144,10 +143,10 @@ func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
 		// Conservative boundary: Any reference type passed to an external
 		// function is assumed to escape (unless intra-procedural analysis proves otherwise).
 		for _, arg := range i.Arguments {
-			if ident, isIdent := arg.Argument.(*hir.Identifier); isIdent {
-				if ident.Type != nil && ident.Type.IsReferenceType() {
-					if a.EscapeMap[ident.Value] != StateHeap {
-						a.EscapeMap[ident.Value] = StateHeap
+			if reg, isReg := arg.Argument.(*mir.Register); isReg {
+				if reg.Type != nil && reg.Type.IsReferenceType() {
+					if a.EscapeMap[reg.Name] != StateHeap {
+						a.EscapeMap[reg.Name] = StateHeap
 						changed = true
 					}
 				}
@@ -159,10 +158,10 @@ func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
 }
 
 // propagateFromOperand cleanly handles flat MIR values without needing recursion.
-func (a *EscapeAnalyzer) propagateFromOperand(op hir.Operand) bool {
-	if ident, ok := op.(*hir.Identifier); ok {
-		if a.EscapeMap[ident.Value] != StateHeap {
-			a.EscapeMap[ident.Value] = StateHeap
+func (a *EscapeAnalyzer) propagateFromOperand(op mir.Value) bool {
+	if reg, ok := op.(*mir.Register); ok {
+		if a.EscapeMap[reg.Name] != StateHeap {
+			a.EscapeMap[reg.Name] = StateHeap
 			return true
 		}
 	}

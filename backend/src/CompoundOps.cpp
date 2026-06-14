@@ -1,214 +1,169 @@
-#include <llvm/IR/DataLayout.h>
-
-#include <string>
-#include <vector>
-
 #include "ExprGenerator.h"
-#include "StmtGenerator.h"
 #include "TypeLowering.h"
 
 namespace maml {
 
-// -----------------------------------------------------------------------------
-// Private, Isolated Instruction Helpers
-// -----------------------------------------------------------------------------
-
-static void handleStructInit(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt.value("dst", "");
-  int field_index = stmt.value("field_index", 0);
-
-  llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+void handle(CodegenContext &ctx, const mir::StructInitInst &inst) {
+  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst);
   if (!dstPtr) {
-    ctx.Error.fatal("struct_init: target stack allocation not found for '" + dst + "'", stmt);
+    ctx.Error.fatal("struct_init: target stack alloc not found for '" + inst.dst + "'");
     return;
   }
 
-  // Derive structural type layout safely from the stack alloca allocation
   llvm::Type *structTy = nullptr;
   if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(dstPtr)) {
     structTy = alloca->getAllocatedType();
   } else {
-    ctx.Error.fatal("struct_init: target is not an alloca", stmt);
+    ctx.Error.fatal("struct_init: target is not an alloca");
     return;
   }
 
-  llvm::Value *val = evaluateExpression(ctx, stmt["value"]);
-  if (!val) return;
-
-  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, dstPtr, field_index, dst + "_init_gep");
+  llvm::Value *val = evaluateValue(ctx, inst.value);
+  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, dstPtr, inst.field_index, inst.dst + "_init_gep");
   ctx.Builder->CreateStore(val, fieldGep);
 }
 
-static void handleFieldRead(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt.value("dst", "");
-  int field_index = stmt.value("field_index", 0);
-  auto objectJson = stmt["object"];
-
-  // 🌟 THE FIX: Evaluate the expression directly instead of looking up a raw symbol string
-  llvm::Value *objVal = evaluateExpression(ctx, objectJson);
+void handle(CodegenContext &ctx, const mir::FieldReadInst &inst) {
+  llvm::Value *objVal = evaluateValue(ctx, inst.object);
   if (!objVal) {
-    ctx.Error.fatal("field_read: Failed to evaluate object expression", stmt);
+    ctx.Error.fatal("field_read: Failed to evaluate object expression");
     return;
   }
 
   llvm::Value *objPtr = nullptr;
   llvm::Type *structTy = nullptr;
 
-  // Case A: The evaluated object is an active memory pointer (like a stack Alloca)
   if (objVal->getType()->isPointerTy()) {
     objPtr = objVal;
-
-    // If it's an alloca, we can safely pull its underlying allocated type
     if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(objVal)) {
       structTy = alloca->getAllocatedType();
+    } else if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
+      // FIX: Extract the true parent struct layout from the object's register type,
+      // instead of using the instruction's type (which belongs to the extracted field).
+      structTy = llvmTypeFor(ctx, reg->type);
     } else {
-      // If it's an opaque pointer, lower the frontend's object type definition to map the layout
-      structTy = llvmTypeFor(ctx, objectJson["type"]);
+      ctx.Error.fatal("field_read: Unable to deduce parent struct layout for opaque pointer.");
+      return;
     }
-  }
-  // Case B: The evaluated object is a direct, loaded struct register (like an inline literal or nested read)
-  else if (objVal->getType()->isStructTy()) {
-    // Spill the raw structural register back to an entry-block stack temporary to grab a memory address
+  } else if (objVal->getType()->isStructTy()) {
     llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
     llvm::IRBuilder<> TmpBuilder(&F->getEntryBlock(), F->getEntryBlock().begin());
-    llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objVal->getType(), nullptr, "field_read_source_spill");
-
+    llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objVal->getType(), nullptr, "field_read_spill");
     ctx.Builder->CreateStore(objVal, spillAlloca);
     objPtr = spillAlloca;
     structTy = objVal->getType();
   } else {
-    ctx.Error.fatal("field_read: Target object expression must resolve to a pointer or structural layout value", stmt);
+    ctx.Error.fatal("field_read: Invalid object pointer");
     return;
   }
 
-  // Perform a clean, type-safe Structural GEP + Load
-  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, field_index, dst + "_gep");
-  llvm::Type *fieldTy = llvmTypeFor(ctx, stmt["type"]);
-  llvm::Value *loadedVal = ctx.Builder->CreateLoad(fieldTy, fieldGep, dst + "_val");
-
-  ctx.SymbolEnv.back()[dst] = loadedVal;
+  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, inst.field_index, inst.dst + "_gep");
+  llvm::Type *fieldTy = llvmTypeFor(ctx, inst.type);
+  ctx.SymbolEnv.back()[inst.dst] = ctx.Builder->CreateLoad(fieldTy, fieldGep, inst.dst + "_val");
 }
 
-static void handleVariantDiscriminant(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt["dst"].get<std::string>();
-  auto objectJson = stmt["object"];
-
-  // 🌟 THE FIX: Grab the memory pointer directly to ensure GEP access
-  llvm::Value *objectPtr = nullptr;
-  if (objectJson.contains("op") && objectJson["op"] == "ident") {
-    objectPtr = ctx.resolveSymbol(objectJson["value"].get<std::string>());
-  }
-
-  if (!objectPtr) {
-    objectPtr = evaluateExpression(ctx, objectJson);
-  }
-
+void handle(CodegenContext &ctx, const mir::VariantDiscriminantInst &inst) {
+  llvm::Value *objectPtr = evaluateValue(ctx, inst.object);
   llvm::Value *discrimVal = nullptr;
 
   if (objectPtr->getType()->isPointerTy()) {
-    // We only need the tag, so a simple { i32 } struct overlay guarantees we read offset 0 correctly
     llvm::StructType *sumTy = llvm::StructType::get(ctx.Context, {llvm::Type::getInt32Ty(ctx.Context)}, false);
-    llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 0, dst + "_gep");
-    discrimVal = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), discrimGep, dst + "_val");
+    llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 0, inst.dst + "_gep");
+    discrimVal = ctx.Builder->CreateLoad(llvm::Type::getInt32Ty(ctx.Context), discrimGep, inst.dst + "_val");
   } else {
-    // Fallback
-    discrimVal = ctx.Builder->CreateExtractValue(objectPtr, {0}, dst + "_val");
+    discrimVal = ctx.Builder->CreateExtractValue(objectPtr, {0}, inst.dst + "_val");
   }
-
-  ctx.SymbolEnv.back()[dst] = discrimVal;
+  ctx.SymbolEnv.back()[inst.dst] = discrimVal;
 }
 
-static void handleVariantRead(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt.value("dst", "");
-  int payload_index = stmt.value("payload_index", 0);
-  auto objectJson = stmt["object"];
+void handle(CodegenContext &ctx, const mir::VariantReadInst &inst) {
+  llvm::Value *objectVal = evaluateValue(ctx, inst.object);
+  llvm::Value *objectPtr = objectVal;
+  llvm::Type *sumTy = nullptr;
 
-  llvm::Value *objectPtr = nullptr;
-  if (objectJson.contains("op") && objectJson["op"] == "ident") {
-    objectPtr = ctx.resolveSymbol(objectJson["value"].get<std::string>());
-  }
-  if (!objectPtr) objectPtr = evaluateExpression(ctx, objectJson);
+  // 1. Spill to stack if it's a value, ensuring we have a pointer to GEP into
+  if (!objectVal->getType()->isPointerTy()) {
+    llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+    llvm::IRBuilder<> TmpBuilder(&F->getEntryBlock(), F->getEntryBlock().begin());
+    llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objectVal->getType(), nullptr, "variant_read_spill");
+    ctx.Builder->CreateStore(objectVal, spillAlloca);
 
-  llvm::Value *loadedVal = nullptr;
-
-  if (objectPtr->getType()->isPointerTy()) {
-    // 🌟 THE FIX: Read directly from the padded array at index 1
-    llvm::Type *sumTy = llvmTypeFor(ctx, objectJson["type"]);
-    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 1, dst + "_array_gep");
-
-    llvm::Type *targetTy = llvmTypeFor(ctx, stmt["type"]);
-    llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(targetTy));
-
-    if (payload_index > 0) {
-      castGep = ctx.Builder->CreateGEP(targetTy, castGep,
-                                       llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, payload_index)));
+    objectPtr = spillAlloca;
+    sumTy = objectVal->getType();
+  } else {
+    // If it's already a pointer, grab the allocation type
+    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(objectVal)) {
+      sumTy = alloca->getAllocatedType();
+    } else {
+      ctx.Error.fatal("variant_read: Unexpected opaque pointer without backing alloca.");
+      return;
     }
-
-    loadedVal = ctx.Builder->CreateLoad(targetTy, castGep, dst + "_val");
-  } else {
-    // Fallback
-    loadedVal = ctx.Builder->CreateExtractValue(objectPtr, {1}, dst + "_val");
   }
 
-  ctx.SymbolEnv.back()[dst] = loadedVal;
+  // 2. GEP to the payload array (index 1 of the SumType)
+  llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, objectPtr, 1, inst.dst + "_array_gep");
+
+  // 3. Dynamically reconstruct the variant's payload StructType from the object's type schema
+  std::vector<llvm::Type *> payloadTypes;
+  if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
+    if (reg->type.is_object() && reg->type.contains("variants")) {
+      for (const auto &varJson : reg->type["variants"]) {
+        if (varJson["name"] == inst.variant_name) {
+          // Collect unnamed tuple fields
+          if (varJson.contains("tuple_types")) {
+            for (const auto &tt : varJson["tuple_types"]) payloadTypes.push_back(llvmTypeFor(ctx, tt));
+          }
+          // Collect named struct fields
+          if (varJson.contains("fields")) {
+            for (const auto &f : varJson["fields"]) payloadTypes.push_back(llvmTypeFor(ctx, f["type"]));
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback just in case schema data was dropped for a single-item payload
+  if (payloadTypes.empty()) {
+    payloadTypes.push_back(llvmTypeFor(ctx, inst.type));
+  }
+
+  llvm::StructType *variantStructTy = llvm::StructType::get(ctx.Context, payloadTypes, false);
+
+  // 4. Cast the array pointer to the dynamically generated struct pointer
+  llvm::Value *structPtr =
+      ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(variantStructTy), "variant_cast");
+
+  // 5. Apply LLVM's intelligent StructGEP to resolve the exact byte offset for the field
+  llvm::Value *castGep =
+      ctx.Builder->CreateStructGEP(variantStructTy, structPtr, inst.payload_index, inst.dst + "_payload_gep");
+  llvm::Type *targetTy = llvmTypeFor(ctx, inst.type);
+
+  // 6. Safely load the properly-aligned payload
+  llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, castGep, inst.dst + "_val");
+  ctx.SymbolEnv.back()[inst.dst] = loadedVal;
 }
 
-static void handleVariantInit(CodegenContext &ctx, const nlohmann::json &stmt) {
-  std::string dst = stmt.value("dst", "");
-  int discriminant = stmt.value("discriminant", 0);
-  auto payloadsJson = stmt["payloads"];
-
-  llvm::Value *dstPtr = ctx.resolveSymbol(dst);
+void handle(CodegenContext &ctx, const mir::VariantInitInst &inst) {
+  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst);
   if (!dstPtr) return;
 
-  // 🌟 THE FIX: Get the official, padded LLVM type for the SumType
-  llvm::Type *sumTy = llvmTypeFor(ctx, stmt["type"]);
-
-  // 1. Write the integer tag into index 0
-  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 0, dst + "_disc_gep");
-  llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), discriminant);
+  llvm::Type *sumTy = llvmTypeFor(ctx, inst.type);
+  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 0, inst.dst + "_disc_gep");
+  llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), inst.discriminant);
   ctx.Builder->CreateStore(discrimVal, discrimGep);
 
-  // 2. Write the payload directly into the padded array at index 1
-  if (payloadsJson.size() > 0) {
-    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 1, dst + "_array_gep");
-
-    for (size_t i = 0; i < payloadsJson.size(); ++i) {
-      auto pJson = payloadsJson[i];
-      llvm::Value *payloadVal = evaluateExpression(ctx, pJson);
-
-      // Cast the generic array memory to a pointer of our specific payload type
+  if (inst.payloads.size() > 0) {
+    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 1, inst.dst + "_array_gep");
+    for (size_t i = 0; i < inst.payloads.size(); ++i) {
+      llvm::Value *payloadVal = evaluateValue(ctx, inst.payloads[i]);
       llvm::Type *payloadTy = payloadVal->getType();
       llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(payloadTy));
-
-      // If there are multiple tuple payloads, we offset the pointer
       if (i > 0) {
         castGep = ctx.Builder->CreateGEP(payloadTy, castGep, llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, i)));
       }
-
       ctx.Builder->CreateStore(payloadVal, castGep);
     }
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Public Cluster Entry Point
-// -----------------------------------------------------------------------------
-
-void compileCompoundOps(CodegenContext &ctx, MirOp op, const nlohmann::json &stmt) {
-  switch (op) {
-    case MirOp::StructInit:
-      return handleStructInit(ctx, stmt);
-    case MirOp::FieldRead:
-      return handleFieldRead(ctx, stmt);
-    case MirOp::VariantDiscriminant:
-      return handleVariantDiscriminant(ctx, stmt);
-    case MirOp::VariantRead:
-      return handleVariantRead(ctx, stmt);
-    case MirOp::VariantInit:
-      return handleVariantInit(ctx, stmt);
-    default:
-      break;
   }
 }
 

@@ -1,0 +1,104 @@
+primitives:
+  - name: IntType
+    cpp_kind: "i32"
+    is_reference: false
+    is_needs_arc: false
+  - name: BoolType
+    cpp_kind: "i1"
+    is_reference: false
+    is_needs_arc: false
+  - name: UnitType
+    cpp_kind: "void"
+    is_reference: false
+    is_needs_arc: false
+  - name: StringType
+    cpp_kind: "string"
+    is_reference: true
+    is_needs_arc: true
+  - name: AnyType
+    cpp_kind: "any"
+    is_reference: true
+    is_needs_arc: false
+  - name: UnknownType
+    cpp_kind: "unknown"
+    is_reference: false
+    is_needs_arc: false
+  - name: PtrType
+    cpp_kind: "ptr"
+    is_reference: true
+    is_needs_arc: false
+
+composites:
+  - name: StructType
+    json_kind: "struct"
+    properties:
+      - name: Name
+        type: string
+      - name: Fields
+        type: "[]StructField"
+      - name: IsReprC
+        type: bool
+
+  - name: SumType
+    json_kind: "sum_type"
+    properties:
+      - name: BaseName
+        type: string
+      - name: Variants
+        type: "[]SumVariant"
+      - name: TypeArgs
+        type: "[]Type"
+
+containers:
+  - name: ArrayType
+    json_kind: "array"
+    is_needs_arc: false
+    properties:
+      - name: Base
+        type: Type
+      - name: Size
+        type: int
+  - name: ViewType
+    json_kind: "view"
+    is_needs_arc: false
+    properties:
+      - name: Base
+        type: Type
+  - name: VectorType
+    json_kind: "vector"
+    is_needs_arc: true
+    properties:
+      - name: Base
+        type: Type
+  - name: MapType
+    json_kind: "map"
+    is_needs_arc: true
+    properties:
+      - name: Key
+        type: Type
+      - name: Value
+        type: Type
+  - name: FutureType
+    json_kind: "future"
+    is_needs_arc: true
+    properties:
+      - name: Base
+        type: Type
+
+helpers:
+  - name: StructField
+    properties:
+      - name: Name
+        type: string
+      - name: Type
+        type: Type
+  - name: SumVariant
+    properties:
+      - name: Name
+        type: string
+      - name: Discriminant
+        type: int
+      - name: TupleTypes
+        type: "[]Type"
+      - name: Fields
+        type: "[]StructField"

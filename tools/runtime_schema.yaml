@@ -1,0 +1,120 @@
+# ============================================================================
+# MAML Runtime ABI Single Source of Truth
+# ============================================================================
+
+types:
+  - alias: "SizeT"
+    go_type: "IntType{}" # MAML AST Type
+    cpp_type: "llvm::Type::getInt64Ty(ctx.Context)"
+    zig_type: "usize"
+  - alias: "Ptr"
+    go_type: "AnyType{}"
+    cpp_type: "llvm::PointerType::getUnqual(ctx.Context)"
+    zig_type: "?*anyopaque"
+  - alias: "i64"
+    go_type: "IntType{}"
+    cpp_type: "llvm::Type::getInt64Ty(ctx.Context)"
+    zig_type: "i64"
+  - alias: "u32"
+    go_type: "IntType{}"
+    cpp_type: "llvm::Type::getInt32Ty(ctx.Context)"
+    zig_type: "u32"
+  - alias: "i32"
+    go_type: "IntType{}"
+    cpp_type: "llvm::Type::getInt32Ty(ctx.Context)"
+    zig_type: "i32"
+  - alias: "i8"
+    go_type: "IntType{}"
+    cpp_type: "llvm::Type::getInt8Ty(ctx.Context)"
+    zig_type: "u8"
+  - alias: "bool"
+    go_type: "BoolType{}"
+    cpp_type: "llvm::Type::getInt1Ty(ctx.Context)"
+    zig_type: "bool"
+  - alias: "void"
+    go_type: "UnitType{}"
+    cpp_type: "llvm::Type::getVoidTy(ctx.Context)"
+    zig_type: "void"
+  - alias: "ArcHook"
+    go_type: "AnyType{}"
+    cpp_type: "llvm::PointerType::getUnqual(ctx.Context)"
+    zig_type: "?*const fn (?*anyopaque) callconv(.c) void"
+
+functions:
+  # --- Memory & ARC ---
+  - symbol: "maml_alloc"
+    args: ["SizeT"]
+    return: "Ptr"
+  - symbol: "maml_free"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_retain"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_release"
+    args: ["Ptr"]
+    return: "void"
+
+  # --- Vector Operations ---
+  - symbol: "maml_vec_create"
+    args: ["u32", "ArcHook", "ArcHook"]
+    return: "Ptr"
+  - symbol: "maml_vec_push"
+    args: ["Ptr", "Ptr"]
+    return: "void"
+  - symbol: "maml_vec_set"
+    args: ["Ptr", "u32", "Ptr"]
+    return: "void"
+  - symbol: "maml_vec_get"
+    args: ["Ptr", "u32"]
+    return: "Ptr"
+  - symbol: "maml_vec_len"
+    args: ["Ptr"]
+    return: "u32"
+
+  # --- Map Operations ---
+  - symbol: "maml_map_create"
+    args: ["u32", "i8", "ArcHook", "ArcHook", "ArcHook", "ArcHook"]
+    return: "Ptr"
+  - symbol: "maml_map_put"
+    args: ["Ptr", "u32", "Ptr", "u32", "i32", "Ptr"]
+    return: "void"
+  - symbol: "maml_map_get"
+    args: ["Ptr", "u32", "Ptr", "u32"]
+    return: "Ptr"
+  - symbol: "maml_map_delete"
+    args: ["Ptr", "u32", "Ptr", "u32", "i32"]
+    return: "void"
+  - symbol: "maml_map_len"
+    args: ["Ptr"]
+    return: "u32"
+
+  # --- String Operations ---
+  - symbol: "maml_str_hash"
+    args: ["Ptr", "u32"]
+    return: "u32"
+  - symbol: "maml_str_eq"
+    args: ["Ptr", "u32", "Ptr", "u32"]
+    return: "i32"
+
+  # --- Coroutine Executor ---
+  - symbol: "maml_coro_resume_helper"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_coro_done_helper"
+    args: ["Ptr"]
+    return: "bool"
+  - symbol: "maml_coro_destroy_helper"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_spawn_task"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_run_executor"
+    args: []
+    return: "void"
+
+  # --- IO Functions ---
+  - symbol: "puts"
+    args: ["Ptr"]
+    return: "i32"

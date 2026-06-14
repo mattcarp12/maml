@@ -14,12 +14,20 @@ all: codegen frontend backend runtime
 
 # 0. Single Source of Truth Code Generation
 codegen:
+	@echo "==> Running Types Codegen..."
+	@go run frontend/types/gen_types.go
 	@echo "==> Running AST Codegen..."
-	@python3 frontend/ast/generate_ast.py
+	@go run frontend/ast/gen_ast.go
 	@echo "==> Running TAST Codegen..."
-	@python3 frontend/tast/generate_tast.py
-	@echo "==> Running Single Source of Truth Codegen..."
-	@python3 tools/codegen.py
+	@go run frontend/tast/gen_tast.go
+	@echo "==> Running HIR Codegen..."
+	@go run frontend/hir/gen_hir.go
+	@echo "==> Running MIR Go Codegen..."
+	@go run frontend/mir/gen_mir.go
+	@echo "==> Running MIR C++ Codegen..."
+	@go run frontend/mir/gen_cpp_mir.go -dir=backend/include/mir/
+	@echo "==> Running Runtime Codegen..."
+	@go run tools/gen_runtime.go
 
 # 1. Build the Go Compiler Frontend
 frontend: codegen

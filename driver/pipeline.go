@@ -11,6 +11,7 @@ import (
 
 	"github.com/mattcarp12/maml/frontend"
 	"github.com/mattcarp12/maml/frontend/hir"
+	"github.com/mattcarp12/maml/frontend/layout"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -27,6 +28,8 @@ type Config struct {
 	OutputPath string
 	PrintIR    bool
 	RuntimeLib string
+	Sanitize   bool
+	Target     layout.Target
 }
 
 type Pipeline struct {
@@ -37,6 +40,7 @@ func New(cfg Config) *Pipeline {
 	if cfg.RuntimeLib == "" {
 		cfg.RuntimeLib = DefaultRuntimeLib
 	}
+	cfg.Target = *layout.DefaultTarget
 	return &Pipeline{cfg: cfg}
 }
 
@@ -57,7 +61,7 @@ func (p *Pipeline) Build(srcPath string) error {
 	}
 
 	// 2. Serialize MIR to JSON bytes in-memory
-	mirBytes, err := mir.MarshalProgram(res.MIR)
+	mirBytes, err := mir.MarshalProgram(res.MIR, &p.cfg.Target)
 	if err != nil {
 		return fmt.Errorf("failed to serialize MIR: %w", err)
 	}
@@ -109,6 +113,11 @@ func (p *Pipeline) Build(srcPath string) error {
 		"-Wl,-z,noexecstack",
 		"-o", p.cfg.OutputPath,
 		"-lpthread", "-ldl", "-lm",
+	}
+
+	if p.cfg.Sanitize {
+		// Include -g and -fno-omit-frame-pointer for readable stack traces
+		args = append(args, "-fsanitize=address", "-g", "-fno-omit-frame-pointer")
 	}
 
 	clangCmd := exec.Command("clang++", args...)
@@ -224,7 +233,7 @@ func (p *Pipeline) DumpMIR(srcPath string) ([]byte, error) {
 		return nil, err
 	}
 
-	return mir.MarshalProgram(res.MIR)
+	return mir.MarshalProgram(res.MIR, &p.cfg.Target)
 }
 
 // DumpLLVM translates the target file, invokes the C++ backend,
@@ -241,7 +250,7 @@ func (p *Pipeline) DumpLLVM(srcPath string) ([]byte, error) {
 	}
 
 	// 2. Serialize MIR to JSON bytes in-memory
-	mirBytes, err := mir.MarshalProgram(res.MIR)
+	mirBytes, err := mir.MarshalProgram(res.MIR, &p.cfg.Target)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize MIR: %w", err)
 	}

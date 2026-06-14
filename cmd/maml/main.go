@@ -55,10 +55,12 @@ func printUsage() {
 	fmt.Println("  dump-llvm  Parse file, invoke backend, and output LLVM IR to stdout")
 	fmt.Println("  dump-all    Dump source and all IR phases into a single file")
 }
+
 func buildCmd(args []string) {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	out := fs.String("out", "maml_app", "Output executable name")
 	printIR := fs.Bool("printir", false, "Print LLVM IR")
+	sanitize := fs.Bool("sanitize", false, "Enable AddressSanitizer") // <-- Add flag
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -70,6 +72,7 @@ func buildCmd(args []string) {
 	pipeline := driver.New(driver.Config{
 		OutputPath: *out,
 		PrintIR:    *printIR,
+		Sanitize:   *sanitize, // <-- Pass to config
 	})
 
 	if err := pipeline.Build(file); err != nil {
@@ -84,6 +87,7 @@ func buildCmd(args []string) {
 func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	printIR := fs.Bool("printir", false, "Print LLVM IR")
+	sanitize := fs.Bool("sanitize", false, "Enable AddressSanitizer") // <-- Add flag
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -91,13 +95,15 @@ func runCmd(args []string) {
 		os.Exit(1)
 	}
 
-	pipeline := driver.New(driver.Config{PrintIR: *printIR})
+	pipeline := driver.New(driver.Config{
+		PrintIR:  *printIR,
+		Sanitize: *sanitize, // <-- Pass to config
+	})
 	if err := pipeline.Run(fs.Arg(0)); err != nil {
 		fmt.Printf("❌ Run failed: %v\n", err)
 		os.Exit(1)
 	}
 }
-
 func checkCmd(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: maml check <file.maml>")

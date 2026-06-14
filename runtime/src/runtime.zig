@@ -4,6 +4,11 @@ extern "C" fn mi_malloc(size: usize) ?*anyopaque;
 extern "C" fn mi_realloc(p: ?*anyopaque, size: usize) ?*anyopaque;
 extern "C" fn mi_free(p: ?*anyopaque) void;
 
+// Force the compiler to evaluate the ABI assertions at comptime
+comptime {
+    _ = @import("abi_assertions.zig");
+}
+
 // -----------------------------------------------------------------------------
 // ARC Header
 // -----------------------------------------------------------------------------
@@ -14,7 +19,7 @@ const ArcHeader = extern struct {
     destructor: ?*const fn (?*anyopaque) void,
 };
 
-export fn maml_alloc(size: usize) ?*anyopaque {
+pub export fn maml_alloc(size: usize) ?*anyopaque {
     const total_size = @sizeOf(ArcHeader) + size;
     const raw_ptr = mi_malloc(total_size) orelse return null;
 
@@ -30,14 +35,14 @@ export fn maml_alloc(size: usize) ?*anyopaque {
 // TODO - Teach LLVM how to optimize arc calls - special llvm optimization pass
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-export fn maml_retain(data_ptr: ?*anyopaque) void {
+pub export fn maml_retain(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
     const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
     const header = @as(*ArcHeader, @ptrCast(@alignCast(raw_bytes - @sizeOf(ArcHeader))));
     header.count += 1;
 }
 
-export fn maml_release(data_ptr: ?*anyopaque) void {
+pub export fn maml_release(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
     const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
     const header_ptr = raw_bytes - @sizeOf(ArcHeader);
@@ -54,7 +59,7 @@ export fn maml_release(data_ptr: ?*anyopaque) void {
     }
 }
 
-export fn maml_free(data_ptr: ?*anyopaque) void {
+pub export fn maml_free(data_ptr: ?*anyopaque) void {
     if (data_ptr == null) return;
     const raw_bytes = @as([*]u8, @ptrCast(data_ptr.?));
     const base_ptr = raw_bytes - @sizeOf(ArcHeader);
@@ -78,7 +83,7 @@ const VecHeader = extern struct {
     elem_release: ?*const fn (?*anyopaque) callconv(.c) void,
 };
 
-export fn maml_vec_grow(
+pub export fn maml_vec_grow(
     raw_ptr: ?*anyopaque,
     cap_ptr: *u32,
     item_size: u32,
@@ -93,7 +98,7 @@ export fn maml_vec_grow(
     return new_raw;
 }
 
-export fn maml_vec_create(
+pub export fn maml_vec_create(
     elem_size: u32,
     elem_retain: ?*const fn (?*anyopaque) callconv(.c) void,
     elem_release: ?*const fn (?*anyopaque) callconv(.c) void,
@@ -121,7 +126,7 @@ export fn maml_vec_create(
     return raw_ptr;
 }
 
-export fn maml_vec_push(vec_ptr: ?*anyopaque, item_ptr: ?*anyopaque) void {
+pub export fn maml_vec_push(vec_ptr: ?*anyopaque, item_ptr: ?*anyopaque) void {
     if (vec_ptr == null or item_ptr == null) return;
     var header = @as(*VecHeader, @ptrCast(@alignCast(vec_ptr.?)));
 
@@ -152,7 +157,7 @@ export fn maml_vec_push(vec_ptr: ?*anyopaque, item_ptr: ?*anyopaque) void {
     }
 }
 
-export fn maml_vec_set(vec_ptr: ?*anyopaque, index: u32, item_ptr: ?*anyopaque) void {
+pub export fn maml_vec_set(vec_ptr: ?*anyopaque, index: u32, item_ptr: ?*anyopaque) void {
     if (vec_ptr == null or item_ptr == null) return;
     const header = @as(*VecHeader, @ptrCast(@alignCast(vec_ptr.?)));
 
@@ -178,7 +183,7 @@ export fn maml_vec_set(vec_ptr: ?*anyopaque, index: u32, item_ptr: ?*anyopaque) 
     }
 }
 
-export fn maml_vec_get(vec_ptr: ?*anyopaque, index: u32) ?*anyopaque {
+pub export fn maml_vec_get(vec_ptr: ?*anyopaque, index: u32) ?*anyopaque {
     if (vec_ptr == null) return null;
     const header = @as(*VecHeader, @ptrCast(@alignCast(vec_ptr.?)));
 
@@ -210,7 +215,7 @@ fn maml_vec_destructor(data_ptr: ?*anyopaque) void {
     }
 }
 
-export fn maml_vec_len(vec_ptr: ?*anyopaque) u32 {
+pub export fn maml_vec_len(vec_ptr: ?*anyopaque) u32 {
     if (vec_ptr == null) return 0;
     const header = @as(*VecHeader, @ptrCast(@alignCast(vec_ptr.?)));
     return header.len;
@@ -227,7 +232,7 @@ const MapHeader = extern struct {
     cap: u32,
     val_size: u32,
     is_string_key: u8,
-    _pad: [3]u8,
+    _pad: [7]u8,
 
     // Type-Erased ARC Hooks
     key_retain: ?*const fn (?*anyopaque) callconv(.c) void,
@@ -237,18 +242,11 @@ const MapHeader = extern struct {
 };
 
 // --- Dynamic Map Entry Layout Helpers ---
-// Layout (Int Key):    [occupied: 8][hash: 8][value: val_size]
-// Layout (String Key): [occupied: 8][hash: 8][str_ptr: 8][str_len: 8][value: val_size]
+// Layout (Int Key):    [occupied: u32][hash: u32][value: val_size] (8 bytes header)
+// Layout (String Key): [occupied: u32][hash: u32][str_ptr: 8][str_len: u32][_pad: u32][value: val_size] (24 bytes header)
 
-// Calculates the fully 8-byte aligned size/stride of a map entry
-inline fn entrySize(val_size: u32, is_str: bool) usize {
-    const header_offset: usize = if (is_str) 32 else 16;
-    const raw_size = header_offset + @as(usize, val_size);
-
-    // Round up to nearest multiple of 8.
-    // This padding guarantees the NEXT entry in the contiguous array
-    // starts on an 8-byte boundary, preventing @alignCast panics.
-    return (raw_size + 7) & ~@as(usize, 7);
+inline fn entryOccupied(entry: [*]u8) *u32 {
+    return @as(*u32, @ptrCast(@alignCast(entry)));
 }
 
 // Helper to step to the Nth entry in the array
@@ -257,25 +255,27 @@ inline fn entryAt(entries: [*]u8, index: usize, val_size: u32, is_str: bool) [*]
     return entries + (index * stride);
 }
 
-inline fn entryOccupied(entry: [*]u8) *u64 {
-    return @as(*u64, @ptrCast(@alignCast(entry)));
-}
-
-inline fn entryKeyHash(entry: [*]u8) *u64 {
-    return @as(*u64, @ptrCast(@alignCast(entry + 8)));
+inline fn entryKeyHash(entry: [*]u8) *u32 {
+    return @as(*u32, @ptrCast(@alignCast(entry + 4)));
 }
 
 inline fn entryKeyStringPtr(entry: [*]u8) *?[*]const u8 {
-    return @as(*?[*]const u8, @ptrCast(@alignCast(entry + 16)));
+    return @as(*?[*]const u8, @ptrCast(@alignCast(entry + 8)));
 }
 
 inline fn entryKeyStringLen(entry: [*]u8) *u32 {
-    return @as(*u32, @ptrCast(@alignCast(entry + 24)));
+    return @as(*u32, @ptrCast(@alignCast(entry + 16)));
 }
 
 inline fn entryValuePtr(entry: [*]u8, is_str: bool) [*]u8 {
-    const header_offset: usize = if (is_str) 32 else 16;
+    const header_offset: usize = if (is_str) 24 else 8;
     return entry + header_offset;
+}
+
+inline fn entrySize(val_size: u32, is_str: bool) usize {
+    const header_offset: usize = if (is_str) 24 else 8;
+    const raw_size = header_offset + @as(usize, val_size);
+    return (raw_size + 7) & ~@as(usize, 7); // Maintain 8-byte alignment
 }
 
 const INITIAL_MAP_CAP: u32 = 16;
@@ -308,7 +308,7 @@ fn maml_map_destructor(data_ptr: ?*anyopaque) void {
     }
 }
 
-export fn maml_map_create(
+pub export fn maml_map_create(
     val_size: u32,
     is_string_key: u8,
     key_retain: ?*const fn (?*anyopaque) callconv(.c) void,
@@ -329,7 +329,7 @@ export fn maml_map_create(
     header.cap = 16; // Default initial capacity
     header.val_size = val_size;
     header.is_string_key = is_string_key;
-    header._pad = [3]u8{ 0, 0, 0 };
+    header._pad = [7]u8{ 0, 0, 0, 0, 0, 0, 0 };
 
     header.key_retain = key_retain;
     header.key_release = key_release;
@@ -374,67 +374,67 @@ fn mapGrow(header: *MapHeader) void {
     header.tombstone_count = 0;
 }
 
-export fn maml_map_put(
+pub export fn maml_map_put(
     map_ptr: ?*anyopaque,
-    key_hash: u64,
+    key_hash: u32,
     str_key_ptr: ?*anyopaque,
     str_key_len: u32,
-    int_key: i64,
+    int_key: i32,
     val_ptr: ?*anyopaque,
 ) void {
     if (map_ptr == null or val_ptr == null) return;
     var header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
- 
+
     // Check physical load factor (active elements + tombstones)
     const physical_load = header.count + header.tombstone_count;
     if ((physical_load + 1) * 4 >= header.cap * 3) {
         mapGrow(header); // Note: Make sure mapGrow resets tombstone_count to 0!
     }
- 
+
     // Allocate initial entries if needed
     if (header.entries == null) {
         mapGrow(header);
     }
- 
+
     const entries = @as([*]u8, @ptrCast(header.entries.?));
     const is_str = header.is_string_key == 1;
- 
-    var slot = @as(u32, @truncate(key_hash)) & (header.cap - 1);
+
+    var slot = key_hash & (header.cap - 1);
     var first_tombstone: ?u32 = null;
     var probes: u32 = 0;
- 
+
     while (probes < header.cap) : (probes += 1) {
         const entry = entryAt(entries, slot, header.val_size, is_str);
         const occupied = entryOccupied(entry);
- 
+
         if (occupied.* == 0) {
             // Case 1: Insert into Empty Slot (or recycled Tombstone)
             const target_slot = if (first_tombstone) |t| t else slot;
             const target_entry = entryAt(entries, target_slot, header.val_size, is_str);
- 
+
             entryOccupied(target_entry).* = 1;
             entryKeyHash(target_entry).* = key_hash;
- 
+
             if (is_str) {
                 entryKeyStringPtr(target_entry).* = @as(?[*]const u8, @ptrCast(str_key_ptr));
                 entryKeyStringLen(target_entry).* = str_key_len;
             }
             // For integer keys, key_hash == int_key (set above), no separate storage needed.
- 
+
             // Copy value bytes
             @memcpy(entryValuePtr(target_entry, is_str)[0..header.val_size], @as([*]u8, @ptrCast(val_ptr))[0..header.val_size]);
- 
+
             header.count += 1;
             if (first_tombstone != null) {
                 header.tombstone_count -= 1; // Recycled a tombstone
             }
- 
+
             // 🌟 ARC: The Map takes ownership of both the key and the value!
             if (header.key_retain) |retain| {
                 if (is_str) retain(@ptrCast(str_key_ptr));
             }
             if (header.val_retain) |retain| retain(@ptrCast(val_ptr));
- 
+
             return;
         } else if (occupied.* == 2) {
             if (first_tombstone == null) first_tombstone = slot;
@@ -451,18 +451,18 @@ export fn maml_map_put(
                         match = std.mem.eql(u8, e_slice, s_slice);
                     }
                 } else {
-                    match = (entryKeyHash(entry).* == @as(u64, @bitCast(int_key)));
+                    match = (entryKeyHash(entry).* == @as(u32, @bitCast(int_key)));
                 }
             }
- 
+
             if (match) {
                 // 🌟 ARC: Overwriting an existing value. Release the old, retain the new.
                 if (header.val_release) |release| {
                     release(@ptrCast(entryValuePtr(entry, is_str)));
                 }
- 
+
                 @memcpy(entryValuePtr(entry, is_str)[0..header.val_size], @as([*]u8, @ptrCast(val_ptr))[0..header.val_size]);
- 
+
                 if (header.val_retain) |retain| retain(@ptrCast(val_ptr));
                 return;
             }
@@ -471,10 +471,10 @@ export fn maml_map_put(
     }
 }
 
-export fn maml_map_get(
+pub export fn maml_map_get(
     map_ptr: ?*anyopaque,
     key_hash: u32,
-    str_key_ptr: ?[*]const u8,
+    str_key_ptr: ?*anyopaque,
     str_key_len: u32,
 ) ?*anyopaque {
     if (map_ptr == null) return null;
@@ -493,15 +493,20 @@ export fn maml_map_get(
 
         if (occupied.* == 0) return null; // Hit an empty slot, key isn't here
 
-        if (occupied.* == 1 and entryKeyHash(entry).* == @as(u64, key_hash)) {
+        if (occupied.* == 1 and entryKeyHash(entry).* == key_hash) {
             var match = true;
             if (is_str) {
                 const len = entryKeyStringLen(entry).*;
                 if (len != str_key_len) {
                     match = false;
                 } else if (len > 0) {
-                    // Deep byte equality check
-                    if (!std.mem.eql(u8, entryKeyStringPtr(entry).*.?[0..len], str_key_ptr.?[0..len])) {
+                    // 1. Unpack the entry pointer (it is already typed as ?[*]const u8 via the helper)
+                    const e_slice = entryKeyStringPtr(entry).*.?[0..len];
+
+                    // 2. Explicitly cast the anyopaque parameter to a many-item pointer before slicing
+                    const s_slice = @as([*]const u8, @ptrCast(str_key_ptr.?))[0..len];
+
+                    if (!std.mem.eql(u8, e_slice, s_slice)) {
                         match = false;
                     }
                 }
@@ -518,12 +523,12 @@ export fn maml_map_get(
     return null;
 }
 
-export fn maml_map_delete(
+pub export fn maml_map_delete(
     map_ptr: ?*anyopaque,
-    key_hash: u64,
+    key_hash: u32,
     str_key_ptr: ?*anyopaque,
     str_key_len: u32,
-    int_key: i64,
+    int_key: i32,
 ) void {
     if (map_ptr == null) return;
     var header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
@@ -532,7 +537,7 @@ export fn maml_map_delete(
     const entries = @as([*]u8, @ptrCast(header.entries.?));
     const is_str = header.is_string_key == 1;
 
-    var slot = @as(u32, @truncate(key_hash)) & (header.cap - 1);
+    var slot = key_hash & (header.cap - 1);
     var probes: u32 = 0;
 
     while (probes < header.cap) : (probes += 1) {
@@ -544,15 +549,14 @@ export fn maml_map_delete(
         if (occupied.* == 1 and entryKeyHash(entry).* == key_hash) {
             var match = false;
             if (is_str) {
-                const e_ptr = entryKeyStringPtr(entry).*;
                 const e_len = entryKeyStringLen(entry).*;
                 if (e_len == str_key_len) {
-                    const e_slice = @as([*]u8, @constCast(e_ptr.?))[0..e_len];
-                    const s_slice = @as([*]u8, @ptrCast(str_key_ptr.?))[0..str_key_len];
+                    const e_slice = entryKeyStringPtr(entry).*.?[0..e_len];
+                    const s_slice = @as([*]const u8, @ptrCast(str_key_ptr.?))[0..str_key_len];
                     match = std.mem.eql(u8, e_slice, s_slice);
                 }
             } else {
-                match = (entryKeyHash(entry).* == @as(u64, @bitCast(int_key)));
+                match = (entryKeyHash(entry).* == @as(u32, @bitCast(int_key)));
             }
 
             if (match) {
@@ -575,28 +579,36 @@ export fn maml_map_delete(
     }
 }
 
-export fn maml_map_len(map_ptr: ?*anyopaque) u32 {
+pub export fn maml_map_len(map_ptr: ?*anyopaque) u32 {
     if (map_ptr == null) return 0;
     const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
     return header.count;
-}
-
-export fn maml_str_hash(ptr: [*]const u8, len: u32) u32 {
-    var hash: u32 = 5381;
-    var i: u32 = 0;
-    while (i < len) : (i += 1) {
-        hash = (hash *% 33) +% @as(u32, ptr[i]);
-    }
-    return hash;
 }
 
 // -----------------------------------------------------------------------------
 // String Runtime
 // -----------------------------------------------------------------------------
 
-export fn maml_str_eq(a_ptr: [*]const u8, a_len: u32, b_ptr: [*]const u8, b_len: u32) i32 {
+pub export fn maml_str_hash(ptr: ?*anyopaque, len: u32) u32 {
+    if (ptr == null or len == 0) return 0;
+    const bytes = @as([*]const u8, @ptrCast(ptr.?));
+
+    var hash: u32 = 5381;
+    var i: u32 = 0;
+    while (i < len) : (i += 1) {
+        hash = (hash *% 33) +% @as(u32, bytes[i]);
+    }
+    return hash;
+}
+
+pub export fn maml_str_eq(a_ptr: ?*anyopaque, a_len: u32, b_ptr: ?*anyopaque, b_len: u32) i32 {
     if (a_len != b_len) return 0;
-    return if (std.mem.eql(u8, a_ptr[0..a_len], b_ptr[0..b_len])) 1 else 0;
+    if (a_len == 0) return 1;
+    if (a_ptr == null or b_ptr == null) return 0;
+
+    const a_bytes = @as([*]const u8, @ptrCast(a_ptr.?))[0..a_len];
+    const b_bytes = @as([*]const u8, @ptrCast(b_ptr.?))[0..b_len];
+    return if (std.mem.eql(u8, a_bytes, b_bytes)) 1 else 0;
 }
 
 // -----------------------------------------------------------------------------
@@ -604,9 +616,9 @@ export fn maml_str_eq(a_ptr: [*]const u8, a_len: u32, b_ptr: [*]const u8, b_len:
 // -----------------------------------------------------------------------------
 
 // These helpers will be generated dynamically by our LLVM Codegen backend!
-extern "C" fn maml_coro_resume_helper(hdl: ?*anyopaque) void;
-extern "C" fn maml_coro_done_helper(hdl: ?*anyopaque) bool;
-extern "C" fn maml_coro_destroy_helper(hdl: ?*anyopaque) void;
+pub extern "C" fn maml_coro_resume_helper(hdl: ?*anyopaque) void;
+pub extern "C" fn maml_coro_done_helper(hdl: ?*anyopaque) bool;
+pub extern "C" fn maml_coro_destroy_helper(hdl: ?*anyopaque) void;
 
 const TaskNode = struct {
     hdl: ?*anyopaque,
@@ -616,7 +628,7 @@ const TaskNode = struct {
 var run_queue_head: ?*TaskNode = null;
 var run_queue_tail: ?*TaskNode = null;
 
-export fn maml_spawn_task(hdl: ?*anyopaque) void {
+pub export fn maml_spawn_task(hdl: ?*anyopaque) void {
     if (hdl == null) return;
 
     const node_ptr = mi_malloc(@sizeOf(TaskNode)) orelse @panic("OOM in task spawn");
@@ -633,7 +645,7 @@ export fn maml_spawn_task(hdl: ?*anyopaque) void {
     }
 }
 
-export fn maml_run_executor() void {
+pub export fn maml_run_executor() void {
     // Round-robin cooperative polling loop
     while (run_queue_head != null) {
         // 1. Pop the next task off the queue
@@ -664,3 +676,11 @@ export fn maml_run_executor() void {
         }
     }
 }
+
+// -----------------------------------------------------------------------------
+// I/O Runtime
+// -----------------------------------------------------------------------------
+
+// Bind directly to libc's puts.
+// The 'pub' keyword ensures abi_assertions.zig can see it.
+pub extern "C" fn puts(s: ?*anyopaque) i32;
