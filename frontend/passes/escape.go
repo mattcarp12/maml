@@ -2,6 +2,7 @@ package passes
 
 import (
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/types"
 )
 
 type EscapeState int
@@ -45,12 +46,9 @@ func AnalyzeEscape(g *mir.Graph) map[string]EscapeState {
 
 func (a *EscapeAnalyzer) analyzeTerminator(term mir.Terminator) bool {
 	changed := false
-
-	// Only variables returned from the function that are reference types
-	// (or contain references) need to escape to the heap. Primitive copies do not.
 	if ret, ok := term.(*mir.ReturnTerminator); ok && ret.Value != nil {
 		if reg, isReg := ret.Value.(*mir.Register); isReg {
-			if reg.Type != nil && reg.Type.IsReferenceType() {
+			if !isPrimitive(reg.Type) {
 				if a.EscapeMap[reg.Name] != StateHeap {
 					a.EscapeMap[reg.Name] = StateHeap
 					changed = true
@@ -58,8 +56,18 @@ func (a *EscapeAnalyzer) analyzeTerminator(term mir.Terminator) bool {
 			}
 		}
 	}
-
 	return changed
+}
+
+func isPrimitive(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.(type) {
+	case types.IntType, types.BoolType, types.UnitType:
+		return true
+	}
+	return false
 }
 
 func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
@@ -136,15 +144,34 @@ func (a *EscapeAnalyzer) analyzeInstruction(inst mir.Instruction) bool {
 			}
 		}
 
+	case *mir.SliceInst:
+		if a.EscapeMap[i.Dst] == StateHeap {
+			if a.propagateFromOperand(i.Left) {
+				changed = true
+			}
+		}
+
+	case *mir.FieldReadInst:
+		if a.EscapeMap[i.Dst] == StateHeap {
+			if a.propagateFromOperand(i.Object) {
+				changed = true
+			}
+		}
+
+	case *mir.LoadPtrInst:
+		if a.EscapeMap[i.Dst] == StateHeap {
+			if a.propagateFromOperand(i.Ptr) {
+				changed = true
+			}
+		}
+
 	// -------------------------------------------------------------------------
 	// Function Boundaries
 	// -------------------------------------------------------------------------
 	case *mir.CallInst:
-		// Conservative boundary: Any reference type passed to an external
-		// function is assumed to escape (unless intra-procedural analysis proves otherwise).
 		for _, arg := range i.Arguments {
 			if reg, isReg := arg.Argument.(*mir.Register); isReg {
-				if reg.Type != nil && reg.Type.IsReferenceType() {
+				if !isPrimitive(reg.Type) {
 					if a.EscapeMap[reg.Name] != StateHeap {
 						a.EscapeMap[reg.Name] = StateHeap
 						changed = true

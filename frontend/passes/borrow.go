@@ -111,25 +111,29 @@ func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateO
 		return merged
 	}
 
-	firstPredState := stateOut[preds[0]]
-	for k, v := range firstPredState.Bindings {
-		merged.Bindings[k] = &BindingState{
-			Invalidated: v.Invalidated,
-			MutLockedBy: v.MutLockedBy,
+	// Pass 1: collect the union of all binding keys across every predecessor.
+	for _, p := range preds {
+		for k := range stateOut[p].Bindings {
+			if _, exists := merged.Bindings[k]; !exists {
+				merged.Bindings[k] = &BindingState{}
+			}
 		}
 	}
 
-	for i := 1; i < len(preds); i++ {
-		predState := stateOut[preds[i]]
-		for k, mergedVal := range merged.Bindings {
+	// Pass 2: for every key in the union, OR together the Invalidated flag
+	// across all predecessors. If a predecessor doesn't define the key at all,
+	// treat that as Invalidated=true (the variable wasn't live on that path).
+	// MutLockedBy is taken from the first predecessor that has a non-empty lock.
+	for k, mergedVal := range merged.Bindings {
+		for _, p := range preds {
+			predState := stateOut[p]
 			if predVal, exists := predState.Bindings[k]; exists {
 				mergedVal.Invalidated = mergedVal.Invalidated || predVal.Invalidated
-
-				// If either path locks it, it remains locked
-				if predVal.MutLockedBy != "" {
+				if mergedVal.MutLockedBy == "" && predVal.MutLockedBy != "" {
 					mergedVal.MutLockedBy = predVal.MutLockedBy
 				}
 			} else {
+				// Variable not defined on this incoming path → conservatively invalidated.
 				mergedVal.Invalidated = true
 			}
 		}
@@ -180,55 +184,66 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		}
 	}
 
+	// HELPER: Reassigning a variable revives it from an Invalidated (moved) state.
+	initOrRevive := func(name string) {
+		if binding, exists := state.Bindings[name]; exists {
+			binding.Invalidated = false
+		} else {
+			state.Bindings[name] = &BindingState{}
+		}
+	}
+
 	switch i := inst.(type) {
 	case *mir.TempDeclInst:
-		state.Bindings[i.Name] = &BindingState{}
+		initOrRevive(i.Name)
+
 	case *mir.RefAllocInst:
-		state.Bindings[i.Dst] = &BindingState{}
+		initOrRevive(i.Dst)
 
 	case *mir.AssignInst:
 		a.checkOperandAccess(i.RValue, state, pos)
 		releaseLocksHeldBy(i.Dst)
-		state.Bindings[i.Dst] = &BindingState{}
+		initOrRevive(i.Dst)
 
 	case *mir.MutBorrowInst:
 		a.checkStringAccess(i.Src, state, pos)
 		releaseLocksHeldBy(i.Dst)
-
 		if binding, exists := state.Bindings[i.Src]; exists {
-			binding.MutLockedBy = i.Dst // Lock established!
+			binding.MutLockedBy = i.Dst
 		}
-		state.Bindings[i.Dst] = &BindingState{}
+		initOrRevive(i.Dst)
 
-	// Container Mutations (e.g. Arrays, Structs)
-	// You cannot mutate a container if ANY part of it is currently borrowed
+	case *mir.CopyInst:
+		a.checkStringAccess(i.Src, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
 	case *mir.IndexAssignInst:
 		a.checkOperandAccess(i.Index, state, pos)
 		a.checkOperandAccess(i.Value, state, pos)
 		a.checkStringAccess(i.Target, state, pos)
+
 	case *mir.StructInitInst:
 		a.checkOperandAccess(i.Value, state, pos)
 		a.checkStringAccess(i.Dst, state, pos)
 
-	// Explicit Memory/Ownership Transfers
 	case *mir.MoveInst:
 		a.checkStringAccess(i.Src, state, pos)
 		releaseLocksHeldBy(i.Dst)
 
 		if binding, exists := state.Bindings[i.Src]; exists {
-			// IN-PLACE MOVE! The source is now dead.
 			if !isCompilerGenerated(i.Src) && !isCompilerGenerated(i.Dst) {
 				binding.Invalidated = true
 			}
 		}
-		state.Bindings[i.Dst] = &BindingState{}
+		initOrRevive(i.Dst)
 
-	// Other standard instructions...
 	case *mir.BinaryOpInst:
 		a.checkOperandAccess(i.Left, state, pos)
 		a.checkOperandAccess(i.Right, state, pos)
 		releaseLocksHeldBy(i.Dst)
-		state.Bindings[i.Dst] = &BindingState{}
+		initOrRevive(i.Dst)
+
 	case *mir.CallInst:
 		a.checkOperandAccess(i.Function, state, pos)
 		for _, arg := range i.Arguments {
@@ -236,7 +251,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		}
 		if i.Dst != "" && i.Dst != "_" {
 			releaseLocksHeldBy(i.Dst)
-			state.Bindings[i.Dst] = &BindingState{}
+			initOrRevive(i.Dst)
 		}
 	}
 }

@@ -27,6 +27,14 @@ func DefaultConfig() PassConfig {
 		ARC:        true,
 		SROA:       false, // Left false per Phase 2 Roadmap safety guidelines
 		Borrow:     true,
+
+		// Prune:      false,
+		// Escape:     false,
+		// AllocLower: false,
+		// Liveness:   false,
+		// ARC:        false,
+		// SROA:       false, // Left false per Phase 2 Roadmap safety guidelines
+		// Borrow:     false,
 	}
 }
 

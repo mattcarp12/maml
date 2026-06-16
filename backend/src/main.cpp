@@ -5,9 +5,9 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 
-#include "CodegenContext.h"
-#include "ProgramGenerator.h"
-#include "mir/mir_generated.hpp"
+#include "CodegenContext.hpp"
+#include "ProgramGenerator.hpp"
+#include "mir_generated.hpp"
 
 using json = nlohmann::json;
 

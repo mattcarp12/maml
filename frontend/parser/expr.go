@@ -196,19 +196,42 @@ func (p *Parser) parseIfExpression() ast.Expr {
 	if p.peekToken.Type == token.ELSE {
 		p.nextToken() // move curToken to 'else'
 
-		if !p.expectPeek(token.LBRACE) {
-			return nil
+		// Check for "else if" chaining
+		if p.peekToken.Type == token.IF {
+			p.nextToken() // step onto IF
+			innerIf := p.parseIfExpression()
+			if innerIf == nil {
+				return nil
+			}
+			// Wrap the inner if inside a block that yields its value
+			yieldStmt := &ast.YieldStmt{
+				Value: innerIf,
+				Pos_:  innerIf.Pos(),
+				End_:  innerIf.End(),
+			}
+			altBlock := &ast.BlockStmt{
+				Statements: []ast.Stmt{yieldStmt},
+				Pos_:       yieldStmt.Pos(),
+				End_:       yieldStmt.End(),
+			}
+			alternative = altBlock
+		} else {
+			// Normal else block
+			if !p.expectPeek(token.LBRACE) {
+				return nil
+			}
+			alternative = p.parseBlockStmt()
 		}
-		alternative = p.parseBlockStmt()
 	}
 
-	return &ast.IfExpr{
+	ifExpr := &ast.IfExpr{
 		Condition:   condition,
 		Consequence: consequence,
 		Alternative: alternative,
 		Pos_:        pos,
-		End_:        p.curEndPos(),
 	}
+	ifExpr.End_ = p.curEndPos()
+	return ifExpr
 }
 
 func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {

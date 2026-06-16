@@ -1,5 +1,4 @@
-#ifndef MAML_CODEGEN_CONTEXT_H
-#define MAML_CODEGEN_CONTEXT_H
+#pragma once
 
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
@@ -9,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace maml {
@@ -40,11 +40,14 @@ class CodegenContext {
   std::unique_ptr<llvm::IRBuilder<>> Builder;
   ErrorHandler Error;
 
-  FastMap<llvm::Type *> TypeCache;
   ViewMap<llvm::Value *> SymbolTable;
   std::vector<FastMap<llvm::Value *>> SymbolEnv;
   std::unordered_map<int, llvm::BasicBlock *> Blocks;
   std::vector<llvm::BasicBlock *> LoopExitStack;
+
+  std::unordered_set<std::string> HeapVars;
+  std::unordered_map<std::string, llvm::Type *> SymbolTypes;
+  llvm::Value *getMemoryBase(std::string_view name);
 
   CodegenContext(const std::string &moduleName);
   void pushScope();
@@ -53,5 +56,3 @@ class CodegenContext {
 };
 
 }  // namespace maml
-
-#endif

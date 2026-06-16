@@ -1,6 +1,6 @@
-#include "StmtGenerator.h"
+#include "StmtGenerator.hpp"
 
-#include "ExprGenerator.h"
+#include "ExprGenerator.hpp"
 
 namespace maml {
 

@@ -64,7 +64,7 @@ func main() {
 	}
 
 	goOut := flag.String("goOut", "frontend/types/", "output directory for types_generated.go")
-	cppOut := flag.String("cppOut", "backend/include/mir/", "output directory for types_generated.hpp")
+	cppOut := flag.String("cppOut", "backend/include/", "output directory for types_generated.hpp")
 	flag.Parse()
 
 	// Generate Go

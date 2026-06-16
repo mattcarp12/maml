@@ -18,7 +18,7 @@ import (
 //go:embed mir_schema.json
 var schemaData []byte
 
-//go:embed mir.tmpl
+//go:embed mir_go.tmpl
 var mirTemplate string
 
 // Map the JSON interfaces to their respective Go marker methods

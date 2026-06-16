@@ -1,47 +1,126 @@
-#include "ExprGenerator.h"
+#include "ExprGenerator.hpp"
 #include "RuntimeConstants.h"
-#include "TypeLowering.h"
+#include "TypeLowering.hpp"
 
 namespace maml {
 
 void handle(CodegenContext &ctx, const mir::TempDeclInst &inst) {
   llvm::Type *ty = llvmTypeFor(ctx, inst.type);
   if (ty->isVoidTy()) return;
+
+  // 1. Track the structural type for all downstream GEPs and Loads
+  ctx.SymbolTypes[inst.name] = ty;
+
   llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
   llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
-  llvm::AllocaInst *alloca = TmpBuilder.CreateAlloca(ty, nullptr, inst.name);
-  TmpBuilder.CreateStore(llvm::Constant::getNullValue(ty), alloca);
+
+  llvm::AllocaInst *alloca;
+  if (ctx.HeapVars.count(inst.name)) {
+    // 2. Variable escapes: allocate only a pointer to hold the heap address
+    llvm::Type *ptrTy = llvm::PointerType::getUnqual(ctx.Context);
+    alloca = TmpBuilder.CreateAlloca(ptrTy, nullptr, inst.name + "_ptr");
+    TmpBuilder.CreateStore(llvm::Constant::getNullValue(ptrTy), alloca);
+  } else {
+    // 3. Stack bound: allocate the full structure
+    alloca = TmpBuilder.CreateAlloca(ty, nullptr, inst.name);
+    TmpBuilder.CreateStore(llvm::Constant::getNullValue(ty), alloca);
+  }
   ctx.SymbolEnv.back()[inst.name] = alloca;
 }
 
 void handle(CodegenContext &ctx, const mir::AssignInst &inst) {
   llvm::Value *val = evaluateValue(ctx, inst.r_value);
-  llvm::Value *target = ctx.resolveSymbol(inst.dst);
-  if (!target) {
-    ctx.Error.fatal("Assignment to unknown variable: " + inst.dst);
-    return;
-  }
-  if (!val || val->getType()->isVoidTy()) return;
+  llvm::Value *target = ctx.getMemoryBase(inst.dst);  // Use Router
+  if (!target || !val || val->getType()->isVoidTy()) return;
   ctx.Builder->CreateStore(val, target);
 }
 
 void handle(CodegenContext &ctx, const mir::CopyInst &inst) {
-  llvm::Value *dstVal = ctx.resolveSymbol(inst.dst);
-  llvm::Value *srcVal = ctx.resolveSymbol(inst.src);
-  if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(srcVal)) {
-    llvm::Value *loaded = ctx.Builder->CreateLoad(srcAlloca->getAllocatedType(), srcAlloca);
-    ctx.Builder->CreateStore(loaded, dstVal);
-  } else if (srcVal) {
-    ctx.Builder->CreateStore(srcVal, dstVal);
+  llvm::Value *dstPtr = ctx.getMemoryBase(inst.dst);
+  llvm::Value *srcVal = ctx.getMemoryBase(inst.src);
+  if (!dstPtr || !srcVal) return;
+
+  // Check if the symbol is a true memory allocation, or an overwritten SSA value
+  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
+
+  if (srcIsMemory) {
+    llvm::Type *ty = ctx.SymbolTypes[inst.src];
+    llvm::Value *loaded = ctx.Builder->CreateLoad(ty, srcVal, inst.src + "_copy_load");
+    ctx.Builder->CreateStore(loaded, dstPtr);
+  } else {
+    // It's already an SSA value, store it directly into the destination memory
+    ctx.Builder->CreateStore(srcVal, dstPtr);
   }
 }
 
 void handle(CodegenContext &ctx, const mir::MoveInst &inst) {
-  llvm::Value *dstVal = ctx.resolveSymbol(inst.dst);
-  llvm::Value *srcVal = ctx.resolveSymbol(inst.src);
-  if (auto *srcAlloca = llvm::dyn_cast<llvm::AllocaInst>(srcVal)) {
-    llvm::Value *loaded = ctx.Builder->CreateLoad(srcAlloca->getAllocatedType(), srcAlloca);
-    ctx.Builder->CreateStore(loaded, dstVal);
+  llvm::Value *dstPtr = ctx.getMemoryBase(inst.dst);
+  llvm::Value *srcVal = ctx.getMemoryBase(inst.src);
+  if (!dstPtr || !srcVal) return;
+
+  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
+
+  if (srcIsMemory) {
+    llvm::Type *ty = ctx.SymbolTypes[inst.src];
+    llvm::Value *loaded = ctx.Builder->CreateLoad(ty, srcVal, inst.src + "_move_load");
+    ctx.Builder->CreateStore(loaded, dstPtr);
+
+    // Null out source memory to prevent Use-After-Free during frontend cleanup
+    llvm::Value *nullVal = llvm::Constant::getNullValue(ty);
+    ctx.Builder->CreateStore(nullVal, srcVal);
+  } else {
+    // SSA values don't hold backing allocations locally, so just store the value
+    ctx.Builder->CreateStore(srcVal, dstPtr);
+  }
+}
+
+void handle(CodegenContext &ctx, const mir::RefDecInst &inst) {
+  llvm::Value *basePtr = ctx.getMemoryBase(inst.src);
+  if (!basePtr) return;
+
+  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
+  llvm::Type *ty = ctx.SymbolTypes[inst.src];
+
+  llvm::Value *valToManage = basePtr;
+  if (srcIsMemory) {
+    valToManage = ctx.Builder->CreateLoad(ty, basePtr, inst.src + "_release_load");
+  }
+
+  llvm::Value *rawPtr = nullptr;
+  if (ty->isStructTy()) {
+    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0}, inst.src + "_raw_ptr");
+  } else if (ty->isPointerTy()) {
+    rawPtr = valToManage;
+  }
+
+  if (rawPtr) {
+    llvm::Function *releaseFn = ctx.Module->getFunction("maml_release");
+    ctx.Builder->CreateCall(releaseFn, rawPtr);
+  }
+}
+
+void handle(CodegenContext &ctx, const mir::RefIncInst &inst) {
+  llvm::Value *basePtr = ctx.getMemoryBase(inst.src);
+  if (!basePtr) return;
+
+  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
+  llvm::Type *ty = ctx.SymbolTypes[inst.src];
+
+  llvm::Value *valToManage = basePtr;
+  if (srcIsMemory) {
+    valToManage = ctx.Builder->CreateLoad(ty, basePtr, inst.src + "_retain_load");
+  }
+
+  llvm::Value *rawPtr = nullptr;
+  if (ty->isStructTy()) {
+    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0});
+  } else if (ty->isPointerTy()) {
+    rawPtr = valToManage;
+  }
+
+  if (rawPtr) {
+    llvm::Function *retainFn = ctx.Module->getFunction("maml_retain");
+    ctx.Builder->CreateCall(retainFn, rawPtr);
   }
 }
 
@@ -69,77 +148,6 @@ void handle(CodegenContext &ctx, const mir::RefAllocInst &inst) {
   llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), DL.getTypeAllocSize(ty));
   llvm::Value *heapPtr = ctx.Builder->CreateCall(allocFn, {sizeVal}, inst.dst + "_heap");
   ctx.Builder->CreateStore(heapPtr, ctx.resolveSymbol(inst.dst));
-}
-
-void handle(CodegenContext &ctx, const mir::RefDecInst &inst) {
-  // Look up the symbol safely
-  llvm::Value *targetVar = ctx.resolveSymbol(inst.src);
-  if (!targetVar) {
-    // Optional: warn or fail if the symbol doesn't exist
-    return;
-  }
-
-  llvm::Value *valToManage = targetVar;
-
-  // 1. Resolve Alloca vs SSA:
-  // If the symbol is a stack allocation, we must load the actual value from it first.
-  // If it's already an SSA value (like from a load_ptr), we just use it directly.
-  if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetVar)) {
-    valToManage = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca, inst.src + "_load_for_release");
-  }
-
-  llvm::Type *ty = valToManage->getType();
-  llvm::Value *rawPtr = nullptr;
-
-  // 2. Extract the actual heap pointer based on the type
-  if (ty->isStructTy()) {
-    // For fat pointers (like your String struct { ptr, i32 }), the heap pointer is at index 0
-    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0}, inst.src + "_raw_ptr");
-  } else if (ty->isPointerTy()) {
-    // For standard opaque pointers (like Map, Vec, or unboxed objects)
-    rawPtr = valToManage;
-  }
-
-  // 3. Emit the Release call safely
-  if (rawPtr) {
-    llvm::Function *releaseFn = ctx.Module->getFunction("maml_release");
-    if (!releaseFn) {
-      ctx.Error.fatal("maml_release function not found in module. Ensure RuntimeConstants.h is linked.");
-      return;
-    }
-
-    ctx.Builder->CreateCall(releaseFn, rawPtr);
-  }
-}
-
-void handle(CodegenContext &ctx, const mir::RefIncInst &inst) {
-  llvm::Value *targetVar = ctx.resolveSymbol(inst.src);
-  if (!targetVar) return;
-
-  llvm::Value *valToManage = targetVar;
-
-  // 1. If the symbol is an Alloca, we must load the actual value from the stack first
-  if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(targetVar)) {
-    valToManage = ctx.Builder->CreateLoad(alloca->getAllocatedType(), alloca);
-  }
-
-  llvm::Type *ty = valToManage->getType();
-  llvm::Value *rawPtr = nullptr;
-
-  // 2. Extract the actual heap pointer
-  if (ty->isStructTy()) {
-    // For fat pointers like String { ptr, len }, the heap pointer is at index 0
-    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0});
-  } else if (ty->isPointerTy()) {
-    // For standard pointers like Map or Vec
-    rawPtr = valToManage;
-  }
-
-  // 3. Emit the Retain call safely
-  if (rawPtr) {
-    llvm::Function *retainFn = ctx.Module->getFunction("maml_retain");
-    ctx.Builder->CreateCall(retainFn, rawPtr);
-  }
 }
 
 void handle(CodegenContext &ctx, const mir::CastInst &inst) {

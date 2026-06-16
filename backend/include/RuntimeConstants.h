@@ -13,7 +13,6 @@ constexpr const char* VEC_PUSH = "maml_vec_push";
 constexpr const char* VEC_SET = "maml_vec_set";
 constexpr const char* VEC_GET = "maml_vec_get";
 constexpr const char* VEC_LEN = "maml_vec_len";
-constexpr const char* VEC_GROW = "maml_vec_grow";
 constexpr const char* MAP_CREATE = "maml_map_create";
 constexpr const char* MAP_PUT = "maml_map_put";
 constexpr const char* MAP_GET = "maml_map_get";
@@ -26,6 +25,7 @@ constexpr const char* CORO_DONE_HELPER = "maml_coro_done_helper";
 constexpr const char* CORO_DESTROY_HELPER = "maml_coro_destroy_helper";
 constexpr const char* SPAWN_TASK = "maml_spawn_task";
 constexpr const char* RUN_EXECUTOR = "maml_run_executor";
+constexpr const char* PUTS = "puts";
 
 } // namespace rt
 } // namespace maml

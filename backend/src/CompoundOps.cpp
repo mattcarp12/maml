@@ -1,26 +1,42 @@
-#include "ExprGenerator.h"
-#include "TypeLowering.h"
+#include "ExprGenerator.hpp"
+#include "TypeLowering.hpp"
 
 namespace maml {
 
 void handle(CodegenContext &ctx, const mir::StructInitInst &inst) {
-  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst);
-  if (!dstPtr) {
-    ctx.Error.fatal("struct_init: target stack alloc not found for '" + inst.dst + "'");
-    return;
-  }
-
-  llvm::Type *structTy = nullptr;
-  if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(dstPtr)) {
-    structTy = alloca->getAllocatedType();
-  } else {
-    ctx.Error.fatal("struct_init: target is not an alloca");
+  llvm::Value *dstPtr = ctx.getMemoryBase(inst.dst);
+  llvm::Type *structTy = ctx.SymbolTypes[inst.dst];
+  if (!dstPtr || !structTy) {
+    ctx.Error.fatal("struct_init: target memory or type not found for '" + inst.dst + "'");
     return;
   }
 
   llvm::Value *val = evaluateValue(ctx, inst.value);
   llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, dstPtr, inst.field_index, inst.dst + "_init_gep");
   ctx.Builder->CreateStore(val, fieldGep);
+}
+
+void handle(CodegenContext &ctx, const mir::VariantInitInst &inst) {
+  llvm::Value *dstPtr = ctx.getMemoryBase(inst.dst);
+  if (!dstPtr) return;
+
+  llvm::Type *sumTy = llvmTypeFor(ctx, inst.type);  // Or ctx.SymbolTypes[inst.dst]
+  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 0, inst.dst + "_disc_gep");
+  llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), inst.discriminant);
+  ctx.Builder->CreateStore(discrimVal, discrimGep);
+
+  if (inst.payloads.size() > 0) {
+    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 1, inst.dst + "_array_gep");
+    for (size_t i = 0; i < inst.payloads.size(); ++i) {
+      llvm::Value *payloadVal = evaluateValue(ctx, inst.payloads[i]);
+      llvm::Type *payloadTy = payloadVal->getType();
+      llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(payloadTy));
+      if (i > 0) {
+        castGep = ctx.Builder->CreateGEP(payloadTy, castGep, llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, i)));
+      }
+      ctx.Builder->CreateStore(payloadVal, castGep);
+    }
+  }
 }
 
 void handle(CodegenContext &ctx, const mir::FieldReadInst &inst) {
@@ -105,17 +121,16 @@ void handle(CodegenContext &ctx, const mir::VariantReadInst &inst) {
 
   // 3. Dynamically reconstruct the variant's payload StructType from the object's type schema
   std::vector<llvm::Type *> payloadTypes;
+
   if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
-    if (reg->type.is_object() && reg->type.contains("variants")) {
-      for (const auto &varJson : reg->type["variants"]) {
-        if (varJson["name"] == inst.variant_name) {
-          // Collect unnamed tuple fields
-          if (varJson.contains("tuple_types")) {
-            for (const auto &tt : varJson["tuple_types"]) payloadTypes.push_back(llvmTypeFor(ctx, tt));
+    if (auto *sumStruct = std::get_if<maml::SumType>(&reg->type->inner)) {
+      for (const auto &varDef : sumStruct->variants) {
+        if (varDef.name == inst.variant_name) {
+          for (const auto &tt : varDef.tuple_types) {
+            payloadTypes.push_back(llvmTypeFor(ctx, tt));
           }
-          // Collect named struct fields
-          if (varJson.contains("fields")) {
-            for (const auto &f : varJson["fields"]) payloadTypes.push_back(llvmTypeFor(ctx, f["type"]));
+          for (const auto &f : varDef.fields) {
+            payloadTypes.push_back(llvmTypeFor(ctx, f.type));
           }
           break;
         }
@@ -142,29 +157,6 @@ void handle(CodegenContext &ctx, const mir::VariantReadInst &inst) {
   // 6. Safely load the properly-aligned payload
   llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, castGep, inst.dst + "_val");
   ctx.SymbolEnv.back()[inst.dst] = loadedVal;
-}
-
-void handle(CodegenContext &ctx, const mir::VariantInitInst &inst) {
-  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst);
-  if (!dstPtr) return;
-
-  llvm::Type *sumTy = llvmTypeFor(ctx, inst.type);
-  llvm::Value *discrimGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 0, inst.dst + "_disc_gep");
-  llvm::Value *discrimVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), inst.discriminant);
-  ctx.Builder->CreateStore(discrimVal, discrimGep);
-
-  if (inst.payloads.size() > 0) {
-    llvm::Value *arrayGep = ctx.Builder->CreateStructGEP(sumTy, dstPtr, 1, inst.dst + "_array_gep");
-    for (size_t i = 0; i < inst.payloads.size(); ++i) {
-      llvm::Value *payloadVal = evaluateValue(ctx, inst.payloads[i]);
-      llvm::Type *payloadTy = payloadVal->getType();
-      llvm::Value *castGep = ctx.Builder->CreateBitCast(arrayGep, llvm::PointerType::getUnqual(payloadTy));
-      if (i > 0) {
-        castGep = ctx.Builder->CreateGEP(payloadTy, castGep, llvm::ConstantInt::get(ctx.Context, llvm::APInt(32, i)));
-      }
-      ctx.Builder->CreateStore(payloadVal, castGep);
-    }
-  }
 }
 
 }  // namespace maml

@@ -4,7 +4,6 @@ type Status = Loading | Active(int) | Error{ code int, msg string }
 type Content = Empty | Text(string) | Image{ width int, height int, url string }
 type Action = MarkRead | Delete | Archive{ folder string }
 
-// Track 4.4: Custom value-type struct layout for structure nesting verification
 type Point = { x int, y int }
 
 // ============================================================================

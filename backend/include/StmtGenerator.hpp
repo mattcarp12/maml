@@ -1,8 +1,6 @@
-#ifndef MAML_STMT_GENERATOR_H
-#define MAML_STMT_GENERATOR_H
-
-#include "CodegenContext.h"
-#include "mir/mir_generated.hpp"
+#pragma once
+#include "CodegenContext.hpp"
+#include "mir_generated.hpp"
 
 namespace maml {
 
@@ -18,5 +16,3 @@ inline bool isEmpty(const mir::Value &v) {
 }
 
 }  // namespace maml
-
-#endif

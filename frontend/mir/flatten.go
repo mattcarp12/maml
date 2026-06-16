@@ -690,7 +690,8 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 		var flatVal Value
 		flatVal, current = b.flattenExpr(kv.Value, current)
 
-		hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(kv.Key, current)
+		var hashVal, ptrVal, lenVal, intKey Value
+		hashVal, ptrVal, lenVal, intKey, current = b.lowerMapKey(kv.Key, current)
 
 		putFn := &Register{Name: "maml_map_put", Type: types.UnknownType{}}
 		putTmp := b.newTemp()

@@ -1,4 +1,4 @@
-#include "CodegenContext.h"
+#include "CodegenContext.hpp"
 
 #include <iostream>
 
@@ -28,6 +28,24 @@ llvm::Value *CodegenContext::resolveSymbol(std::string_view name) {
     if (found != it->end()) return found->second;
   }
   return nullptr;
+}
+
+llvm::Value *CodegenContext::getMemoryBase(std::string_view name) {
+  llvm::Value *symbol = resolveSymbol(name);
+  if (!symbol) {
+    Error.fatal("Attempted to access undefined variable: " + std::string(name));
+    return nullptr;
+  }
+
+  // If the variable was promoted to the heap, our local symbol is just a pointer
+  // to the heap address. We must load the actual heap address before accessing memory.
+  if (HeapVars.count(std::string(name))) {
+    llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
+    return Builder->CreateLoad(ptrTy, symbol, std::string(name) + "_heap_addr");
+  }
+
+  // Memory is directly on the stack. Return the allocation pointer.
+  return symbol;
 }
 
 }  // namespace maml

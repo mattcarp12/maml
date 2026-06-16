@@ -3,7 +3,7 @@
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
-#include "CodegenContext.h"
+#include "CodegenContext.hpp"
 
 namespace maml {
 

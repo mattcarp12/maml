@@ -22,7 +22,7 @@ var schemaData []byte
 //go:embed hir.tmpl
 var hirTemplate string
 
-//go:embed lower.tmpl
+//go:embed hir_lower.tmpl
 var lowerTemplate string
 
 // ifaceMarker maps interface names to their marker method names.

@@ -19,14 +19,14 @@ import (
 //go:embed mir_schema.json
 var schemaData []byte
 
-//go:embed cpp_mir.tmpl
+//go:embed mir_cpp.tmpl
 var cppTemplate string
 
 type Field struct {
 	GoName  string
 	CppName string
 	CppType string
-	JsonKey string // NEW: explicitly matches export.go
+	JsonKey string // explicitly matches export.go
 }
 
 type StructSpec struct {
@@ -43,7 +43,7 @@ type TemplateData struct {
 }
 
 func main() {
-	outDir := flag.String("dir", "backend/include/mir/", "output directory for mir_generated.hpp")
+	outDir := flag.String("dir", "backend/include/", "output directory for mir_generated.hpp")
 	flag.Parse()
 
 	if err := generateCpp(*outDir); err != nil {
@@ -146,13 +146,13 @@ func mapCppType(goType string) string {
 	case "bool":
 		return "bool"
 	case "types.Type":
-		return "nlohmann::json"
+		return "std::shared_ptr<maml::Type>" // Changed from nlohmann::json
 	case "[]types.Type":
-		return "std::vector<nlohmann::json>"
+		return "std::vector<std::shared_ptr<maml::Type>>" // Changed from std::vector<nlohmann::json>
 	case "Value", "mir.Value":
 		return "Value"
 	case "[]Value", "[]mir.Value":
-		return "std::vector<Value>" // Fixed array mapping
+		return "std::vector<Value>"
 	case "[]MIRCallArg":
 		return "std::vector<MIRCallArg>"
 	case "BlockID":

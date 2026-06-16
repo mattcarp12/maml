@@ -298,13 +298,11 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 	flatRHS, current := b.flattenExpr(stmt.RValue, current)
 
 	dstName := ""
-	var dstType types.Type = types.UnknownType{}
 
 	// 1. Extract the true variable name and its type safely
 	if flatLHS != nil {
 		if reg, ok := flatLHS.(*Register); ok && reg != nil {
 			dstName = reg.Name
-			dstType = reg.Type // Preserves exact structural type (Struct, SumType, etc.)
 		} else {
 			panic(fmt.Sprintf("Unsupported LHS for AssignStmt: %T\n", flatLHS))
 		}
@@ -317,7 +315,7 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 
 	// 2. ABI Routing: Perform direct transfers
 	if reg, isReg := flatRHS.(*Register); isReg && reg != nil {
-		if dstType != nil && dstType.IsReferenceType() {
+		if reg.Type != nil && reg.Type.IsReferenceType() {
 			// Affine transfer of ownership
 			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: reg.Name})
 		} else {
@@ -443,7 +441,7 @@ func (b *Builder) emitMemoryTransfer(dst string, flatRHS Value, dstSym *types.Sy
 	})
 
 	if reg, isReg := flatRHS.(*Register); isReg {
-		if t.IsReferenceType() {
+		if reg.Type != nil && reg.Type.IsReferenceType() {
 			current.Statements = append(current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
 		} else {
 			current.Statements = append(current.Statements, &CopyInst{Dst: dst, Src: reg.Name})

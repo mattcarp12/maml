@@ -1,8 +1,8 @@
 #include <llvm/IR/Intrinsics.h>
 
-#include "ExprGenerator.h"
+#include "ExprGenerator.hpp"
 #include "RuntimeConstants.h"
-#include "TypeLowering.h"
+#include "TypeLowering.hpp"
 
 namespace maml {
 
@@ -107,30 +107,26 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
   for (const auto &argWrapper : inst.arguments) {
     llvm::Value *argVal = evaluateValue(ctx, argWrapper.argument);
 
+    // Resolve specific runtime memory hook arguments using the typed AST
     if (funcName == rt::MAP_CREATE) {
       if (i == 0) {
         int itemSize = 4;
-        if (inst.type.contains("value")) {
-          const auto &valType = inst.type["value"];
-          if (valType.is_object() && valType.contains("size"))
-            itemSize = valType["size"].get<int>();
-          else
-            itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, valType));
+        if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
+          itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, mapTy->value));
         }
         argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
       } else if (i == 1) {
-        bool isStr = inst.type.contains("key") && inst.type["key"].get<std::string_view>() == "string";
+        bool isStr = false;
+        if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
+          isStr = std::holds_alternative<maml::StringType>(mapTy->key->inner);
+        }
         argVal = llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), isStr ? 1 : 0);
       }
     } else if (funcName == rt::VEC_CREATE) {
       if (i == 0) {
         int itemSize = 4;
-        if (inst.type.contains("base")) {
-          const auto &elemType = inst.type["base"];
-          if (elemType.is_object() && elemType.contains("size"))
-            itemSize = elemType["size"].get<int>();
-          else
-            itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, elemType));
+        if (auto *vecTy = std::get_if<maml::VectorType>(&inst.type->inner)) {
+          itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, vecTy->base));
         }
         argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
       }

@@ -1,11 +1,11 @@
-#include "ProgramGenerator.h"
+#include "ProgramGenerator.hpp"
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Intrinsics.h>
 
 #include "RuntimeConstants.h"
-#include "StmtGenerator.h"
-#include "TypeLowering.h"
+#include "StmtGenerator.hpp"
+#include "TypeLowering.hpp"
 #include "autogen_runtime.inc"
 
 namespace maml {
@@ -47,7 +47,7 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
   auto &Context = ctx.Context;
 
   llvm::Type *retType = llvm::Type::getVoidTy(Context);
-  if (!fn.return_type.is_null()) {
+  if (fn.return_type) {
     retType = llvmTypeFor(ctx, fn.return_type);
   }
   if (fn.name == "main") retType = llvm::Type::getInt32Ty(Context);
@@ -62,6 +62,17 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
   if (fn.is_async) F->addFnAttr(llvm::Attribute::PresplitCoroutine);
 
   ctx.pushScope();
+
+  ctx.HeapVars.clear();
+  for (const auto &block : fn.blocks) {
+    for (const auto &inst : block.instructions) {
+      if (std::holds_alternative<mir::RefAllocInst>(inst.inner)) {
+        auto &refAlloc = std::get<mir::RefAllocInst>(inst.inner);
+        ctx.HeapVars.insert(refAlloc.dst);
+      }
+    }
+  }
+
   llvm::BasicBlock *allocBB = llvm::BasicBlock::Create(Context, "entry_allocs", F);
   Builder->SetInsertPoint(allocBB);
 
@@ -72,6 +83,7 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
     llvm::AllocaInst *alloca = Builder->CreateAlloca(arg.getType(), nullptr, paramName);
     Builder->CreateStore(&arg, alloca);
     ctx.SymbolEnv.back()[paramName] = alloca;
+    ctx.SymbolTypes[paramName] = arg.getType();
     idx++;
   }
 
