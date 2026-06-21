@@ -76,6 +76,17 @@ func (l *Lowerer) lowerDeclareStmt(s *tast.DeclareStmt) *DeclareStmt {
 		Value:  l.lowerExpr(s.Value),
 	}
 }
+func (l *Lowerer) lowerFreezeExpr(s *tast.FreezeExpr) *FreezeExpr {
+	if s == nil {
+		return nil
+	}
+	return &FreezeExpr{
+		Pos_:  s.Pos_,
+		End_:  s.End_,
+		Type:  s.Type,
+		Value: l.lowerExpr(s.Value),
+	}
+}
 func (l *Lowerer) lowerIdentifier(s *tast.Identifier) *Identifier {
 	if s == nil {
 		return nil
@@ -110,6 +121,17 @@ func (l *Lowerer) lowerIntLiteral(s *tast.IntLiteral) *IntLiteral {
 		End_:  s.End_,
 		Type:  s.Type,
 		Value: s.Value,
+	}
+}
+func (l *Lowerer) lowerOwnExpr(s *tast.OwnExpr) *OwnExpr {
+	if s == nil {
+		return nil
+	}
+	return &OwnExpr{
+		Pos_:  s.Pos_,
+		End_:  s.End_,
+		Type:  s.Type,
+		Value: l.lowerExpr(s.Value),
 	}
 }
 func (l *Lowerer) lowerPrefixExpr(s *tast.PrefixExpr) *PrefixExpr {

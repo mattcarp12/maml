@@ -33,14 +33,14 @@ func newGlobalScope() *Scope {
 	}
 
 	// Standard Output
-	global.symbols["puts"] = &types.Symbol{
+	global.symbols["print"] = &types.Symbol{
 		Kind:    types.FuncSymbol,
-		Name:    "puts",
+		Name:    "print",
 		Mutable: false,
 		Type: &types.FunctionType{
 			Params:     []types.Type{types.StringType{}},
 			ParamModes: []types.ParamMode{types.ParamBorrow},
-			Return:     types.IntType{},
+			Return:     types.UnitType{},
 		},
 	}
 	global.symbols["spawn"] = &types.Symbol{

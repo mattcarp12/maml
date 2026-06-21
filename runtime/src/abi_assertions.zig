@@ -66,7 +66,7 @@ comptime {
     if (@TypeOf(rt.maml_run_executor) != fn () callconv(.c) void) {
         @compileError("ABI Mismatch: rt.maml_run_executor must have signature fn () callconv(.c) void");
     }
-    if (@TypeOf(rt.puts) != fn (?*anyopaque) callconv(.c) i32) {
-        @compileError("ABI Mismatch: rt.puts must have signature fn (?*anyopaque) callconv(.c) i32");
+    if (@TypeOf(rt.maml_print) != fn (?*anyopaque, i32) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.maml_print must have signature fn (?*anyopaque, i32) callconv(.c) void");
     }
 }

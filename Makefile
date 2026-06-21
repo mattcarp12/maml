@@ -35,6 +35,9 @@ codegen:
 	@echo "==> Running Runtime Codegen..."
 	@go run meta/gen_runtime.go
 
+	@echo "==> Running go generate..."
+	@go generate ./...
+
 # 1. Build the Go Compiler Frontend
 frontend: codegen
 	@echo "==> Building Go Frontend..."

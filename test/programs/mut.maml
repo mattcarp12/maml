@@ -1,0 +1,44 @@
+// EXIT_CODE: 42
+// Tests: Call-site mutability, implicit value semantics, and freeze()
+
+type DataBuffer = { id int, values Vec<int> }
+
+// Requires explicit mutation privilege from the caller
+fn populate_buffer(mut buf DataBuffer) int {
+    buf.values << 10
+    buf.values << 20
+    buf.values << 30
+    return 3
+}
+
+// Strictly immutable read-only view
+fn sum_buffer(buf DataBuffer) int {
+    if len(buf.values) == 0 { return 0 }
+    return buf.values[0] + buf.values[1] + buf.values[2]
+}
+
+fn main() int {
+    // 1. Initialized as mutable
+    mut my_buffer := DataBuffer{ id: 1, values: Vec<int>{} }
+
+    // 2. Call-site mutability enforcement
+    // If the 'mut' keyword was missing here, the frontend should throw a semantic error.
+    populate_buffer(mut my_buffer)
+
+    // Local mutation is allowed because 'my_buffer' is in a mutable state
+    my_buffer.values[0] = 12 
+
+    // 3. State Transition: Mutable -> Deeply Immutable
+    frozen_buffer := freeze(own my_buffer)
+    
+    // NOTE: If we attempted `my_buffer.id = 2` here, the MIR pass 
+    // should block it because the variable has been frozen.
+
+    // 4. Safe immutable aliasing
+    // The underlying Rc (if escaped) or stack buffer can now be safely read.
+    result := sum_buffer(frozen_buffer)
+
+    // Expected: 12 + 20 + 30 = 62
+    // Return: 62 - 20 = 42
+    return result - 20
+}

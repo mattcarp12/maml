@@ -108,6 +108,10 @@ func (a *Analyzer) mapExpr(expr ast.Expr) tast.Expr {
 		res = a.MapCompositeLiteral(e)
 	case *ast.CallExpr:
 		res = a.MapCallExpr(e)
+	case *ast.OwnExpr:
+		res = a.MapOwnExpr(e)
+	case *ast.FreezeExpr:
+		res = a.MapFreezeExpr(e)
 	case *ast.InfixExpr:
 		res = a.MapInfixExpr(e)
 	case *ast.PrefixExpr:
@@ -609,6 +613,32 @@ func (a *Analyzer) MapMatchExpr(e *ast.MatchExpr) tast.Node {
 	}
 
 	node := &tast.MatchExpr{Pos_: e.Pos_, End_: e.End_, Subject: subject, Arms: arms, Type: resultType}
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
+}
+
+func (a *Analyzer) MapOwnExpr(e *ast.OwnExpr) tast.Node {
+	valNode := a.mapExpr(e.Value)
+
+	node := &tast.OwnExpr{
+		Pos_:  e.Pos_,
+		Value: valNode,
+		Type:  tast.TypeOf(valNode),
+	}
+
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
+}
+
+func (a *Analyzer) MapFreezeExpr(e *ast.FreezeExpr) tast.Node {
+	valNode := a.mapExpr(e.Value)
+
+	node := &tast.FreezeExpr{
+		Pos_:  e.Pos_,
+		Value: valNode,
+		Type:  tast.TypeOf(valNode),
+	}
+
 	a.drainViolations(a.registry.Check(node, a.ctx()))
 	return node
 }

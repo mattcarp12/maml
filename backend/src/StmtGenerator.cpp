@@ -1,6 +1,7 @@
 #include "StmtGenerator.hpp"
 
 #include "ExprGenerator.hpp"
+#include "mir_generated.hpp"
 
 namespace maml {
 
@@ -27,9 +28,7 @@ void handle(CodegenContext &ctx, const mir::MoveInst &inst);
 void handle(CodegenContext &ctx, const mir::RefAllocInst &inst);
 void handle(CodegenContext &ctx, const mir::RefIncInst &inst);
 void handle(CodegenContext &ctx, const mir::RefDecInst &inst);
-void handle(CodegenContext &ctx, const mir::MutBorrowInst &inst);
 void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst);
-void handle(CodegenContext &ctx, const mir::KeepAliveInst &inst);
 
 void compileInstruction(CodegenContext &ctx, const mir::Instruction &inst) {
   std::visit([&](auto &&arg) { handle(ctx, arg); }, inst.inner);

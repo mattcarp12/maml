@@ -147,6 +147,8 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 		switch {
 		case p.Mut:
 			paramModes[i] = types.ParamMutBorrow
+		case p.Own:
+			paramModes[i] = types.ParamOwn
 		default:
 			paramModes[i] = types.ParamBorrow
 		}

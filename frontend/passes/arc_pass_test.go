@@ -32,7 +32,7 @@ func TestARC_LocalLifecycle(t *testing.T) {
 
 	// Run dataflow dependencies
 	livenessRes := AnalyzeLiveness(g)
-	InjectARC(g, livenessRes)
+	InjectARC(g, livenessRes, nil)
 
 	releases := countReleases(b0, "v")
 	if releases != 1 {
@@ -55,7 +55,7 @@ func TestARC_ParameterProtection(t *testing.T) {
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	livenessRes := AnalyzeLiveness(g)
-	InjectARC(g, livenessRes)
+	InjectARC(g, livenessRes, nil)
 
 	releases := countReleases(b0, "param_vec")
 	if releases != 0 {
@@ -76,7 +76,7 @@ func TestARC_ViewTypeExclusion(t *testing.T) {
 	b0.Terminator = &mir.ReturnTerminator{}
 
 	livenessRes := AnalyzeLiveness(g)
-	InjectARC(g, livenessRes)
+	InjectARC(g, livenessRes, nil)
 
 	releases := countReleases(b0, "my_view")
 	if releases != 0 {

@@ -105,12 +105,22 @@ type FieldReadInst struct {
 	Dst           string
 	FieldIndex    int
 	FieldName     string
+	FieldOffset   int
 	Object        Value
 	Type          types.Type
 	VariantLayout []types.Type
 }
 
 func (*FieldReadInst) isInstruction() {}
+
+type FreezeInst struct {
+	Dst  string
+	Path []string
+	Root Value
+	Type types.Type
+}
+
+func (*FreezeInst) isInstruction() {}
 
 type IndexAssignInst struct {
 	Index      Value
@@ -171,6 +181,15 @@ type MutBorrowInst struct {
 }
 
 func (*MutBorrowInst) isInstruction() {}
+
+type OwnInst struct {
+	Dst  string
+	Path []string
+	Root Value
+	Type types.Type
+}
+
+func (*OwnInst) isInstruction() {}
 
 type RefAllocInst struct {
 	Dst  string
@@ -234,6 +253,7 @@ type StructInitInst struct {
 	Dst           string
 	FieldIndex    int
 	FieldName     string
+	FieldOffset   int
 	Value         Value
 	VariantLayout []types.Type
 }

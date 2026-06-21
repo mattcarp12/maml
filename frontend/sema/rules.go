@@ -136,6 +136,7 @@ func newRegistry() *Registry {
 		AssignLValueMustBeSymbol{},
 		AssignMutabilityCheck{},
 		AssignmentTypeCompatibility{},
+		CannotReassignBorrowedParameter{},
 	)
 
 	// -------------------------------------------------------------------------
@@ -225,6 +226,21 @@ func newRegistry() *Registry {
 	// -------------------------------------------------------------------------
 	Register(r,
 		MainCannotBeAsync{},
+	)
+
+	// --------------------------------------------------------------------------
+	// Freeze Expression rules
+	// --------------------------------------------------------------------------
+	Register(r,
+		FreezeRequiresOwn{},
+	)
+
+	// --------------------------------------------------------------------------
+	// Own Expression rules
+	// --------------------------------------------------------------------------
+	Register(r,
+		OwnOperandMustBePath{},
+		CannotMoveBorrowedValue{},
 	)
 
 	return r

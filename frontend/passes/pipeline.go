@@ -8,33 +8,29 @@ import (
 // PassConfig controls which passes are active. This lets you turn them on
 // one at a time during development.
 type PassConfig struct {
-	Prune      bool
-	Escape     bool
-	AllocLower bool
-	Liveness   bool
-	ARC        bool
-	SROA       bool
-	Borrow     bool
+	Prune       bool
+	Escape      bool
+	AllocLower  bool
+	Liveness    bool
+	ARC         bool
+	SROA        bool
+	Borrow      bool
+	LinearLower bool
+	TypeLower   bool
 }
 
 // DefaultConfig returns the fully-enabled production configuration.
 func DefaultConfig() PassConfig {
 	return PassConfig{
-		Prune:      true,
-		Escape:     true,
-		AllocLower: true,
-		Liveness:   true,
-		ARC:        true,
-		SROA:       false, // Left false per Phase 2 Roadmap safety guidelines
-		Borrow:     true,
-
-		// Prune:      false,
-		// Escape:     false,
-		// AllocLower: false,
-		// Liveness:   false,
-		// ARC:        false,
-		// SROA:       false, // Left false per Phase 2 Roadmap safety guidelines
-		// Borrow:     false,
+		Prune:       true,
+		Escape:      true,
+		AllocLower:  true,
+		Liveness:    true,
+		ARC:         true,
+		SROA:        false, // Left false per Phase 2 Roadmap safety guidelines
+		Borrow:      true,
+		LinearLower: true,
+		TypeLower:   true,
 	}
 }
 
@@ -70,7 +66,7 @@ func RunPasses(g *mir.Graph, cfg PassConfig) []ast.CompileError {
 
 	// [5] Inject automated reference counting calls (retain/release)
 	if cfg.ARC && livenessRes != nil {
-		InjectARC(g, livenessRes)
+		InjectARC(g, livenessRes, escapeMap)
 	}
 
 	// [6] SROA Optimization (Optional placeholder)
@@ -80,10 +76,23 @@ func RunPasses(g *mir.Graph, cfg PassConfig) []ast.CompileError {
 	}
 
 	// [7] Forward dataflow borrow checker
+	var borrowErrs []ast.CompileError
 	if cfg.Borrow && livenessRes != nil {
 		borrowAnalyzer := New()
-		return borrowAnalyzer.Analyze(g, livenessRes)
+		borrowErrs = borrowAnalyzer.Analyze(g, livenessRes)
 	}
 
-	return nil
+	// [8] Desugar Linear Types (Own, Freeze, MutBorrow, KeepAlive)
+	// MUST run after Borrow and ARC, but before C++ backend export.
+	if cfg.LinearLower {
+		LowerLinearTypes(g)
+	}
+
+	// [9] Lower Types to physical byte offsets
+	// MUST run near the end to ensure all temporary registers (including unrolled paths) are resolved.
+	if cfg.TypeLower && escapeMap != nil {
+		LowerTypes(g, escapeMap)
+	}
+
+	return borrowErrs
 }

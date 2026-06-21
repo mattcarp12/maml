@@ -198,6 +198,7 @@ func (r CallArgumentCount) Check(node *tast.CallExpr, ctx *RuleContext) []Violat
 // For each argument i (within bounds):
 //   - The argument's type must match the parameter's declared type.
 //   - If the parameter is ParamMutBorrow, the call site must pass `mut`.
+//   - If the parameter is ParamOwn, the call site must pass `own`.
 //   - If the parameter is ParamBorrow, the call site must not use any modifier.
 type CallArgumentTypeCompatibility struct{}
 
@@ -213,8 +214,7 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 
 	for i, arg := range node.Arguments {
 		if i >= len(ft.Params) {
-			// Arity mismatch already reported by CallArgumentCount.
-			break
+			break // Arity mismatch already reported by CallArgumentCount
 		}
 
 		expected := ft.Params[i]
@@ -229,15 +229,35 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 		}
 
 		// Ownership/mutability mode check
+		_, isOwnExpr := arg.Argument.(*tast.OwnExpr)
+
 		switch ft.ParamModes[i] {
+		case types.ParamOwn:
+			if !isOwnExpr {
+				violations = append(violations, violation(arg.Pos_,
+					"argument %d requires 'own' modifier to transfer ownership", i+1,
+				))
+			}
+			if arg.Mut {
+				violations = append(violations, violation(arg.Pos_,
+					"argument %d cannot be 'mut' because it requires 'own'", i+1,
+				))
+			}
+
 		case types.ParamMutBorrow:
 			if !arg.Mut {
 				violations = append(violations, violation(arg.Pos_,
 					"argument %d requires 'mut' modifier", i+1,
 				))
 			}
+			if isOwnExpr {
+				violations = append(violations, violation(arg.Pos_,
+					"argument %d cannot be 'own' because it expects a mutable borrow", i+1,
+				))
+			}
+
 		case types.ParamBorrow:
-			if arg.Mut {
+			if arg.Mut || isOwnExpr {
 				violations = append(violations, violation(arg.Pos_,
 					"argument %d does not take ownership modifiers", i+1,
 				))
@@ -484,4 +504,88 @@ func (r VecLiteralTypeCompatibility) Check(node *tast.VecLiteral, ctx *RuleConte
 		}
 	}
 	return violations
+}
+
+// =============================================================================
+// FreezeExpr Rules
+// =============================================================================
+
+// FreezeRequiresOwn ensures that the operand provided to a freeze expression
+// is strictly an ownership transfer (an 'own' expression).
+type FreezeRequiresOwn struct{}
+
+func (r FreezeRequiresOwn) Name() string { return "freeze-requires-own" }
+
+func (r FreezeRequiresOwn) Check(node *tast.FreezeExpr, ctx *RuleContext) []Violation {
+	if _, ok := node.Value.(*tast.OwnExpr); !ok {
+		return []Violation{violation(node.Value.Pos(),
+			"the 'freeze' operator requires an explicit ownership transfer (e.g., 'freeze(own x)')",
+		)}
+	}
+	return nil
+}
+
+// =============================================================================
+// OwnExpr Rules
+// =============================================================================
+
+// OwnOperandMustBePath enforces the grammar rule that 'own' can only be
+// applied to memory paths (identifiers or field access chains).
+type OwnOperandMustBePath struct{}
+
+func (r OwnOperandMustBePath) Name() string { return "own-operand-must-be-path" }
+
+func (r OwnOperandMustBePath) Check(node *tast.OwnExpr, ctx *RuleContext) []Violation {
+	var current tast.Expr = node.Value
+	for {
+		switch e := current.(type) {
+		case *tast.FieldAccess:
+			current = e.Object // Traverse down the path
+		case *tast.Identifier:
+			return nil // Valid path root
+		default:
+			return []Violation{violation(node.Pos_,
+				"the 'own' operator can only be applied to variables and their fields (e.g., 'own data' or 'own msg.payload')",
+			)}
+		}
+	}
+}
+
+// CannotMoveBorrowedValue ensures that a function cannot take ownership
+// of a variable that was passed to it as a borrow.
+type CannotMoveBorrowedValue struct{}
+
+func (r CannotMoveBorrowedValue) Name() string { return "cannot-move-borrowed-value" }
+
+func (r CannotMoveBorrowedValue) Check(node *tast.OwnExpr, ctx *RuleContext) []Violation {
+	sym := ctx.getRootSymbol(node.Value)
+	if sym != nil && (sym.ParamMode == types.ParamBorrow || sym.ParamMode == types.ParamMutBorrow) {
+		return []Violation{violation(node.Pos_,
+			"cannot take ownership ('own') of a borrowed parameter '%s'", sym.Name,
+		)}
+	}
+	return nil
+}
+
+// CannotReassignBorrowedParameter enforces Section 4.3: Mutable borrows
+// permit in-place mutation (e.g., data.field = x) but forbid full reallocation
+// or reassignment of the root binding.
+type CannotReassignBorrowedParameter struct{}
+
+func (r CannotReassignBorrowedParameter) Name() string { return "cannot-reassign-borrowed-parameter" }
+
+func (r CannotReassignBorrowedParameter) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
+	// We only trigger if the LHS is exactly an identifier (root binding).
+	// If it is a FieldAccess or IndexExpr, it is a legal in-place mutation.
+	if ident, ok := node.LValue.(*tast.Identifier); ok {
+		sym := ident.Symbol
+		if sym != nil && sym.Kind == types.ParamSymbol {
+			if sym.ParamMode == types.ParamBorrow || sym.ParamMode == types.ParamMutBorrow {
+				return []Violation{violation(node.Pos_,
+					"cannot reassign borrowed parameter '%s'; mutable borrows only permit in-place mutation", sym.Name,
+				)}
+			}
+		}
+	}
+	return nil
 }

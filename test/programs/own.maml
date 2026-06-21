@@ -1,0 +1,49 @@
+// EXIT_CODE: 100
+// Tests: Explicit `own` declarations, explicit `own` parameters, and implicit moves.
+
+type SecureSession = { user_id int, token int }
+
+// Consumes the session entirely. The caller's variable dies after this call.
+fn terminate_session(own session SecureSession) int {
+    // Return a verification code
+    return session.user_id + session.token
+}
+
+// A standard read-only function
+fn verify_payload(payload Vec<int>) int {
+    if len(payload) > 0 { return payload[0] }
+    return 0
+}
+
+fn main() int {
+    // --- PART A: Explicit Ownership Mechanics ---
+    mut session := SecureSession{ user_id: 5, token: 45 }
+
+    // 1. Explicit move at declaration
+    // The 24-byte header is copied; 'session' is marked dead in the CFG.
+    final_session := own session 
+
+    // 2. Explicit call-site ownership transfer 
+    // The session is completely consumed and deallocated early.
+    session_result := terminate_session(own final_session)
+    // NOTE: Any attempt to read `final_session.token` here must trigger a compile error.
+
+
+    // --- PART B: Implicit Liveness Mechanics ---
+    mut dynamic_payload := Vec<int>{}
+    dynamic_payload << 50
+
+    // 3. Implicit Move on Last Use
+    // The MIR analyzer detects that 'dynamic_payload' is never used again 
+    // after this line. Instead of incrementing the Rc count, it performs 
+    // an implicit destructive move, leaving the count at 1 for zero overhead.
+    payload_result := verify_payload(dynamic_payload)
+    
+    // 4. Escape Analysis / Stack Promotion
+    // Neither 'final_session' nor 'dynamic_payload' actually escaped the main 
+    // execution path (they were consumed locally). The Escape Analyzer will 
+    // promote their metadata to the stack and elide all Rc tracking code entirely.
+
+    // Expected: (5 + 45) + 50 = 100
+    return session_result + payload_result
+}

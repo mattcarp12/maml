@@ -212,25 +212,11 @@ func computeBlockUseDef(block *mir.BasicBlock) (map[string]bool, map[string]bool
 			addUseName(i.Src)
 		case *mir.MutBorrowInst:
 			addUseName(i.Src)
+			addDef(i.Dst)
 		case *mir.KeepAliveInst:
 			addUseName(i.Src)
 		}
 	}
 
 	return useSet, defSet
-}
-
-func getSuccessors(block *mir.BasicBlock) []mir.BlockID {
-	if block.Terminator == nil {
-		return nil
-	}
-	switch t := block.Terminator.(type) {
-	case *mir.JumpTerminator:
-		return []mir.BlockID{t.Target}
-	case *mir.BranchTerminator:
-		return []mir.BlockID{t.TrueTarget, t.FalseTarget}
-	case *mir.CoroSuspendTerminator:
-		return []mir.BlockID{t.ResumeBlock, t.CleanupBlock}
-	}
-	return nil
 }

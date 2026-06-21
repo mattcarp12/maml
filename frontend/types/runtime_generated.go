@@ -23,7 +23,7 @@ const (
 	SYM_CORO_DESTROY_HELPER = "maml_coro_destroy_helper"
 	SYM_SPAWN_TASK          = "maml_spawn_task"
 	SYM_RUN_EXECUTOR        = "maml_run_executor"
-	SYM_PUTS                = "puts"
+	SYM_PRINT               = "maml_print"
 )
 
 var RuntimeABI = map[string]*FunctionType{
@@ -111,8 +111,8 @@ var RuntimeABI = map[string]*FunctionType{
 		Params: []Type{},
 		Return: UnitType{},
 	},
-	"puts": {
-		Params: []Type{AnyType{}},
-		Return: IntType{},
+	"maml_print": {
+		Params: []Type{AnyType{}, IntType{}},
+		Return: UnitType{},
 	},
 }

@@ -110,6 +110,10 @@ func (ca *CallArg) String() string {
 	}
 	return prefix + ca.Argument.String()
 }
+
+func (f *OwnExpr) String() string    { return "own " + f.Value.String() }
+func (f *FreezeExpr) String() string { return "freeze " + f.Value.String() }
+
 func (ie *InfixExpr) String() string {
 	return fmt.Sprintf(
 		"(%s %s %s)",

@@ -1,175 +1,393 @@
 {
   "nodes": {
     "Program": {
-      "interfaces": ["Decl"],
-      "fields": { "Decls": "[]Decl" }
+      "interfaces": [
+        "Decl"
+      ],
+      "fields": {
+        "Decls": "[]Decl"
+      }
     },
     "FnDecl": {
-      "interfaces": ["Decl"],
-      "fields": { "Name": "string", "IsAsync": "bool", "Params": "[]*Param", "ReturnType": "TypeExpr", "Body": "*BlockStmt" }
+      "interfaces": [
+        "Decl"
+      ],
+      "fields": {
+        "Name": "string",
+        "IsAsync": "bool",
+        "Params": "[]*Param",
+        "ReturnType": "TypeExpr",
+        "Body": "*BlockStmt"
+      }
     },
     "TypeDecl": {
-      "interfaces": ["Decl"],
-      "fields": { "Name": "*Identifier", "Rhs": "TypeExpr" }
+      "interfaces": [
+        "Decl"
+      ],
+      "fields": {
+        "Name": "*Identifier",
+        "Rhs": "TypeExpr"
+      }
     },
     "BlockStmt": {
-      "interfaces": ["Stmt", "Expr"],
-      "fields": { "Statements": "[]Stmt" }
+      "interfaces": [
+        "Stmt",
+        "Expr"
+      ],
+      "fields": {
+        "Statements": "[]Stmt"
+      }
     },
     "DeclareStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Name": "string", "Mutable": "bool", "Value": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Name": "string",
+        "Mutable": "bool",
+        "Value": "Expr"
+      }
     },
     "AssignStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "LValue": "Expr", "RValue": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "LValue": "Expr",
+        "RValue": "Expr"
+      }
     },
     "ReturnStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Value": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "YieldStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Value": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "ExprStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Value": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "ForStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Init": "Stmt", "Condition": "Expr", "Post": "Stmt", "Body": "*BlockStmt" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Init": "Stmt",
+        "Condition": "Expr",
+        "Post": "Stmt",
+        "Body": "*BlockStmt"
+      }
     },
     "BreakStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Token": "token.Token" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Token": "token.Token"
+      }
     },
     "ContinueStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "Token": "token.Token" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Token": "token.Token"
+      }
     },
     "VecPushStmt": {
-      "interfaces": ["Stmt"],
-      "fields": { "LValue": "Expr", "RValue": "Expr" }
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "LValue": "Expr",
+        "RValue": "Expr"
+      }
     },
     "Identifier": {
-      "interfaces": ["Expr"],
-      "fields": { "Value": "string" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "string"
+      }
     },
     "IntLiteral": {
-      "interfaces": ["Expr"],
-      "fields": { "Value": "int64" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "int64"
+      }
     },
     "BoolLiteral": {
-      "interfaces": ["Expr"],
-      "fields": { "Value": "bool" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "bool"
+      }
     },
     "StringLiteral": {
-      "interfaces": ["Expr"],
-      "fields": { "Value": "string" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "string"
+      }
     },
     "CompositeLiteral": {
-      "interfaces": ["Expr"],
-      "fields": { "TypeExpr": "TypeExpr", "Elements": "[]CompositeElement" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "TypeExpr": "TypeExpr",
+        "Elements": "[]CompositeElement"
+      }
     },
     "CallExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Function": "Expr", "Arguments": "[]CallArg" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Function": "Expr",
+        "Arguments": "[]CallArg"
+      }
+    },
+    "OwnExpr": {
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
+    },
+    "FreezeExpr": {
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "InfixExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Left": "Expr", "Operator": "string", "Right": "Expr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Left": "Expr",
+        "Operator": "string",
+        "Right": "Expr"
+      }
     },
     "PrefixExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Operator": "string", "Right": "Expr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Operator": "string",
+        "Right": "Expr"
+      }
     },
     "FieldAccess": {
-      "interfaces": ["Expr"],
-      "fields": { "Object": "Expr", "Field": "*Identifier" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Object": "Expr",
+        "Field": "*Identifier"
+      }
     },
     "IndexExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Left": "Expr", "Index": "Expr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Left": "Expr",
+        "Index": "Expr"
+      }
     },
     "SliceExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Left": "Expr", "Low": "Expr", "High": "Expr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Left": "Expr",
+        "Low": "Expr",
+        "High": "Expr"
+      }
     },
     "IfExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Condition": "Expr", "Consequence": "*BlockStmt", "Alternative": "*BlockStmt" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Condition": "Expr",
+        "Consequence": "*BlockStmt",
+        "Alternative": "*BlockStmt"
+      }
     },
     "MatchExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Subject": "Expr", "Arms": "[]MatchArm" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Subject": "Expr",
+        "Arms": "[]MatchArm"
+      }
     },
     "AwaitExpr": {
-      "interfaces": ["Expr"],
-      "fields": { "Value": "Expr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "WildcardPattern": {
-      "interfaces": ["Pattern"],
+      "interfaces": [
+        "Pattern"
+      ],
       "fields": {}
     },
     "IdentifierPattern": {
-      "interfaces": ["Pattern"],
-      "fields": { "Name": "string" }
+      "interfaces": [
+        "Pattern"
+      ],
+      "fields": {
+        "Name": "string"
+      }
     },
     "LiteralPattern": {
-      "interfaces": ["Pattern"],
-      "fields": { "Value": "Expr" }
+      "interfaces": [
+        "Pattern"
+      ],
+      "fields": {
+        "Value": "Expr"
+      }
     },
     "CompositePattern": {
-      "interfaces": ["Pattern"],
-      "fields": { "TypeExpr": "TypeExpr", "Elements": "[]CompositePatternElement" }
+      "interfaces": [
+        "Pattern"
+      ],
+      "fields": {
+        "TypeExpr": "TypeExpr",
+        "Elements": "[]CompositePatternElement"
+      }
     },
     "TypeExprWrapper": {
-      "interfaces": ["Expr"],
-      "fields": { "TypeExpr": "TypeExpr" }
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "TypeExpr": "TypeExpr"
+      }
     },
     "NamedTypeExpr": {
-      "interfaces": ["TypeExpr"],
-      "fields": { "Name": "*Identifier" }
+      "interfaces": [
+        "TypeExpr"
+      ],
+      "fields": {
+        "Name": "*Identifier"
+      }
     },
     "ArrayTypeExpr": {
-      "interfaces": ["TypeExpr"],
-      "fields": { "Size": "int", "Base": "TypeExpr" }
+      "interfaces": [
+        "TypeExpr"
+      ],
+      "fields": {
+        "Size": "int",
+        "Base": "TypeExpr"
+      }
     },
     "StructTypeExpr": {
-      "interfaces": ["TypeExpr"],
-      "fields": { "Name": "string", "Fields": "[]StructTypeField" }
+      "interfaces": [
+        "TypeExpr"
+      ],
+      "fields": {
+        "Name": "string",
+        "Fields": "[]StructTypeField"
+      }
     },
     "SumTypeExpr": {
-      "interfaces": ["TypeExpr"],
-      "fields": { "Name": "string", "TypeArgs": "[]TypeExpr", "Variants": "[]VariantTypeExpr" }
+      "interfaces": [
+        "TypeExpr"
+      ],
+      "fields": {
+        "Name": "string",
+        "TypeArgs": "[]TypeExpr",
+        "Variants": "[]VariantTypeExpr"
+      }
     },
     "GenericTypeExpr": {
-      "interfaces": ["TypeExpr"],
-      "fields": { "Name": "*Identifier", "Args": "[]TypeExpr" }
+      "interfaces": [
+        "TypeExpr"
+      ],
+      "fields": {
+        "Name": "*Identifier",
+        "Args": "[]TypeExpr"
+      }
     }
   },
   "helpers": {
     "Param": {
-      "fields": { "Name": "string", "Type": "TypeExpr", "Mut": "bool" }
+      "fields": {
+        "Name": "string",
+        "Type": "TypeExpr",
+        "Mut": "bool",
+        "Own": "bool"
+      }
     },
     "CompositeElement": {
-      "fields": { "Key": "Expr", "Value": "Expr" }
+      "fields": {
+        "Key": "Expr",
+        "Value": "Expr"
+      }
     },
     "CallArg": {
-      "fields": { "Argument": "Expr", "Mut": "bool", "Own": "bool" }
+      "fields": {
+        "Argument": "Expr",
+        "Mut": "bool",
+        "Own": "bool"
+      }
     },
     "MatchArm": {
-      "fields": { "Pattern": "Pattern", "Body": "Expr" }
+      "fields": {
+        "Pattern": "Pattern",
+        "Body": "Expr"
+      }
     },
     "CompositePatternElement": {
-      "fields": { "Key": "Expr", "Pattern": "Pattern" }
+      "fields": {
+        "Key": "Expr",
+        "Pattern": "Pattern"
+      }
     },
     "StructTypeField": {
-      "fields": { "Name": "string", "Type": "TypeExpr" }
+      "fields": {
+        "Name": "string",
+        "Type": "TypeExpr"
+      }
     },
     "VariantTypeExpr": {
-      "fields": { "Name": "string", "TupleFields": "[]TypeExpr", "Fields": "[]StructTypeField" }
+      "fields": {
+        "Name": "string",
+        "TupleFields": "[]TypeExpr",
+        "Fields": "[]StructTypeField"
+      }
     }
   }
 }

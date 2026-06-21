@@ -137,6 +137,10 @@ func (p *Parser) parseParam() *ast.Param {
 	case token.MUT:
 		param.Mut = true
 		p.nextToken() // step off 'mut'
+	case token.OWN:
+		// Assuming your ast.Param struct has an 'Owned' boolean flag like 'Mut'!
+		param.Own = true
+		p.nextToken() // step off 'own'
 	}
 
 	// We expect the token to now sit on the parameter Name (e.g., 'x')

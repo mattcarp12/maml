@@ -19,7 +19,7 @@ func LowerAllocations(g *mir.Graph, escapes map[string]EscapeState) {
 				// 2. ONLY allocate a backing buffer if a value type (like a stack struct)
 				// is forced to escape to the heap. ARC types (like Vec) already manage
 				// their own heap memory via their constructors!
-				if !decl.Type.IsNeedsARC() && escapes[decl.Name] == StateHeap {
+				if !decl.Type.IsNeedsARC() && escapes[decl.Name] == OnHeap {
 					newStmts = append(newStmts, &mir.RefAllocInst{
 						Dst:  decl.Name,
 						Type: decl.Type,

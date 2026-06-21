@@ -90,6 +90,32 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 	case *hir.CallExpr:
 		return b.flattenCall(e, current)
 
+	case *hir.OwnExpr:
+		root, path, current := b.flattenPlace(e.Value, current)
+		tmp := b.newTemp()
+
+		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		current.Statements = append(current.Statements, &OwnInst{
+			Dst:  tmp,
+			Root: root,
+			Path: path,
+			Type: e.Type,
+		})
+		return &Register{Name: tmp, Type: e.Type}, current
+
+	case *hir.FreezeExpr:
+		root, path, current := b.flattenPlace(e.Value, current)
+		tmp := b.newTemp()
+
+		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		current.Statements = append(current.Statements, &FreezeInst{
+			Dst:  tmp,
+			Root: root,
+			Path: path,
+			Type: e.Type,
+		})
+		return &Register{Name: tmp, Type: e.Type}, current
+
 	case *hir.AwaitExpr:
 		flatTask, current := b.flattenExpr(e.Value, current)
 		resumeBlock := b.newBlock()
@@ -473,7 +499,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			})
 			return &Register{Name: tmp, Type: types.UnitType{}}, current
 
-		case "puts":
+		case "print":
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock
 
@@ -503,10 +529,9 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			tmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
 
-			printFnType := types.RuntimeABI[types.SYM_PUTS]
 			current.Statements = append(current.Statements, &CallInst{
 				Dst:      tmp,
-				Function: &Register{Name: types.SYM_PUTS, Type: printFnType},
+				Function: &Register{Name: "maml_print", Type: types.UnknownType{}}, // 2. Call the Zig runtime function!
 				Arguments: []MIRCallArg{
 					{Argument: &Register{Name: strPtrTmp, Type: types.AnyType{}}, Mut: false},
 					{Argument: &Register{Name: strLenTmp, Type: types.IntType{}}, Mut: false},
@@ -514,7 +539,6 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 				Type: types.UnitType{},
 			})
 			return &Register{Name: tmp, Type: types.UnitType{}}, current
-
 		}
 	}
 
@@ -622,7 +646,7 @@ func (b *Builder) flattenVecLiteral(e *hir.VecLiteral, current *BasicBlock) (Val
 		Dst:      tmp,
 		Function: createFn,
 		Arguments: []MIRCallArg{
-			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Base, b.Target)), Type: types.IntType{}}},
+			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Base, b.Target, false)), Type: types.IntType{}}},
 			{Argument: &Register{Name: elemRetain, Type: types.UnknownType{}}},
 			{Argument: &Register{Name: elemRelease, Type: types.UnknownType{}}},
 		},
@@ -667,7 +691,7 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 	valRetain, valRelease := getHooks(t.Value)
 
 	isStrKey := int64(0)
-	if _, isStr := t.Key.(*types.StringType); isStr {
+	if _, isStr := t.Key.(types.StringType); isStr {
 		isStrKey = 1
 	}
 
@@ -676,7 +700,7 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 		Dst:      tmp,
 		Function: createFn,
 		Arguments: []MIRCallArg{
-			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Value, b.Target)), Type: types.IntType{}}},
+			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Value, b.Target, false)), Type: types.IntType{}}},
 			{Argument: &IntConstant{Value: isStrKey, Type: types.IntType{}}},
 			{Argument: &Register{Name: keyRetain, Type: types.UnknownType{}}},
 			{Argument: &Register{Name: keyRelease, Type: types.UnknownType{}}},
@@ -834,4 +858,19 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value, c
 	}
 
 	return &Register{Name: boolTmp, Type: types.BoolType{}}, current
+}
+
+// flattenPlace unwinds a field access chain to extract the root variable and the projection path.
+// If the expression is not a FieldAccess, it returns the flattened expression and an empty path.
+func (b *Builder) flattenPlace(expr hir.Expr, current *BasicBlock) (Value, []string, *BasicBlock) {
+	if fa, ok := expr.(*hir.FieldAccess); ok {
+		root, path, nextBlock := b.flattenPlace(fa.Object, current)
+		path = append(path, fa.Field.Value)
+		return root, path, nextBlock
+	}
+
+	// Base case: we've reached the root of the path.
+	// Flatten it normally to yield the root Value (e.g., a Register).
+	flatRoot, nextBlock := b.flattenExpr(expr, current)
+	return flatRoot, []string{}, nextBlock
 }

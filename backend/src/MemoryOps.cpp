@@ -170,8 +170,6 @@ void handle(CodegenContext &ctx, const mir::CastInst &inst) {
   ctx.SymbolEnv.back()[inst.dst] = castVal;
 }
 
-void handle(CodegenContext &ctx, const mir::MutBorrowInst &inst) { /* No-op in backend */ }
 void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) { /* Not implemented */ }
-void handle(CodegenContext &ctx, const mir::KeepAliveInst &inst) { /* No-op in backend */ }
 
 }  // namespace maml

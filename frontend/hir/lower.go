@@ -231,6 +231,10 @@ func (l *Lowerer) lowerExpr(expr tast.Expr) Expr {
 		return l.lowerCallExpr(e)
 	case *tast.MatchExpr:
 		return l.lowerMatchExpr(e)
+	case *tast.OwnExpr:
+		return l.lowerOwnExpr(e)
+	case *tast.FreezeExpr:
+		return l.lowerFreezeExpr(e)
 
 	case *tast.FieldAccess:
 		return &FieldAccess{

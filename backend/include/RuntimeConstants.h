@@ -25,7 +25,7 @@ constexpr const char* CORO_DONE_HELPER = "maml_coro_done_helper";
 constexpr const char* CORO_DESTROY_HELPER = "maml_coro_destroy_helper";
 constexpr const char* SPAWN_TASK = "maml_spawn_task";
 constexpr const char* RUN_EXECUTOR = "maml_run_executor";
-constexpr const char* PUTS = "puts";
+constexpr const char* PRINT = "maml_print";
 
 } // namespace rt
 } // namespace maml

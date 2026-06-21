@@ -5,9 +5,9 @@
 // Hello from consolidated test suite!
 
 fn main() int {
-    puts("Initializing boot sequence...")
-    puts("Loading modules...")
-    puts("Done.")
-    puts("Hello from consolidated test suite!")
+    print("Initializing boot sequence...")
+    print("Loading modules...")
+    print("Done.")
+    print("Hello from consolidated test suite!")
     return 99
 }

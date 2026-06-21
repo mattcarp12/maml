@@ -106,7 +106,15 @@ type StructType struct {
 
 func (t *StructType) isType()               {}
 func (t *StructType) IsReferenceType() bool { return false }
-func (t *StructType) IsNeedsARC() bool      { return false }
+func (t *StructType) IsNeedsARC() bool {
+	for _, f := range t.Fields {
+		if f.Type != nil && f.Type.IsNeedsARC() {
+			return true
+		}
+	}
+	return false
+
+}
 func (t *StructType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -129,7 +137,9 @@ type SumType struct {
 
 func (t *SumType) isType()               {}
 func (t *SumType) IsReferenceType() bool { return false }
-func (t *SumType) IsNeedsARC() bool      { return false }
+func (t *SumType) IsNeedsARC() bool {
+	return false
+}
 func (t *SumType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -152,7 +162,9 @@ type ArrayType struct {
 
 func (t *ArrayType) isType()               {}
 func (t *ArrayType) IsReferenceType() bool { return true }
-func (t *ArrayType) IsNeedsARC() bool      { return false }
+func (t *ArrayType) IsNeedsARC() bool {
+	return t.Base != nil && t.Base.IsNeedsARC()
+}
 func (t *ArrayType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -180,7 +192,9 @@ type ViewType struct {
 
 func (t *ViewType) isType()               {}
 func (t *ViewType) IsReferenceType() bool { return true }
-func (t *ViewType) IsNeedsARC() bool      { return false }
+func (t *ViewType) IsNeedsARC() bool {
+	return false
+}
 func (t *ViewType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -205,7 +219,9 @@ type VectorType struct {
 
 func (t *VectorType) isType()               {}
 func (t *VectorType) IsReferenceType() bool { return true }
-func (t *VectorType) IsNeedsARC() bool      { return true }
+func (t *VectorType) IsNeedsARC() bool {
+	return true
+}
 func (t *VectorType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -231,7 +247,9 @@ type MapType struct {
 
 func (t *MapType) isType()               {}
 func (t *MapType) IsReferenceType() bool { return true }
-func (t *MapType) IsNeedsARC() bool      { return true }
+func (t *MapType) IsNeedsARC() bool {
+	return true
+}
 func (t *MapType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -263,7 +281,9 @@ type FutureType struct {
 
 func (t *FutureType) isType()               {}
 func (t *FutureType) IsReferenceType() bool { return true }
-func (t *FutureType) IsNeedsARC() bool      { return true }
+func (t *FutureType) IsNeedsARC() bool {
+	return true
+}
 func (t *FutureType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true

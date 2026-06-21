@@ -1,7 +1,7 @@
 // EXIT_CODE: 42
 
 async fn fetch_user_data() int {
-    puts("Fetching data...")
+    print("Fetching data...")
     return 42
 }
 

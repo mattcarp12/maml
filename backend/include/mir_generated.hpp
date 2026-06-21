@@ -80,6 +80,7 @@ struct FieldReadInst {
     std::string dst;
     int32_t field_index;
     std::string field_name;
+    int32_t field_offset;
     Value object;
     std::shared_ptr<maml::Type> type;
     std::vector<std::shared_ptr<maml::Type>> variant_layout;
@@ -97,19 +98,12 @@ struct IndexReadInst {
     std::shared_ptr<maml::Type> source_type;
     std::shared_ptr<maml::Type> type;
 };
-struct KeepAliveInst {
-    std::string src;
-};
 struct LoadPtrInst {
     std::string dst;
     Value ptr;
     std::shared_ptr<maml::Type> type;
 };
 struct MoveInst {
-    std::string dst;
-    std::string src;
-};
-struct MutBorrowInst {
     std::string dst;
     std::string src;
 };
@@ -140,6 +134,7 @@ struct StructInitInst {
     std::string dst;
     int32_t field_index;
     std::string field_name;
+    int32_t field_offset;
     Value value;
     std::vector<std::shared_ptr<maml::Type>> variant_layout;
 };
@@ -173,7 +168,7 @@ struct VariantReadInst {
     std::string variant_name;
 };
 
-using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldReadInst, IndexAssignInst, IndexReadInst, KeepAliveInst, LoadPtrInst, MoveInst, MutBorrowInst, RefAllocInst, RefDecInst, RefIncInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
+using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldReadInst, IndexAssignInst, IndexReadInst, LoadPtrInst, MoveInst, RefAllocInst, RefDecInst, RefIncInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
 >;
 
 struct Instruction {
@@ -248,10 +243,8 @@ void from_json(const nlohmann::json& j, CoroPrologueInst& t);
 void from_json(const nlohmann::json& j, FieldReadInst& t);
 void from_json(const nlohmann::json& j, IndexAssignInst& t);
 void from_json(const nlohmann::json& j, IndexReadInst& t);
-void from_json(const nlohmann::json& j, KeepAliveInst& t);
 void from_json(const nlohmann::json& j, LoadPtrInst& t);
 void from_json(const nlohmann::json& j, MoveInst& t);
-void from_json(const nlohmann::json& j, MutBorrowInst& t);
 void from_json(const nlohmann::json& j, RefAllocInst& t);
 void from_json(const nlohmann::json& j, RefDecInst& t);
 void from_json(const nlohmann::json& j, RefIncInst& t);
@@ -401,6 +394,9 @@ inline void from_json(const nlohmann::json& j, FieldReadInst& t) {
     if (j.contains("field_name") && !j.at("field_name").is_null()) {
         j.at("field_name").get_to(t.field_name);
     }
+    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
+        j.at("field_offset").get_to(t.field_offset);
+    }
     if (j.contains("object") && !j.at("object").is_null()) {
         j.at("object").get_to(t.object);
     }
@@ -442,11 +438,6 @@ inline void from_json(const nlohmann::json& j, IndexReadInst& t) {
         j.at("type").get_to(t.type);
     }
 }
-inline void from_json(const nlohmann::json& j, KeepAliveInst& t) {
-    if (j.contains("src") && !j.at("src").is_null()) {
-        j.at("src").get_to(t.src);
-    }
-}
 inline void from_json(const nlohmann::json& j, LoadPtrInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
@@ -459,14 +450,6 @@ inline void from_json(const nlohmann::json& j, LoadPtrInst& t) {
     }
 }
 inline void from_json(const nlohmann::json& j, MoveInst& t) {
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("src") && !j.at("src").is_null()) {
-        j.at("src").get_to(t.src);
-    }
-}
-inline void from_json(const nlohmann::json& j, MutBorrowInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
     }
@@ -532,6 +515,9 @@ inline void from_json(const nlohmann::json& j, StructInitInst& t) {
     }
     if (j.contains("field_name") && !j.at("field_name").is_null()) {
         j.at("field_name").get_to(t.field_name);
+    }
+    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
+        j.at("field_offset").get_to(t.field_offset);
     }
     if (j.contains("value") && !j.at("value").is_null()) {
         j.at("value").get_to(t.value);
@@ -690,10 +676,8 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "field_read") { inst.inner = j.get<FieldReadInst>(); return; }
     if (op == "index_assign") { inst.inner = j.get<IndexAssignInst>(); return; }
     if (op == "index_read") { inst.inner = j.get<IndexReadInst>(); return; }
-    if (op == "keep_alive") { inst.inner = j.get<KeepAliveInst>(); return; }
     if (op == "load_ptr") { inst.inner = j.get<LoadPtrInst>(); return; }
     if (op == "move") { inst.inner = j.get<MoveInst>(); return; }
-    if (op == "mut_borrow") { inst.inner = j.get<MutBorrowInst>(); return; }
     if (op == "ref_alloc") { inst.inner = j.get<RefAllocInst>(); return; }
     if (op == "ref_dec") { inst.inner = j.get<RefDecInst>(); return; }
     if (op == "ref_inc") { inst.inner = j.get<RefIncInst>(); return; }

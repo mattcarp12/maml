@@ -115,6 +115,6 @@ functions:
     return: "void"
 
   # --- IO Functions ---
-  - symbol: "puts"
-    args: ["Ptr"]
-    return: "i32"
+  - symbol: "maml_print"
+    args: ["Ptr", "i32"]
+    return: "void"

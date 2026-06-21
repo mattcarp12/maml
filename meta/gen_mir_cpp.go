@@ -58,6 +58,7 @@ func generateCpp(outDir string) error {
 		Nodes map[string]struct {
 			Interfaces []string          `json:"interfaces"`
 			Fields     map[string]string `json:"fields"`
+			EmitCpp    *bool             `json:"emitCpp,omitempty"` // Add this field
 		} `json:"nodes"`
 		Helpers map[string]struct {
 			Fields map[string]string `json:"fields"`
@@ -68,6 +69,11 @@ func generateCpp(outDir string) error {
 	data := TemplateData{}
 
 	for name, node := range rawSchema.Nodes {
+		// Skip C++ generation if explicitly marked as false
+		if node.EmitCpp != nil && !*node.EmitCpp {
+			continue
+		}
+
 		spec := StructSpec{
 			Name:   name,
 			Opcode: toSnakeCase(strings.ReplaceAll(strings.ReplaceAll(name, "Inst", ""), "Terminator", "")),
@@ -102,7 +108,20 @@ func generateCpp(outDir string) error {
 	}
 
 	os.MkdirAll(outDir, 0755)
-	return os.WriteFile(filepath.Join(outDir, "mir_generated.hpp"), buf.Bytes(), 0644)
+	outfile := filepath.Join(outDir, "mir_generated.hpp")
+	output := buf.Bytes()
+	if shouldWriteFile(outfile, string(output)) {
+		os.WriteFile(outfile, output, 0644)
+	}
+	return nil
+}
+
+func shouldWriteFile(path string, newContent string) bool {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return true // file doesn't exist
+	}
+	return string(existing) != newContent
 }
 
 func buildFields(fields map[string]string) []Field {
@@ -139,6 +158,8 @@ func mapCppType(goType string) string {
 	switch goType {
 	case "string":
 		return "std::string"
+	case "[]string":
+		return "std::vector<std::string>"
 	case "int", "int32":
 		return "int32_t"
 	case "int64":
@@ -146,9 +167,9 @@ func mapCppType(goType string) string {
 	case "bool":
 		return "bool"
 	case "types.Type":
-		return "std::shared_ptr<maml::Type>" // Changed from nlohmann::json
+		return "std::shared_ptr<maml::Type>"
 	case "[]types.Type":
-		return "std::vector<std::shared_ptr<maml::Type>>" // Changed from std::vector<nlohmann::json>
+		return "std::vector<std::shared_ptr<maml::Type>>"
 	case "Value", "mir.Value":
 		return "Value"
 	case "[]Value", "[]mir.Value":

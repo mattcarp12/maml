@@ -108,29 +108,29 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
     llvm::Value *argVal = evaluateValue(ctx, argWrapper.argument);
 
     // Resolve specific runtime memory hook arguments using the typed AST
-    if (funcName == rt::MAP_CREATE) {
-      if (i == 0) {
-        int itemSize = 4;
-        if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
-          itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, mapTy->value));
-        }
-        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
-      } else if (i == 1) {
-        bool isStr = false;
-        if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
-          isStr = std::holds_alternative<maml::StringType>(mapTy->key->inner);
-        }
-        argVal = llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), isStr ? 1 : 0);
-      }
-    } else if (funcName == rt::VEC_CREATE) {
-      if (i == 0) {
-        int itemSize = 4;
-        if (auto *vecTy = std::get_if<maml::VectorType>(&inst.type->inner)) {
-          itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, vecTy->base));
-        }
-        argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
-      }
-    }
+    // if (funcName == rt::MAP_CREATE) {
+    //   if (i == 0) {
+    //     int itemSize = 4;
+    //     if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
+    //       itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, mapTy->value));
+    //     }
+    //     argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
+    //   } else if (i == 1) {
+    //     bool isStr = false;
+    //     if (auto *mapTy = std::get_if<maml::MapType>(&inst.type->inner)) {
+    //       isStr = std::holds_alternative<maml::StringType>(mapTy->key->inner);
+    //     }
+    //     argVal = llvm::ConstantInt::get(llvm::Type::getInt8Ty(ctx.Context), isStr ? 1 : 0);
+    //   }
+    // } else if (funcName == rt::VEC_CREATE) {
+    //   if (i == 0) {
+    //     int itemSize = 4;
+    //     if (auto *vecTy = std::get_if<maml::VectorType>(&inst.type->inner)) {
+    //       itemSize = llvm::DataLayout(ctx.Module.get()).getTypeAllocSize(llvmTypeFor(ctx, vecTy->base));
+    //     }
+    //     argVal = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), itemSize);
+    //   }
+    // }
 
     if (FT && i < FT->getNumParams()) {
       llvm::Type *expectedTy = FT->getParamType(i);

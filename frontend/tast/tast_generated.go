@@ -210,6 +210,18 @@ func (n *ForStmt) End() Position    { return n.End_ }
 func (n *ForStmt) Accept(v Visitor) { v.VisitForStmt(n) }
 func (n *ForStmt) stmtNode()        {}
 
+type FreezeExpr struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Type  types.Type
+	Value Expr
+}
+
+func (n *FreezeExpr) Pos() Position    { return n.Pos_ }
+func (n *FreezeExpr) End() Position    { return n.End_ }
+func (n *FreezeExpr) Accept(v Visitor) { v.VisitFreezeExpr(n) }
+func (n *FreezeExpr) exprNode()        {}
+
 type Identifier struct {
 	Pos_   Position `json:"-"`
 	End_   Position `json:"-"`
@@ -323,6 +335,18 @@ func (n *MatchExpr) Pos() Position    { return n.Pos_ }
 func (n *MatchExpr) End() Position    { return n.End_ }
 func (n *MatchExpr) Accept(v Visitor) { v.VisitMatchExpr(n) }
 func (n *MatchExpr) exprNode()        {}
+
+type OwnExpr struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Type  types.Type
+	Value Expr
+}
+
+func (n *OwnExpr) Pos() Position    { return n.Pos_ }
+func (n *OwnExpr) End() Position    { return n.End_ }
+func (n *OwnExpr) Accept(v Visitor) { v.VisitOwnExpr(n) }
+func (n *OwnExpr) exprNode()        {}
 
 type PrefixExpr struct {
 	Pos_     Position `json:"-"`
@@ -492,6 +516,7 @@ type CallArg struct {
 	End_     Position `json:"-"`
 	Argument Expr
 	Mut      bool
+	Own      bool
 }
 
 func (h *CallArg) Pos() Position { return h.Pos_ }
@@ -587,6 +612,7 @@ type Visitor interface {
 	VisitFieldAccess(n *FieldAccess)
 	VisitFnDecl(n *FnDecl)
 	VisitForStmt(n *ForStmt)
+	VisitFreezeExpr(n *FreezeExpr)
 	VisitIdentifier(n *Identifier)
 	VisitIdentifierPattern(n *IdentifierPattern)
 	VisitIfExpr(n *IfExpr)
@@ -596,6 +622,7 @@ type Visitor interface {
 	VisitLiteralPattern(n *LiteralPattern)
 	VisitMapLiteral(n *MapLiteral)
 	VisitMatchExpr(n *MatchExpr)
+	VisitOwnExpr(n *OwnExpr)
 	VisitPrefixExpr(n *PrefixExpr)
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
@@ -631,6 +658,8 @@ func TypeOf(expr Expr) types.Type {
 		return e.Type
 	case *FieldAccess:
 		return e.Type
+	case *FreezeExpr:
+		return e.Type
 	case *Identifier:
 		return e.Type
 	case *IfExpr:
@@ -644,6 +673,8 @@ func TypeOf(expr Expr) types.Type {
 	case *MapLiteral:
 		return e.Type
 	case *MatchExpr:
+		return e.Type
+	case *OwnExpr:
 		return e.Type
 	case *PrefixExpr:
 		return e.Type

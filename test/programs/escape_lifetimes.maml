@@ -2,14 +2,14 @@
 
 type Box = { id int, data View<int> }
 
-fn get_slice(cond bool) View<int> {
-    a := [3]int{1, 2, 3}
-    b := [3]int{4, 5, 6}
-    if cond { return a[:] }
-    return b[:]
-}
+// fn get_slice(cond bool) View<int> {
+//     a := [3]int{1, 2, 3}
+//     b := [3]int{4, 5, 6}
+//     if cond { return a[:] }
+//     return b[:]
+// }
 
-fn consume(s View<int>) int {
+fn consume(own s View<int>) int {
     return s[2]
 }
 
@@ -22,15 +22,16 @@ fn main() int {
     mut sum := 0
 
     for mut i := 0; i < 5; i = i + 1 {
-        s := get_slice((i % 2) == 0)
-        sum = sum + s[0]
+        // s := get_slice((i % 2) == 0)
+        // sum = sum + s[0]
     }
 
     b := make_box(42)
     sum = sum + b.data[1] + b.id
 
     arr1 := [3]int{5, 10, 15}
-    sum = sum + consume(own arr1[:])
+    arr1_view := arr1[:]
+    sum = sum + consume(own arr1_view)
 
     mut active := make_box(10).data
     for mut i := 0; i < 3; i = i + 1 {

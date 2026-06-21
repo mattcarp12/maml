@@ -265,12 +265,10 @@ func (p *Parser) parseCallArg() ast.CallArg {
 		Pos_: p.curPos(),
 	}
 
-	switch p.curToken.Type {
-	case token.MUT:
+	// We only intercept 'mut'. We leave 'own' alone so that
+	// parseExpression properly builds an ast.OwnExpr!
+	if p.curToken.Type == token.MUT {
 		arg.Mut = true
-		p.nextToken()
-	case token.OWN:
-		arg.Own = true
 		p.nextToken()
 	}
 
@@ -464,4 +462,44 @@ func (p *Parser) parseAwaitExpression() ast.Expr {
 		Pos_:  pos,
 		End_:  p.curEndPos(),
 	}
+}
+
+func (p *Parser) parseOwnExpression() ast.Expr {
+	pos := p.curPos()
+	p.nextToken() // step off 'own'
+
+	// Use PREFIX precedence so `own x.y` binds tightly
+	value := p.parseExpression(PREFIX)
+	if value == nil {
+		return nil
+	}
+
+	expr := &ast.OwnExpr{
+		Value: value,
+		Pos_:  pos,
+	}
+	expr.End_ = p.curEndPos()
+	return expr
+}
+
+func (p *Parser) parseFreezeExpression() ast.Expr {
+	pos := p.curPos()
+	// p.nextToken() // step off 'freeze'
+	if !p.expectPeek(token.LPAREN) {
+		return nil
+	}
+	p.nextToken() // step off '('
+	value := p.parseExpression(LOWEST)
+	if value == nil {
+		return nil
+	}
+	if !p.expectPeek(token.RPAREN) {
+		return nil
+	}
+	expr := &ast.FreezeExpr{
+		Value: value,
+		Pos_:  pos,
+	}
+	expr.End_ = p.curEndPos()
+	return expr
 }

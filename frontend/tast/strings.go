@@ -56,7 +56,7 @@ func (f *FnDecl) String() string {
 func (t *TypeDecl) String() string {
 	return fmt.Sprintf("type %s = %s", t.Name.String(), t.Type.String())
 }
-func (i *Identifier) String() string { return i.Value }
+func (i *Identifier) String() string     { return i.Value }
 func (il *IntLiteral) String() string    { return fmt.Sprintf("%d", il.Value) }
 func (b *BoolLiteral) String() string    { return fmt.Sprintf("%t", b.Value) }
 func (sl *StringLiteral) String() string { return fmt.Sprintf("\"%s\"", sl.Value) }
@@ -231,3 +231,5 @@ func (f *ForStmt) String() string {
 }
 func (s *BreakStmt) String() string    { return "break" }
 func (s *ContinueStmt) String() string { return "continue" }
+func (f *OwnExpr) String() string      { return "own " + f.Value.String() }
+func (f *FreezeExpr) String() string   { return "freeze " + f.Value.String() }
