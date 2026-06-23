@@ -17,14 +17,15 @@ type Analyzer struct {
 	errors         []ast.CompileError
 	expectedReturn types.Type
 	currentFn      *ast.FnDecl
-	registry       *Registry // NEW: The declarative rule table
+	registry       *Registry
+	allowAsyncCall bool
 }
 
 func New() *Analyzer {
 	return &Analyzer{
 		scope:    newGlobalScope(),
 		errors:   []ast.CompileError{},
-		registry: newRegistry(), // NEW: Initialize the rules once at startup
+		registry: newRegistry(),
 	}
 }
 
@@ -157,9 +158,10 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	var returnType types.Type = types.UnitType{}
 	if v.ReturnType != nil {
 		returnType = a.resolveAstType(v.ReturnType)
-		if v.IsAsync {
-			returnType = &types.FutureType{Base: returnType}
-		}
+	}
+
+	if v.IsAsync {
+		returnType = &types.FutureType{Base: returnType}
 	}
 
 	fnType := &types.FunctionType{

@@ -2,6 +2,7 @@
 package tast
 
 import (
+	"fmt"
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -84,6 +85,33 @@ type Visitor interface {
 {{- range .Nodes }}
 	Visit{{ .Name }}(n *{{ .Name }})
 {{- end }}
+}
+
+// =============================================================================
+// Mapper Interface & Generic Dispatcher
+// =============================================================================
+
+type Mapper[R any] interface {
+{{- range .Nodes }}
+	Map{{ .Name }}(n *{{ .Name }}) R
+{{- end }}
+}
+
+// MapNode is a strongly-typed, auto-generated dispatcher that eliminates 
+// the need for manual type assertions when transforming the TAST.
+func MapNode[R any](node Node, m Mapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+{{- range .Nodes }}
+	case *{{ .Name }}:
+		return m.Map{{ .Name }}(n)
+{{- end }}
+	default:
+		panic(fmt.Sprintf("unhandled TAST node type in MapNode dispatcher: %T", node))
+	}
 }
 
 // =============================================================================

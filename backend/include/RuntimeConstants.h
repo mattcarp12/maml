@@ -25,6 +25,11 @@ constexpr const char* CORO_DONE_HELPER = "maml_coro_done_helper";
 constexpr const char* CORO_DESTROY_HELPER = "maml_coro_destroy_helper";
 constexpr const char* SPAWN_TASK = "maml_spawn_task";
 constexpr const char* RUN_EXECUTOR = "maml_run_executor";
+constexpr const char* RUNTIME_INIT = "maml_runtime_init";
+constexpr const char* TASK_AWAIT = "maml_task_await";
+constexpr const char* TASK_RELEASE = "maml_task_release";
+constexpr const char* TASK_GET_RESULT = "maml_task_get_result";
+constexpr const char* YIELD_NOW = "maml_yield_now";
 constexpr const char* PRINT = "maml_print";
 
 } // namespace rt

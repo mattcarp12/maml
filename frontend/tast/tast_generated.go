@@ -2,6 +2,7 @@
 package tast
 
 import (
+	"fmt"
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -185,6 +186,7 @@ type FnDecl struct {
 	End_       Position `json:"-"`
 	Body       *BlockStmt
 	IsAsync    bool
+	IsExtern   bool
 	Name       string
 	Params     []*Param
 	ReturnType types.Type
@@ -396,6 +398,18 @@ func (n *SliceExpr) Pos() Position    { return n.Pos_ }
 func (n *SliceExpr) End() Position    { return n.End_ }
 func (n *SliceExpr) Accept(v Visitor) { v.VisitSliceExpr(n) }
 func (n *SliceExpr) exprNode()        {}
+
+type SpawnExpr struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Type  *types.FutureType
+	Value *CallExpr
+}
+
+func (n *SpawnExpr) Pos() Position    { return n.Pos_ }
+func (n *SpawnExpr) End() Position    { return n.End_ }
+func (n *SpawnExpr) Accept(v Visitor) { v.VisitSpawnExpr(n) }
+func (n *SpawnExpr) exprNode()        {}
 
 type StringLiteral struct {
 	Pos_  Position `json:"-"`
@@ -627,6 +641,7 @@ type Visitor interface {
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
 	VisitSliceExpr(n *SliceExpr)
+	VisitSpawnExpr(n *SpawnExpr)
 	VisitStringLiteral(n *StringLiteral)
 	VisitStructLiteral(n *StructLiteral)
 	VisitTypeDecl(n *TypeDecl)
@@ -636,6 +651,143 @@ type Visitor interface {
 	VisitVecPushStmt(n *VecPushStmt)
 	VisitWildcardPattern(n *WildcardPattern)
 	VisitYieldStmt(n *YieldStmt)
+}
+
+// =============================================================================
+// Mapper Interface & Generic Dispatcher
+// =============================================================================
+
+type Mapper[R any] interface {
+	MapArrayLiteral(n *ArrayLiteral) R
+	MapAssignStmt(n *AssignStmt) R
+	MapAwaitExpr(n *AwaitExpr) R
+	MapBlockStmt(n *BlockStmt) R
+	MapBoolLiteral(n *BoolLiteral) R
+	MapBreakStmt(n *BreakStmt) R
+	MapCallExpr(n *CallExpr) R
+	MapCompositePattern(n *CompositePattern) R
+	MapContinueStmt(n *ContinueStmt) R
+	MapDeclareStmt(n *DeclareStmt) R
+	MapExprStmt(n *ExprStmt) R
+	MapFieldAccess(n *FieldAccess) R
+	MapFnDecl(n *FnDecl) R
+	MapForStmt(n *ForStmt) R
+	MapFreezeExpr(n *FreezeExpr) R
+	MapIdentifier(n *Identifier) R
+	MapIdentifierPattern(n *IdentifierPattern) R
+	MapIfExpr(n *IfExpr) R
+	MapIndexExpr(n *IndexExpr) R
+	MapInfixExpr(n *InfixExpr) R
+	MapIntLiteral(n *IntLiteral) R
+	MapLiteralPattern(n *LiteralPattern) R
+	MapMapLiteral(n *MapLiteral) R
+	MapMatchExpr(n *MatchExpr) R
+	MapOwnExpr(n *OwnExpr) R
+	MapPrefixExpr(n *PrefixExpr) R
+	MapProgram(n *Program) R
+	MapReturnStmt(n *ReturnStmt) R
+	MapSliceExpr(n *SliceExpr) R
+	MapSpawnExpr(n *SpawnExpr) R
+	MapStringLiteral(n *StringLiteral) R
+	MapStructLiteral(n *StructLiteral) R
+	MapTypeDecl(n *TypeDecl) R
+	MapVariantLiteral(n *VariantLiteral) R
+	MapVariantPattern(n *VariantPattern) R
+	MapVecLiteral(n *VecLiteral) R
+	MapVecPushStmt(n *VecPushStmt) R
+	MapWildcardPattern(n *WildcardPattern) R
+	MapYieldStmt(n *YieldStmt) R
+}
+
+// MapNode is a strongly-typed, auto-generated dispatcher that eliminates
+// the need for manual type assertions when transforming the TAST.
+func MapNode[R any](node Node, m Mapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+	case *ArrayLiteral:
+		return m.MapArrayLiteral(n)
+	case *AssignStmt:
+		return m.MapAssignStmt(n)
+	case *AwaitExpr:
+		return m.MapAwaitExpr(n)
+	case *BlockStmt:
+		return m.MapBlockStmt(n)
+	case *BoolLiteral:
+		return m.MapBoolLiteral(n)
+	case *BreakStmt:
+		return m.MapBreakStmt(n)
+	case *CallExpr:
+		return m.MapCallExpr(n)
+	case *CompositePattern:
+		return m.MapCompositePattern(n)
+	case *ContinueStmt:
+		return m.MapContinueStmt(n)
+	case *DeclareStmt:
+		return m.MapDeclareStmt(n)
+	case *ExprStmt:
+		return m.MapExprStmt(n)
+	case *FieldAccess:
+		return m.MapFieldAccess(n)
+	case *FnDecl:
+		return m.MapFnDecl(n)
+	case *ForStmt:
+		return m.MapForStmt(n)
+	case *FreezeExpr:
+		return m.MapFreezeExpr(n)
+	case *Identifier:
+		return m.MapIdentifier(n)
+	case *IdentifierPattern:
+		return m.MapIdentifierPattern(n)
+	case *IfExpr:
+		return m.MapIfExpr(n)
+	case *IndexExpr:
+		return m.MapIndexExpr(n)
+	case *InfixExpr:
+		return m.MapInfixExpr(n)
+	case *IntLiteral:
+		return m.MapIntLiteral(n)
+	case *LiteralPattern:
+		return m.MapLiteralPattern(n)
+	case *MapLiteral:
+		return m.MapMapLiteral(n)
+	case *MatchExpr:
+		return m.MapMatchExpr(n)
+	case *OwnExpr:
+		return m.MapOwnExpr(n)
+	case *PrefixExpr:
+		return m.MapPrefixExpr(n)
+	case *Program:
+		return m.MapProgram(n)
+	case *ReturnStmt:
+		return m.MapReturnStmt(n)
+	case *SliceExpr:
+		return m.MapSliceExpr(n)
+	case *SpawnExpr:
+		return m.MapSpawnExpr(n)
+	case *StringLiteral:
+		return m.MapStringLiteral(n)
+	case *StructLiteral:
+		return m.MapStructLiteral(n)
+	case *TypeDecl:
+		return m.MapTypeDecl(n)
+	case *VariantLiteral:
+		return m.MapVariantLiteral(n)
+	case *VariantPattern:
+		return m.MapVariantPattern(n)
+	case *VecLiteral:
+		return m.MapVecLiteral(n)
+	case *VecPushStmt:
+		return m.MapVecPushStmt(n)
+	case *WildcardPattern:
+		return m.MapWildcardPattern(n)
+	case *YieldStmt:
+		return m.MapYieldStmt(n)
+	default:
+		panic(fmt.Sprintf("unhandled TAST node type in MapNode dispatcher: %T", node))
+	}
 }
 
 // =============================================================================
@@ -679,6 +831,8 @@ func TypeOf(expr Expr) types.Type {
 	case *PrefixExpr:
 		return e.Type
 	case *SliceExpr:
+		return e.Type
+	case *SpawnExpr:
 		return e.Type
 	case *StringLiteral:
 		return e.Type

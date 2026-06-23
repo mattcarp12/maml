@@ -111,7 +111,22 @@ functions:
     args: ["Ptr"]
     return: "void"
   - symbol: "maml_run_executor"
+    args: ["Ptr"]
+    return: "Ptr"
+  - symbol: "maml_runtime_init"
     args: []
+    return: "void"
+  - symbol: "maml_task_await"
+    args: ["Ptr", "Ptr"] # target_task, waiting_task
+    return: "void"
+  - symbol: "maml_task_release"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_task_get_result"
+    args: ["Ptr"]
+    return: "void"
+  - symbol: "maml_yield_now"
+    args: ["Ptr"] # takes current_coro
     return: "void"
 
   # --- IO Functions ---

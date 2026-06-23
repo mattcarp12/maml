@@ -172,9 +172,7 @@ func (r VecPushTypeCompatibility) Check(node *tast.VecPushStmt, ctx *RuleContext
 // =============================================================================
 
 // ReturnTypeCompatibility checks that the returned expression's type matches
-// the enclosing function's declared return type. For async functions the
-// declared return is Future<T>, but return statements yield T directly, so
-// the Future wrapper is stripped before comparison.
+// the enclosing function's declared return type.
 type ReturnTypeCompatibility struct{}
 
 func (r ReturnTypeCompatibility) Name() string { return "return-type-compatibility" }
@@ -190,11 +188,11 @@ func (r ReturnTypeCompatibility) Check(node *tast.ReturnStmt, ctx *RuleContext) 
 		expected = types.UnitType{}
 	}
 
-	// Async functions declare Future<T> as their return type, but the body
-	// uses bare `return <expr of type T>`. Unwrap one level.
 	if ctx.IsAsync {
-		if futTy, ok := expected.(*types.FutureType); ok {
-			expected = futTy.Base
+		if fut, ok := expected.(*types.FutureType); ok {
+			expected = fut.Base
+		} else {
+			return []Violation{violation(node.Pos_, "error: async function return type should be wrapped in Future")}
 		}
 	}
 

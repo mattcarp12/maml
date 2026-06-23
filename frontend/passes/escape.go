@@ -64,6 +64,11 @@ func isHeapEligible(t types.Type) bool {
     if t == nil {
         return false
     }
+
+	// Views are fat pointers. They NEVER heap allocate themselves!
+    if _, isView := t.(*types.ViewType); isView {
+        return false
+    }
     
     // If the type is not a reference type (like a Struct or Int/Bool), 
     // it can live on the stack and doesn't need to escape.

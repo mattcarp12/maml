@@ -23,6 +23,11 @@ const (
 	SYM_CORO_DESTROY_HELPER = "maml_coro_destroy_helper"
 	SYM_SPAWN_TASK          = "maml_spawn_task"
 	SYM_RUN_EXECUTOR        = "maml_run_executor"
+	SYM_RUNTIME_INIT        = "maml_runtime_init"
+	SYM_TASK_AWAIT          = "maml_task_await"
+	SYM_TASK_RELEASE        = "maml_task_release"
+	SYM_TASK_GET_RESULT     = "maml_task_get_result"
+	SYM_YIELD_NOW           = "maml_yield_now"
 	SYM_PRINT               = "maml_print"
 )
 
@@ -108,7 +113,27 @@ var RuntimeABI = map[string]*FunctionType{
 		Return: UnitType{},
 	},
 	"maml_run_executor": {
+		Params: []Type{AnyType{}},
+		Return: AnyType{},
+	},
+	"maml_runtime_init": {
 		Params: []Type{},
+		Return: UnitType{},
+	},
+	"maml_task_await": {
+		Params: []Type{AnyType{}, AnyType{}},
+		Return: UnitType{},
+	},
+	"maml_task_release": {
+		Params: []Type{AnyType{}},
+		Return: UnitType{},
+	},
+	"maml_task_get_result": {
+		Params: []Type{AnyType{}},
+		Return: UnitType{},
+	},
+	"maml_yield_now": {
+		Params: []Type{AnyType{}},
 		Return: UnitType{},
 	},
 	"maml_print": {

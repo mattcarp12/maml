@@ -6,7 +6,5 @@ async fn fetch_user_data() int {
 }
 
 fn main() int {
-    root_task := fetch_user_data()
-    spawn(root_task)
-    return run_executor()
+    return run_executor(spawn fetch_user_data())
 }

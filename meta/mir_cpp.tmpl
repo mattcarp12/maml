@@ -90,6 +90,7 @@ struct Function {
     std::shared_ptr<maml::Type> return_type;
     std::vector<ExportParam> params;
     bool is_async;
+    bool is_extern;
     std::string entry_block;
     std::vector<BasicBlock> blocks;
 };
@@ -183,6 +184,7 @@ inline void from_json(const nlohmann::json& j, Function& t) {
     if (j.contains("return_type")) j.at("return_type").get_to(t.return_type);
     if (j.contains("params")) j.at("params").get_to(t.params);
     if (j.contains("is_async")) j.at("is_async").get_to(t.is_async);
+    if (j.contains("is_extern")) j.at("is_extern").get_to(t.is_extern);
     if (j.contains("entry_block")) j.at("entry_block").get_to(t.entry_block);
     if (j.contains("blocks")) j.at("blocks").get_to(t.blocks);
 }
@@ -195,11 +197,10 @@ inline void from_json(const nlohmann::json& j, Program& t) {
 inline void from_json(const nlohmann::json& j, Value& v) {
     if (j.is_null()) return;
     auto op = j.at("op").get<std::string>();
-    if (op == "ident") { v.inner = j.get<Register>(); }
-    else if (op == "const_int") { v.inner = j.get<IntConstant>(); }
-    else if (op == "const_bool") { v.inner = j.get<BoolConstant>(); }
-    else if (op == "const_string") { v.inner = j.get<StringConstant>(); }
-    else { throw std::runtime_error("Unknown Value op: " + op); }
+    {{- range .Values }}
+    if (op == "{{ .Opcode }}") { v.inner = j.get<{{ .Name }}>(); return; }
+    {{- end }}
+    throw std::runtime_error("Unknown Value op: " + op);
 }
 
 inline void from_json(const nlohmann::json& j, Instruction& inst) {
@@ -207,24 +208,16 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     {{- range .Instructions }}
     if (op == "{{ .Opcode }}") { inst.inner = j.get<{{ .Name }}>(); return; }
     {{- end }}
-    
-    // Custom overrides mapped from export.go
-    if (op == "temp_decl") { inst.inner = j.get<TempDeclInst>(); return; }
-    if (op == "call_inst") { inst.inner = j.get<CallInst>(); return; }
-    if (op == "slice_read") { inst.inner = j.get<SliceInst>(); return; }
-    
     throw std::runtime_error("Unknown Instruction op: " + op);
 }
 
 inline void from_json(const nlohmann::json& j, Terminator& term) {
     if (j.is_null()) return;
     auto op = j.at("op").get<std::string>();
-    if (op == "ret") { term.inner = j.get<ReturnTerminator>(); }
-    else if (op == "br") { term.inner = j.get<JumpTerminator>(); }
-    else if (op == "cond_br") { term.inner = j.get<BranchTerminator>(); }
-    else if (op == "unreachable") { term.inner = j.get<UnreachableTerminator>(); }
-    else if (op == "coro_suspend") { term.inner = j.get<CoroSuspendTerminator>(); }
-    else { throw std::runtime_error("Unknown Terminator op: " + op); }
+    {{- range .Terminators }}
+    if (op == "{{ .Opcode }}") { term.inner = j.get<{{ .Name }}>(); return; }
+    {{- end }}
+    throw std::runtime_error("Unknown Terminator op: " + op);
 }
 
 } // namespace mir

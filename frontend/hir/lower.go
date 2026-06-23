@@ -7,14 +7,14 @@ import (
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
-// Lowerer handles the translation of a type-checked TAST into
-// the High-Level Intermediate Representation (HIR).
 type Lowerer struct{}
 
-// NewLowerer creates a new HIR lowerer instance.
 func NewLowerer() *Lowerer { return &Lowerer{} }
 
-// LowerProgram is the entry point for the HIR phase.
+// =============================================================================
+// Strongly-Typed Entry Points & Wrappers
+// =============================================================================
+
 func (l *Lowerer) LowerProgram(prog *tast.Program) *Program {
 	if prog == nil {
 		return nil
@@ -28,29 +28,59 @@ func (l *Lowerer) LowerProgram(prog *tast.Program) *Program {
 	return &Program{Decls: hirDecls}
 }
 
+// These wrappers use the generated generic dispatcher to cast the returned Node
+// to the specific HIR interface required by the structs.
 func (l *Lowerer) lowerDecl(decl tast.Decl) Decl {
-	if decl == nil {
-		return nil
+	if res := tast.MapNode(decl, l); res != nil {
+		return res.(Decl)
 	}
-	switch d := decl.(type) {
-	case *tast.FnDecl:
-		return l.lowerFnDecl(d)
-	case *tast.TypeDecl:
-		return l.lowerTypeDecl(d)
-	default:
-		return nil
-	}
+	return nil
 }
 
-func (l *Lowerer) lowerFnDecl(fn *tast.FnDecl) *FnDecl {
+func (l *Lowerer) lowerStmt(stmt tast.Stmt) Stmt {
+	if res := tast.MapNode(stmt, l); res != nil {
+		return res.(Stmt)
+	}
+	return nil
+}
+
+func (l *Lowerer) lowerExpr(expr tast.Expr) Expr {
+	if res := tast.MapNode(expr, l); res != nil {
+		return res.(Expr)
+	}
+	return nil
+}
+
+func (l *Lowerer) lowerBlockStmt(s *tast.BlockStmt) *BlockStmt {
+	// Catch the typed nil before it hits the generic dispatcher!
+	if s == nil {
+		return nil
+	}
+	if res := tast.MapNode(s, l); res != nil {
+		return res.(*BlockStmt)
+	}
+	return nil
+}
+
+func (l *Lowerer) lowerIdentifier(ident *tast.Identifier) *Identifier {
+	if ident == nil {
+		return nil
+	}
+	if res := tast.MapNode(ident, l); res != nil {
+		return res.(*Identifier)
+	}
+	return nil
+}
+
+// =============================================================================
+// Manual Mappers (Implementing tast.Mapper[Node])
+// =============================================================================
+
+func (l *Lowerer) MapFnDecl(fn *tast.FnDecl) Node {
 	hirParams := make([]*Param, len(fn.Params))
 	for i, p := range fn.Params {
 		hirParams[i] = &Param{
-			Pos_:   p.Pos_,
-			End_:   p.End_,
-			Name:   p.Name,
-			Type:   p.Type,
-			Symbol: p.Symbol,
+			Pos_: p.Pos_, End_: p.End_, Name: p.Name, Type: p.Type, Symbol: p.Symbol,
 		}
 	}
 	hirFn := &FnDecl{
@@ -60,6 +90,7 @@ func (l *Lowerer) lowerFnDecl(fn *tast.FnDecl) *FnDecl {
 		Params:     hirParams,
 		ReturnType: fn.ReturnType,
 		IsAsync:    fn.IsAsync,
+		IsExtern:   fn.IsExtern,
 		Symbol:     fn.Symbol,
 	}
 	if fn.Body != nil {
@@ -68,21 +99,18 @@ func (l *Lowerer) lowerFnDecl(fn *tast.FnDecl) *FnDecl {
 	return hirFn
 }
 
-func (l *Lowerer) lowerTypeDecl(td *tast.TypeDecl) *TypeDecl {
+func (l *Lowerer) MapTypeDecl(td *tast.TypeDecl) Node {
 	var hirIdent *Identifier
 	if td.Name != nil {
 		hirIdent = l.lowerIdentifier(td.Name)
 	}
 	return &TypeDecl{
-		Pos_:   td.Pos_,
-		End_:   td.End_,
-		Name:   hirIdent,
-		Type:   td.Type,
-		Symbol: td.Symbol,
+		Pos_: td.Pos_, End_: td.End_, Name: hirIdent, Type: td.Type, Symbol: td.Symbol,
 	}
 }
 
-func (l *Lowerer) lowerBlockStmt(block *tast.BlockStmt) *BlockStmt {
+func (l *Lowerer) MapBlockStmt(block *tast.BlockStmt) Node {
+	// Defensive guard just in case!
 	if block == nil {
 		return nil
 	}
@@ -92,268 +120,79 @@ func (l *Lowerer) lowerBlockStmt(block *tast.BlockStmt) *BlockStmt {
 			hirStmts = append(hirStmts, hirStmt)
 		}
 	}
-	return &BlockStmt{
-		Pos_:       block.Pos_,
-		End_:       block.End_,
-		Statements: hirStmts,
-	}
+	return &BlockStmt{Pos_: block.Pos_, End_: block.End_, Statements: hirStmts}
 }
 
-// lowerStmt is the central dispatcher for statement lowering.
-// Cases marked "lower: true" in the schema are handled by generated methods in
-// lower_generated.go; only statements requiring special logic live here.
-func (l *Lowerer) lowerStmt(stmt tast.Stmt) Stmt {
-	if stmt == nil {
-		return nil
+func (l *Lowerer) MapAssignStmt(s *tast.AssignStmt) Node {
+	if idxExpr, ok := s.LValue.(*tast.IndexExpr); ok {
+		switch tast.TypeOf(idxExpr.Left).(type) {
+		case *types.MapType:
+			return &MapInsertStmt{Pos_: s.Pos_, Map: l.lowerExpr(idxExpr.Left), Key: l.lowerExpr(idxExpr.Index), Value: l.lowerExpr(s.RValue)}
+		case *types.VectorType:
+			return &VecWriteStmt{Pos_: s.Pos_, Vec: l.lowerExpr(idxExpr.Left), Index: l.lowerExpr(idxExpr.Index), Value: l.lowerExpr(s.RValue)}
+		}
 	}
-	switch s := stmt.(type) {
-	case *tast.BlockStmt:
-		return l.lowerBlockStmt(s)
-	case *tast.BreakStmt:
-		return l.lowerBreakStmt(s)
-	case *tast.ContinueStmt:
-		return l.lowerContinueStmt(s)
-	case *tast.DeclareStmt:
-		return l.lowerDeclareStmt(s)
-	case *tast.ReturnStmt:
-		return l.lowerReturnStmt(s)
-	case *tast.YieldStmt:
-		return l.lowerYieldStmt(s)
-
-	case *tast.AssignStmt:
-		// Index-assignments on maps/vecs become dedicated HIR statement nodes.
-		if idxExpr, ok := s.LValue.(*tast.IndexExpr); ok {
-			switch tast.TypeOf(idxExpr.Left).(type) {
-			case *types.MapType:
-				return &MapInsertStmt{
-					Pos_:  s.Pos_,
-					Map:   l.lowerExpr(idxExpr.Left),
-					Key:   l.lowerExpr(idxExpr.Index),
-					Value: l.lowerExpr(s.RValue),
-				}
-			case *types.VectorType:
-				return &VecWriteStmt{
-					Pos_:  s.Pos_,
-					Vec:   l.lowerExpr(idxExpr.Left),
-					Index: l.lowerExpr(idxExpr.Index),
-					Value: l.lowerExpr(s.RValue),
-				}
-			}
-		}
-		return &AssignStmt{
-			Pos_:   s.Pos_,
-			LValue: l.lowerExpr(s.LValue),
-			RValue: l.lowerExpr(s.RValue),
-		}
-
-	case *tast.VecPushStmt:
-		// TAST uses LValue/RValue; HIR uses Vec/Value.
-		return &VecPushStmt{
-			Pos_:  s.Pos_,
-			Vec:   l.lowerExpr(s.LValue),
-			Value: l.lowerExpr(s.RValue),
-		}
-
-	case *tast.ExprStmt:
-		// If the lowered expression is already statement-shaped, unwrap it.
-		loweredExpr := l.lowerExpr(s.Value)
-		if stmtLike, isStmt := loweredExpr.(Stmt); isStmt {
-			return stmtLike
-		}
-		return &ExprStmt{Pos_: s.Pos_, Value: loweredExpr}
-
-	case *tast.ForStmt:
-		return l.lowerForStmt(s)
-
-	default:
-		return nil
-	}
+	return &AssignStmt{Pos_: s.Pos_, LValue: l.lowerExpr(s.LValue), RValue: l.lowerExpr(s.RValue)}
 }
 
-// lowerForStmt translates TAST ForStmt → HIR LoopStmt, hoisting any Init
-// into an enclosing BlockStmt.
-func (l *Lowerer) lowerForStmt(s *tast.ForStmt) Stmt {
+func (l *Lowerer) MapVecPushStmt(s *tast.VecPushStmt) Node {
+	return &VecPushStmt{Pos_: s.Pos_, Vec: l.lowerExpr(s.LValue), Value: l.lowerExpr(s.RValue)}
+}
+
+func (l *Lowerer) MapExprStmt(s *tast.ExprStmt) Node {
+	loweredExpr := l.lowerExpr(s.Value)
+	if stmtLike, isStmt := loweredExpr.(Stmt); isStmt {
+		return stmtLike
+	}
+	return &ExprStmt{Pos_: s.Pos_, Value: loweredExpr}
+}
+
+func (l *Lowerer) MapForStmt(s *tast.ForStmt) Node {
 	var hirInit Stmt
 	if s.Init != nil {
 		hirInit = l.lowerStmt(s.Init)
 	}
-
 	loop := &LoopStmt{
 		Pos_:      s.Pos_,
 		Condition: l.lowerExpr(s.Condition),
 		Post:      l.lowerStmt(s.Post),
 		Body:      l.lowerBlockStmt(s.Body),
 	}
-
 	if hirInit == nil {
 		return loop
 	}
-	return &BlockStmt{
-		Pos_:       s.Pos_,
-		End_:       s.Body.End(),
-		Statements: []Stmt{hirInit, loop},
-	}
+	return &BlockStmt{Pos_: s.Pos_, End_: s.Body.End(), Statements: []Stmt{hirInit, loop}}
 }
 
-// lowerExpr is the central dispatcher for expression lowering.
-// Cases marked "lower: true" in the schema are handled by generated methods in
-// lower_generated.go; only expressions requiring special logic live here.
-func (l *Lowerer) lowerExpr(expr tast.Expr) Expr {
-	if expr == nil {
-		return nil
-	}
-	switch e := expr.(type) {
-	case *tast.Identifier:
-		return l.lowerIdentifier(e)
-	case *tast.IntLiteral:
-		return l.lowerIntLiteral(e)
-	case *tast.BoolLiteral:
-		return l.lowerBoolLiteral(e)
-	case *tast.StringLiteral:
-		return l.lowerStringLiteral(e)
-	case *tast.PrefixExpr:
-		return l.lowerPrefixExpr(e)
-	case *tast.IfExpr:
-		return l.lowerIfExpr(e)
-	case *tast.SliceExpr:
-		return l.lowerSliceExpr(e)
-	case *tast.ArrayLiteral:
-		return l.lowerArrayLiteral(e)
-	case *tast.VecLiteral:
-		return l.lowerVecLiteral(e)
-	case *tast.AwaitExpr:
-		return l.lowerAwaitExpr(e)
-	case *tast.BlockStmt:
-		return l.lowerBlockStmt(e)
-	case *tast.InfixExpr:
-		return l.lowerInfixExpr(e)
-	case *tast.CallExpr:
-		return l.lowerCallExpr(e)
-	case *tast.MatchExpr:
-		return l.lowerMatchExpr(e)
-	case *tast.OwnExpr:
-		return l.lowerOwnExpr(e)
-	case *tast.FreezeExpr:
-		return l.lowerFreezeExpr(e)
-
-	case *tast.FieldAccess:
-		return &FieldAccess{
-			Pos_:   e.Pos_,
-			Object: l.lowerExpr(e.Object),
-			Field:  l.lowerIdentifier(e.Field),
-			Type:   e.Type,
-		}
-
-	case *tast.IndexExpr:
-		return l.lowerIndexExpr(e)
-
-	case *tast.StructLiteral:
-		// TAST StructField.Key is Expr; HIR StructField.Key is *Identifier.
-		fields := make([]StructField, len(e.Fields))
-		for i, f := range e.Fields {
-			fields[i] = StructField{
-				Pos_:  f.Pos_,
-				Key:   l.lowerIdentifier(f.Key.(*tast.Identifier)),
-				Value: l.lowerExpr(f.Value),
-			}
-		}
-		return &StructLiteral{Pos_: e.Pos_, End_: e.End_, Fields: fields, Type: e.Type}
-
-	case *tast.MapLiteral:
-		elements := make([]MapElement, len(e.Elements))
-		for i, el := range e.Elements {
-			elements[i] = lowerTASTMapElement(l, el)
-		}
-		return &MapLiteral{Pos_: e.Pos_, End_: e.End_, Elements: elements, Type: e.Type}
-
-	case *tast.VariantLiteral:
-		args := make([]Expr, len(e.Arguments))
-		for i, arg := range e.Arguments {
-			args[i] = l.lowerExpr(arg)
-		}
-		fields := make([]VariantField, len(e.Fields))
-		for i, f := range e.Fields {
-			fields[i] = lowerTASTVariantField(l, f)
-		}
-		return &VariantLiteral{
-			Pos_:      e.Pos_,
-			End_:      e.End_,
-			Variant:   e.Variant,
-			Arguments: args,
-			Fields:    fields,
-			Type:      e.Type,
-		}
-
-	default:
-		return nil
-	}
-}
-
-// lowerInfixExpr desugars && and || into IfExpr nodes; all other operators
-// pass through as InfixExpr.
-func (l *Lowerer) lowerInfixExpr(e *tast.InfixExpr) Expr {
+func (l *Lowerer) MapInfixExpr(e *tast.InfixExpr) Node {
 	left := l.lowerExpr(e.Left)
 	right := l.lowerExpr(e.Right)
 
 	yieldBool := func(v bool) *BlockStmt {
-		return &BlockStmt{
-			Pos_: e.Pos_,
-			Statements: []Stmt{
-				&YieldStmt{Pos_: e.Pos_, Value: &BoolLiteral{Pos_: e.Pos_, Value: v, Type: types.BoolType{}}},
-			},
-		}
+		return &BlockStmt{Pos_: e.Pos_, Statements: []Stmt{&YieldStmt{Pos_: e.Pos_, Value: &BoolLiteral{Pos_: e.Pos_, Value: v, Type: types.BoolType{}}}}}
 	}
 	yieldExpr := func(x Expr) *BlockStmt {
-		return &BlockStmt{
-			Pos_:       e.Pos_,
-			Statements: []Stmt{&YieldStmt{Pos_: e.Pos_, Value: x}},
-		}
+		return &BlockStmt{Pos_: e.Pos_, Statements: []Stmt{&YieldStmt{Pos_: e.Pos_, Value: x}}}
 	}
 
 	switch e.Operator {
-	case "&&": // A && B  →  if A { B } else { false }
-		return &IfExpr{
-			Pos_:        e.Pos_,
-			Condition:   left,
-			Consequence: yieldExpr(right),
-			Alternative: yieldBool(false),
-			Type:        types.BoolType{},
-		}
-	case "||": // A || B  →  if A { true } else { B }
-		return &IfExpr{
-			Pos_:        e.Pos_,
-			Condition:   left,
-			Consequence: yieldBool(true),
-			Alternative: yieldExpr(right),
-			Type:        types.BoolType{},
-		}
+	case "&&":
+		return &IfExpr{Pos_: e.Pos_, Condition: left, Consequence: yieldExpr(right), Alternative: yieldBool(false), Type: types.BoolType{}}
+	case "||":
+		return &IfExpr{Pos_: e.Pos_, Condition: left, Consequence: yieldBool(true), Alternative: yieldExpr(right), Type: types.BoolType{}}
 	}
-
-	return &InfixExpr{
-		Pos_:     e.Pos_,
-		Operator: e.Operator,
-		Left:     left,
-		Right:    right,
-		Type:     e.Type,
-	}
+	return &InfixExpr{Pos_: e.Pos_, Operator: e.Operator, Left: left, Right: right, Type: e.Type}
 }
 
-func (l *Lowerer) lowerCallExpr(e *tast.CallExpr) *CallExpr {
+func (l *Lowerer) MapCallExpr(e *tast.CallExpr) Node {
 	hirArgs := make([]CallArg, len(e.Arguments))
 	for i, arg := range e.Arguments {
 		hirArgs[i] = lowerTASTCallArg(l, arg)
 	}
-	return &CallExpr{
-		Pos_:      e.Pos_,
-		Function:  l.lowerExpr(e.Function),
-		Arguments: hirArgs,
-		Type:      e.Type,
-	}
+	return &CallExpr{Pos_: e.Pos_, Function: l.lowerExpr(e.Function), Arguments: hirArgs, Type: e.Type}
 }
 
-// lowerIndexExpr fans out to MapReadExpr, VecReadExpr, or plain IndexExpr
-// based on the container's type.
-func (l *Lowerer) lowerIndexExpr(idx *tast.IndexExpr) Expr {
+func (l *Lowerer) MapIndexExpr(idx *tast.IndexExpr) Node {
 	left := l.lowerExpr(idx.Left)
 	index := l.lowerExpr(idx.Index)
 	switch tast.TypeOf(idx.Left).(type) {
@@ -366,7 +205,39 @@ func (l *Lowerer) lowerIndexExpr(idx *tast.IndexExpr) Expr {
 	}
 }
 
-func (l *Lowerer) lowerMatchExpr(e *tast.MatchExpr) Expr {
+func (l *Lowerer) MapFieldAccess(e *tast.FieldAccess) Node {
+	return &FieldAccess{Pos_: e.Pos_, Object: l.lowerExpr(e.Object), Field: l.lowerIdentifier(e.Field), Type: e.Type}
+}
+
+func (l *Lowerer) MapStructLiteral(e *tast.StructLiteral) Node {
+	fields := make([]StructField, len(e.Fields))
+	for i, f := range e.Fields {
+		fields[i] = StructField{Pos_: f.Pos_, Key: l.lowerIdentifier(f.Key.(*tast.Identifier)), Value: l.lowerExpr(f.Value)}
+	}
+	return &StructLiteral{Pos_: e.Pos_, End_: e.End_, Fields: fields, Type: e.Type}
+}
+
+func (l *Lowerer) MapMapLiteral(e *tast.MapLiteral) Node {
+	elements := make([]MapElement, len(e.Elements))
+	for i, el := range e.Elements {
+		elements[i] = lowerTASTMapElement(l, el)
+	}
+	return &MapLiteral{Pos_: e.Pos_, End_: e.End_, Elements: elements, Type: e.Type}
+}
+
+func (l *Lowerer) MapVariantLiteral(e *tast.VariantLiteral) Node {
+	args := make([]Expr, len(e.Arguments))
+	for i, arg := range e.Arguments {
+		args[i] = l.lowerExpr(arg)
+	}
+	fields := make([]VariantField, len(e.Fields))
+	for i, f := range e.Fields {
+		fields[i] = lowerTASTVariantField(l, f)
+	}
+	return &VariantLiteral{Pos_: e.Pos_, End_: e.End_, Variant: e.Variant, Arguments: args, Fields: fields, Type: e.Type}
+}
+
+func (l *Lowerer) MapMatchExpr(e *tast.MatchExpr) Node {
 	if e == nil {
 		return nil
 	}
@@ -379,23 +250,14 @@ func (l *Lowerer) lowerMatchExpr(e *tast.MatchExpr) Expr {
 	for i := len(e.Arms) - 1; i >= 0; i-- {
 		arm := e.Arms[i]
 		condition, armStmts := l.lowerMatchArmPattern(arm, subjectIdent, subjectType)
-		consequenceBlock := &BlockStmt{
-			Pos_:       arm.Body.Pos(),
-			End_:       arm.Body.End(),
-			Statements: armStmts,
-		}
+		consequenceBlock := &BlockStmt{Pos_: arm.Body.Pos(), End_: arm.Body.End(), Statements: armStmts}
 		finalCascade = l.chainIfCascade(arm, condition, consequenceBlock, finalCascade, e.Type)
 	}
 
-	outerBlock.Statements = append(outerBlock.Statements, &YieldStmt{
-		Pos_:  e.Pos_,
-		Value: finalCascade,
-	})
+	outerBlock.Statements = append(outerBlock.Statements, &YieldStmt{Pos_: e.Pos_, Value: finalCascade})
 	return outerBlock
 }
 
-// lowerMatchArmPattern generates the boolean condition for a match arm and
-// injects any variable bindings into the body statement list.
 func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifier, subjectType types.Type) (Expr, []Stmt) {
 	var bodyStmts []Stmt
 
@@ -409,15 +271,8 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 	var condition Expr
 
 	switch pat := arm.Pattern.(type) {
-
 	case *tast.LiteralPattern:
-		condition = &InfixExpr{
-			Pos_:     pat.Pos(),
-			Operator: "==",
-			Left:     subjectIdent,
-			Right:    l.lowerExpr(pat.Value),
-			Type:     types.BoolType{},
-		}
+		condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: subjectIdent, Right: l.lowerExpr(pat.Value), Type: types.BoolType{}}
 
 	case *tast.WildcardPattern:
 		condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
@@ -425,21 +280,10 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 	case *tast.IdentifierPattern:
 		if sumTy, ok := subjectType.(*types.SumType); ok && sumTy.GetVariant(pat.Name) != nil {
 			variant := sumTy.GetVariant(pat.Name)
-			condition = &InfixExpr{
-				Pos_:     pat.Pos(),
-				Operator: "==",
-				Left:     &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}},
-				Right:    &IntLiteral{Pos_: pat.Pos(), Value: int64(variant.Discriminant), Type: types.IntType{}},
-				Type:     types.BoolType{},
-			}
+			condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(variant.Discriminant), Type: types.IntType{}}, Type: types.BoolType{}}
 		} else {
 			condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
-			bindingSym := &types.Symbol{
-				Kind:    types.VarSymbol,
-				Name:    pat.Name,
-				Type:    subjectType,
-				Mutable: false,
-			}
+			bindingSym := &types.Symbol{Kind: types.VarSymbol, Name: pat.Name, Type: subjectType, Mutable: false}
 			bodyStmts = append([]Stmt{&DeclareStmt{Pos_: pat.Pos(), Value: subjectIdent, Symbol: bindingSym}}, bodyStmts...)
 		}
 
@@ -454,13 +298,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 				discriminant = v.Discriminant
 			}
 		}
-		condition = &InfixExpr{
-			Pos_:     pat.Pos(),
-			Operator: "==",
-			Left:     &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}},
-			Right:    &IntLiteral{Pos_: pat.Pos(), Value: int64(discriminant), Type: types.IntType{}},
-			Type:     types.BoolType{},
-		}
+		condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(discriminant), Type: types.IntType{}}, Type: types.BoolType{}}
 
 		for idx, identPat := range pat.TupleBindings {
 			if identPat.Value == "_" {
@@ -470,13 +308,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 			if sym == nil {
 				sym = &types.Symbol{Kind: types.VarSymbol, Name: identPat.Value, Type: identPat.Type}
 			}
-			readExpr := &VariantReadExpr{
-				Pos_:        identPat.Pos(),
-				Object:      subjectIdent,
-				VariantName: variantName,
-				FieldIndex:  idx,
-				Type:        identPat.Type,
-			}
+			readExpr := &VariantReadExpr{Pos_: identPat.Pos(), Object: subjectIdent, VariantName: variantName, FieldIndex: idx, Type: identPat.Type}
 			bodyStmts = append([]Stmt{&DeclareStmt{Pos_: identPat.Pos(), Symbol: sym, Value: readExpr}}, bodyStmts...)
 		}
 
@@ -496,14 +328,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 			if sym == nil {
 				sym = &types.Symbol{Kind: types.VarSymbol, Name: fieldPat.Binding.Value, Type: fieldPat.Binding.Type}
 			}
-			readExpr := &VariantReadExpr{
-				Pos_:        fieldPat.Binding.Pos(),
-				Object:      subjectIdent,
-				VariantName: variantName,
-				FieldIndex:  payloadIndex,
-				FieldName:   fieldPat.Field,
-				Type:        fieldPat.Binding.Type,
-			}
+			readExpr := &VariantReadExpr{Pos_: fieldPat.Binding.Pos(), Object: subjectIdent, VariantName: variantName, FieldIndex: payloadIndex, FieldName: fieldPat.Field, Type: fieldPat.Binding.Type}
 			bodyStmts = append([]Stmt{&DeclareStmt{Pos_: fieldPat.Binding.Pos(), Symbol: sym, Value: readExpr}}, bodyStmts...)
 		}
 
@@ -518,47 +343,32 @@ func (l *Lowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt
 	if next == nil {
 		return conseq
 	}
-
 	var altBlock *BlockStmt
 	if ab, ok := next.(*BlockStmt); ok {
 		altBlock = ab
 	} else {
 		altBlock = &BlockStmt{Pos_: next.Pos(), Statements: []Stmt{&YieldStmt{Pos_: next.Pos(), Value: next}}}
 	}
-
 	if boolLit, ok := cond.(*BoolLiteral); ok && boolLit.Value {
-		return conseq // optimize out shadowed branches
+		return conseq
 	}
-
-	return &IfExpr{
-		Pos_:        arm.Pos_,
-		Condition:   cond,
-		Consequence: conseq,
-		Alternative: altBlock,
-		Type:        exprType,
-	}
+	return &IfExpr{Pos_: arm.Pos_, Condition: cond, Consequence: conseq, Alternative: altBlock, Type: exprType}
 }
 
-// hoistMatchSubject evaluates the match subject exactly once into a hidden
-// local ($match_subject) to prevent side-effect duplication across arms.
 func (l *Lowerer) hoistMatchSubject(subject tast.Expr, subjectType types.Type, outerBlock *BlockStmt) *Identifier {
-	sym := &types.Symbol{
-		Kind:    types.VarSymbol,
-		Name:    "$match_subject",
-		Type:    subjectType,
-		Mutable: false,
-	}
-	ident := &Identifier{
-		Pos_:   subject.Pos(),
-		End_:   subject.End(),
-		Value:  "$match_subject",
-		Type:   subjectType,
-		Symbol: sym,
-	}
-	outerBlock.Statements = append(outerBlock.Statements, &DeclareStmt{
-		Pos_:   subject.Pos(),
-		Value:  l.lowerExpr(subject),
-		Symbol: sym,
-	})
+	sym := &types.Symbol{Kind: types.VarSymbol, Name: "$match_subject", Type: subjectType, Mutable: false}
+	ident := &Identifier{Pos_: subject.Pos(), End_: subject.End(), Value: "$match_subject", Type: subjectType, Symbol: sym}
+	outerBlock.Statements = append(outerBlock.Statements, &DeclareStmt{Pos_: subject.Pos(), Value: l.lowerExpr(subject), Symbol: sym})
 	return ident
 }
+
+// =============================================================================
+// Interface Satisfiers for Non-Dispatched Nodes
+// =============================================================================
+// These nodes are evaluated contextually, not via generic dispatch.
+func (l *Lowerer) MapProgram(p *tast.Program) Node                     { return nil }
+func (l *Lowerer) MapWildcardPattern(p *tast.WildcardPattern) Node     { return nil }
+func (l *Lowerer) MapIdentifierPattern(p *tast.IdentifierPattern) Node { return nil }
+func (l *Lowerer) MapLiteralPattern(p *tast.LiteralPattern) Node       { return nil }
+func (l *Lowerer) MapCompositePattern(p *tast.CompositePattern) Node   { return nil }
+func (l *Lowerer) MapVariantPattern(p *tast.VariantPattern) Node       { return nil }

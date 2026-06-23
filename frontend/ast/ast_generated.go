@@ -125,6 +125,7 @@ type FnDecl struct {
 	End_       Position `json:"-"`
 	Body       *BlockStmt
 	IsAsync    bool
+	IsExtern   bool
 	Name       string
 	Params     []*Param
 	ReturnType TypeExpr
@@ -226,6 +227,11 @@ type SliceExpr struct {
 	High Expr
 	Left Expr
 	Low  Expr
+}
+type SpawnExpr struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Value *CallExpr
 }
 type StringLiteral struct {
 	Pos_  Position `json:"-"`
@@ -357,6 +363,7 @@ func (n *PrefixExpr) exprNode()           {}
 func (n *Program) declNode()              {}
 func (n *ReturnStmt) stmtNode()           {}
 func (n *SliceExpr) exprNode()            {}
+func (n *SpawnExpr) exprNode()            {}
 func (n *StringLiteral) exprNode()        {}
 func (n *StructTypeExpr) typeNode()       {}
 func (n *SumTypeExpr) typeNode()          {}
@@ -402,6 +409,7 @@ type Visitor interface {
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
 	VisitSliceExpr(n *SliceExpr)
+	VisitSpawnExpr(n *SpawnExpr)
 	VisitStringLiteral(n *StringLiteral)
 	VisitStructTypeExpr(n *StructTypeExpr)
 	VisitSumTypeExpr(n *SumTypeExpr)
@@ -444,6 +452,7 @@ type ASTMapper[R any] interface {
 	MapProgram(n *Program) R
 	MapReturnStmt(n *ReturnStmt) R
 	MapSliceExpr(n *SliceExpr) R
+	MapSpawnExpr(n *SpawnExpr) R
 	MapStringLiteral(n *StringLiteral) R
 	MapStructTypeExpr(n *StructTypeExpr) R
 	MapSumTypeExpr(n *SumTypeExpr) R
@@ -452,6 +461,99 @@ type ASTMapper[R any] interface {
 	MapVecPushStmt(n *VecPushStmt) R
 	MapWildcardPattern(n *WildcardPattern) R
 	MapYieldStmt(n *YieldStmt) R
+}
+
+// MapNode is a strongly-typed, auto-generated dispatcher that safely routes
+// an AST Node to the correct Map function without manual type assertions.
+func MapNode[R any](node Node, m ASTMapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+	case *ArrayTypeExpr:
+		return m.MapArrayTypeExpr(n)
+	case *AssignStmt:
+		return m.MapAssignStmt(n)
+	case *AwaitExpr:
+		return m.MapAwaitExpr(n)
+	case *BlockStmt:
+		return m.MapBlockStmt(n)
+	case *BoolLiteral:
+		return m.MapBoolLiteral(n)
+	case *BreakStmt:
+		return m.MapBreakStmt(n)
+	case *CallExpr:
+		return m.MapCallExpr(n)
+	case *CompositeLiteral:
+		return m.MapCompositeLiteral(n)
+	case *CompositePattern:
+		return m.MapCompositePattern(n)
+	case *ContinueStmt:
+		return m.MapContinueStmt(n)
+	case *DeclareStmt:
+		return m.MapDeclareStmt(n)
+	case *ExprStmt:
+		return m.MapExprStmt(n)
+	case *FieldAccess:
+		return m.MapFieldAccess(n)
+	case *FnDecl:
+		return m.MapFnDecl(n)
+	case *ForStmt:
+		return m.MapForStmt(n)
+	case *FreezeExpr:
+		return m.MapFreezeExpr(n)
+	case *GenericTypeExpr:
+		return m.MapGenericTypeExpr(n)
+	case *Identifier:
+		return m.MapIdentifier(n)
+	case *IdentifierPattern:
+		return m.MapIdentifierPattern(n)
+	case *IfExpr:
+		return m.MapIfExpr(n)
+	case *IndexExpr:
+		return m.MapIndexExpr(n)
+	case *InfixExpr:
+		return m.MapInfixExpr(n)
+	case *IntLiteral:
+		return m.MapIntLiteral(n)
+	case *LiteralPattern:
+		return m.MapLiteralPattern(n)
+	case *MatchExpr:
+		return m.MapMatchExpr(n)
+	case *NamedTypeExpr:
+		return m.MapNamedTypeExpr(n)
+	case *OwnExpr:
+		return m.MapOwnExpr(n)
+	case *PrefixExpr:
+		return m.MapPrefixExpr(n)
+	case *Program:
+		return m.MapProgram(n)
+	case *ReturnStmt:
+		return m.MapReturnStmt(n)
+	case *SliceExpr:
+		return m.MapSliceExpr(n)
+	case *SpawnExpr:
+		return m.MapSpawnExpr(n)
+	case *StringLiteral:
+		return m.MapStringLiteral(n)
+	case *StructTypeExpr:
+		return m.MapStructTypeExpr(n)
+	case *SumTypeExpr:
+		return m.MapSumTypeExpr(n)
+	case *TypeDecl:
+		return m.MapTypeDecl(n)
+	case *TypeExprWrapper:
+		return m.MapTypeExprWrapper(n)
+	case *VecPushStmt:
+		return m.MapVecPushStmt(n)
+	case *WildcardPattern:
+		return m.MapWildcardPattern(n)
+	case *YieldStmt:
+		return m.MapYieldStmt(n)
+	default:
+		panic(fmt.Sprintf("unhandled AST node type in MapNode dispatcher: %T", node))
+	}
 }
 
 // =============================================================================
@@ -581,6 +683,10 @@ func (n *SliceExpr) Pos() Position                             { return n.Pos_ }
 func (n *SliceExpr) End() Position                             { return n.End_ }
 func (n *SliceExpr) Accept(v Visitor)                          { v.VisitSliceExpr(n) }
 func (n *SliceExpr) AcceptMapper(v ASTMapper[any]) any         { return v.MapSliceExpr(n) }
+func (n *SpawnExpr) Pos() Position                             { return n.Pos_ }
+func (n *SpawnExpr) End() Position                             { return n.End_ }
+func (n *SpawnExpr) Accept(v Visitor)                          { v.VisitSpawnExpr(n) }
+func (n *SpawnExpr) AcceptMapper(v ASTMapper[any]) any         { return v.MapSpawnExpr(n) }
 func (n *StringLiteral) Pos() Position                         { return n.Pos_ }
 func (n *StringLiteral) End() Position                         { return n.End_ }
 func (n *StringLiteral) Accept(v Visitor)                      { v.VisitStringLiteral(n) }

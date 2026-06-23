@@ -48,7 +48,7 @@ func (p *Parser) parseDecl() ast.Decl {
 		return nil
 	}
 	switch p.curToken.Type {
-	case token.FN, token.ASYNC:
+	case token.FN, token.ASYNC, token.EXTERN:
 		return p.parseFnDecl()
 	case token.TYPE:
 		return p.parseTypeDecl()
@@ -65,10 +65,17 @@ func (p *Parser) parseDecl() ast.Decl {
 func (p *Parser) parseFnDecl() *ast.FnDecl {
 	pos := p.curPos()
 	isAsync := false
+	isExtern := false
 
-	// NEW: Check if this is an async function
-	if p.curToken.Type == token.ASYNC {
+	// Check for async OR extern modifiers
+	switch p.curToken.Type {
+	case token.ASYNC:
 		isAsync = true
+		if !p.expectPeek(token.FN) {
+			return nil
+		}
+	case token.EXTERN:
+		isExtern = true
 		if !p.expectPeek(token.FN) {
 			return nil
 		}
@@ -95,11 +102,21 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 		returnType = p.parseTypeExpr()
 	}
 
-	if !p.expectPeek(token.LBRACE) {
-		return nil
-	}
+	var body *ast.BlockStmt
 
-	body := p.parseBlockStmt()
+	// Logic to skip body for extern functions
+	if isExtern {
+		// Extern functions have no body. We just consume an optional trailing semicolon.
+		if p.peekToken.Type == token.SEMICOLON {
+			p.nextToken()
+		}
+	} else {
+		// Standard functions MUST have a body
+		if !p.expectPeek(token.LBRACE) {
+			return nil
+		}
+		body = p.parseBlockStmt()
+	}
 
 	return &ast.FnDecl{
 		Name:       name,
@@ -107,6 +124,7 @@ func (p *Parser) parseFnDecl() *ast.FnDecl {
 		Body:       body,
 		Params:     params,
 		IsAsync:    isAsync,
+		IsExtern:   isExtern,
 		Pos_:       pos,
 		End_:       p.curEndPos(),
 	}

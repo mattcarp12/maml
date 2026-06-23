@@ -178,6 +178,7 @@ func (v *VariantPatternField) String() string {
 	}
 	return fmt.Sprintf("%s: %s", v.Field, v.Binding.String())
 }
+func (c *CompositePattern) String() string { return "CompositePattern" }
 func (b *BlockStmt) String() string {
 	var out bytes.Buffer
 	out.WriteString("{\n")
@@ -233,3 +234,4 @@ func (s *BreakStmt) String() string    { return "break" }
 func (s *ContinueStmt) String() string { return "continue" }
 func (f *OwnExpr) String() string      { return "own " + f.Value.String() }
 func (f *FreezeExpr) String() string   { return "freeze " + f.Value.String() }
+func (f *SpawnExpr) String() string    { return "spawn " + f.Value.String() }

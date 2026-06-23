@@ -251,7 +251,7 @@ inline fn entryOccupied(entry: [*]u8) *u32 {
 
 // Helper to step to the Nth entry in the array
 inline fn entryAt(entries: [*]u8, index: usize, val_size: u32, is_str: bool) [*]u8 {
-    const stride = entrySize(val_size, is_str); // 🌟 Use the aligned size here!
+    const stride = entrySize(val_size, is_str);
     return entries + (index * stride);
 }
 
@@ -628,6 +628,31 @@ const TaskNode = struct {
 var run_queue_head: ?*TaskNode = null;
 var run_queue_tail: ?*TaskNode = null;
 
+// Registry for tasks waiting on other tasks
+var waker_registry: std.AutoHashMap(?*anyopaque, ?*anyopaque) = undefined;
+// Registry for tasks that have been dropped without being awaited
+var detached_registry: std.AutoHashMap(?*anyopaque, void) = undefined;
+
+pub export fn maml_runtime_init() void {
+    const alloc = std.heap.page_allocator; // Use your actual allocator here
+    waker_registry = std.AutoHashMap(?*anyopaque, ?*anyopaque).init(alloc);
+    detached_registry = std.AutoHashMap(?*anyopaque, void).init(alloc);
+}
+
+pub export fn maml_task_await(target_task: ?*anyopaque, waiting_task: ?*anyopaque) void {
+    if (target_task == null or waiting_task == null) return;
+
+    // 1. FAST PATH: The target task finished before we reached the await!
+    // Do not suspend. Put ourselves right back in the ready queue.
+    if (maml_coro_done_helper(target_task)) {
+        maml_spawn_task(waiting_task);
+        return;
+    }
+
+    // 2. SLOW PATH: Target is still running. Register for wakeup.
+    waker_registry.put(target_task, waiting_task) catch @panic("OOM in waker registry");
+}
+
 pub export fn maml_spawn_task(hdl: ?*anyopaque) void {
     if (hdl == null) return;
 
@@ -645,10 +670,12 @@ pub export fn maml_spawn_task(hdl: ?*anyopaque) void {
     }
 }
 
-pub export fn maml_run_executor() void {
-    // Round-robin cooperative polling loop
-    while (run_queue_head != null) {
-        // 1. Pop the next task off the queue
+pub export fn maml_run_executor(root_task: ?*anyopaque) ?*anyopaque {
+    while (!maml_coro_done_helper(root_task)) {
+        if (run_queue_head == null) {
+            @panic("Async Deadlock: Queue is empty, but root task is not finished!");
+        }
+
         const node = run_queue_head.?;
         run_queue_head = node.next;
         if (run_queue_head == null) run_queue_tail = null;
@@ -657,38 +684,60 @@ pub export fn maml_run_executor() void {
         mi_free(node);
 
         if (hdl) |handle| {
-            // 2. If it's not done, resume it!
             if (!maml_coro_done_helper(handle)) {
                 maml_coro_resume_helper(handle);
 
-                // 3. After yielding, check if it finished
-                if (!maml_coro_done_helper(handle)) {
-                    // Still pending (hit another await). Put it back in the queue.
-                    maml_spawn_task(handle);
-                } else {
-                    // Task is completely finished. Destroy the LLVM frame.
-                    maml_coro_destroy_helper(handle);
+                // Check state after resumption
+                if (maml_coro_done_helper(handle)) {
+                    if (waker_registry.fetchRemove(handle)) |kv| {
+                        maml_spawn_task(kv.value);
+                    } else if (detached_registry.fetchRemove(handle)) |_| {
+                        maml_coro_destroy_helper(handle);
+                    }
                 }
-            } else {
-                // Was already done before we ran it, just clean it up
-                maml_coro_destroy_helper(handle);
             }
         }
     }
+
+    return root_task;
+}
+
+// Emitted by the ARC injector when a Future<T> variable dies out of scope
+pub export fn maml_task_release(handle: ?*anyopaque) void {
+    if (handle == null) return;
+
+    if (maml_coro_done_helper(handle)) {
+        // Task is already finished. Safe to destroy immediately.
+        maml_coro_destroy_helper(handle);
+    } else {
+        // Task is still running in the background. Mark it as detached so
+        // the executor knows to clean it up when it finally finishes.
+        detached_registry.put(handle, {}) catch @panic("OOM in detached registry");
+    }
+}
+
+pub export fn maml_task_get_result(target_task: ?*anyopaque) void { // Or whatever return type
+    // 1. Extract the return value from the target_task frame
+    //    (You will need C++ backend logic to map this memory offset)
+
+    // 2. NOW we can safely destroy the frame, because the data has been extracted
+    maml_coro_destroy_helper(target_task);
+}
+
+// Emitted by our magical yield_now builtin
+pub export fn maml_yield_now(current_coro: ?*anyopaque) void {
+    // Put ourselves at the back of the queue before we suspend
+    maml_spawn_task(current_coro);
 }
 
 // -----------------------------------------------------------------------------
 // I/O Runtime
 // -----------------------------------------------------------------------------
 
-// Bind directly to libc's puts.
-// The 'pub' keyword ensures abi_assertions.zig can see it.
-// pub extern "C" fn puts(s: ?*anyopaque) i32;
-
 pub export fn maml_print(opaque_ptr: ?*anyopaque, len: i32) void {
     var threaded = std.Io.Threaded.init_single_threaded;
     const io = threaded.io();
-    
+
     const stdout = std.Io.File.stdout();
 
     if (len <= 0 or opaque_ptr == null) {

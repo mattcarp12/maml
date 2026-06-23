@@ -101,6 +101,11 @@ type CoroSuspendTerminator struct {
 
 func (*CoroSuspendTerminator) isTerminator() {}
 
+type CoroYieldTerminator struct {
+}
+
+func (*CoroYieldTerminator) isTerminator() {}
+
 type FieldReadInst struct {
 	Dst           string
 	FieldIndex    int
@@ -308,6 +313,135 @@ type VariantReadInst struct {
 }
 
 func (*VariantReadInst) isInstruction() {}
+
+// ============================================================================
+// Generic Mapper & Dispatcher
+// ============================================================================
+
+type Mapper[R any] interface {
+	MapArrayInitInst(n *ArrayInitInst) R
+	MapAssignInst(n *AssignInst) R
+	MapBinaryOpInst(n *BinaryOpInst) R
+	MapBoolConstant(n *BoolConstant) R
+	MapBranchTerminator(n *BranchTerminator) R
+	MapCallInst(n *CallInst) R
+	MapCastInst(n *CastInst) R
+	MapCopyInst(n *CopyInst) R
+	MapCoroPrologueInst(n *CoroPrologueInst) R
+	MapCoroSuspendTerminator(n *CoroSuspendTerminator) R
+	MapCoroYieldTerminator(n *CoroYieldTerminator) R
+	MapFieldReadInst(n *FieldReadInst) R
+	MapFreezeInst(n *FreezeInst) R
+	MapIndexAssignInst(n *IndexAssignInst) R
+	MapIndexReadInst(n *IndexReadInst) R
+	MapIntConstant(n *IntConstant) R
+	MapJumpTerminator(n *JumpTerminator) R
+	MapKeepAliveInst(n *KeepAliveInst) R
+	MapLoadPtrInst(n *LoadPtrInst) R
+	MapMoveInst(n *MoveInst) R
+	MapMutBorrowInst(n *MutBorrowInst) R
+	MapOwnInst(n *OwnInst) R
+	MapRefAllocInst(n *RefAllocInst) R
+	MapRefDecInst(n *RefDecInst) R
+	MapRefIncInst(n *RefIncInst) R
+	MapRegister(n *Register) R
+	MapReturnTerminator(n *ReturnTerminator) R
+	MapSliceInst(n *SliceInst) R
+	MapStoreInst(n *StoreInst) R
+	MapStringConstant(n *StringConstant) R
+	MapStructInitInst(n *StructInitInst) R
+	MapTempDeclInst(n *TempDeclInst) R
+	MapUnaryOpInst(n *UnaryOpInst) R
+	MapUnreachableTerminator(n *UnreachableTerminator) R
+	MapVariantDiscriminantInst(n *VariantDiscriminantInst) R
+	MapVariantInitInst(n *VariantInitInst) R
+	MapVariantReadInst(n *VariantReadInst) R
+}
+
+func MapNode[R any](node any, m Mapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+	case *ArrayInitInst:
+		return m.MapArrayInitInst(n)
+	case *AssignInst:
+		return m.MapAssignInst(n)
+	case *BinaryOpInst:
+		return m.MapBinaryOpInst(n)
+	case *BoolConstant:
+		return m.MapBoolConstant(n)
+	case *BranchTerminator:
+		return m.MapBranchTerminator(n)
+	case *CallInst:
+		return m.MapCallInst(n)
+	case *CastInst:
+		return m.MapCastInst(n)
+	case *CopyInst:
+		return m.MapCopyInst(n)
+	case *CoroPrologueInst:
+		return m.MapCoroPrologueInst(n)
+	case *CoroSuspendTerminator:
+		return m.MapCoroSuspendTerminator(n)
+	case *CoroYieldTerminator:
+		return m.MapCoroYieldTerminator(n)
+	case *FieldReadInst:
+		return m.MapFieldReadInst(n)
+	case *FreezeInst:
+		return m.MapFreezeInst(n)
+	case *IndexAssignInst:
+		return m.MapIndexAssignInst(n)
+	case *IndexReadInst:
+		return m.MapIndexReadInst(n)
+	case *IntConstant:
+		return m.MapIntConstant(n)
+	case *JumpTerminator:
+		return m.MapJumpTerminator(n)
+	case *KeepAliveInst:
+		return m.MapKeepAliveInst(n)
+	case *LoadPtrInst:
+		return m.MapLoadPtrInst(n)
+	case *MoveInst:
+		return m.MapMoveInst(n)
+	case *MutBorrowInst:
+		return m.MapMutBorrowInst(n)
+	case *OwnInst:
+		return m.MapOwnInst(n)
+	case *RefAllocInst:
+		return m.MapRefAllocInst(n)
+	case *RefDecInst:
+		return m.MapRefDecInst(n)
+	case *RefIncInst:
+		return m.MapRefIncInst(n)
+	case *Register:
+		return m.MapRegister(n)
+	case *ReturnTerminator:
+		return m.MapReturnTerminator(n)
+	case *SliceInst:
+		return m.MapSliceInst(n)
+	case *StoreInst:
+		return m.MapStoreInst(n)
+	case *StringConstant:
+		return m.MapStringConstant(n)
+	case *StructInitInst:
+		return m.MapStructInitInst(n)
+	case *TempDeclInst:
+		return m.MapTempDeclInst(n)
+	case *UnaryOpInst:
+		return m.MapUnaryOpInst(n)
+	case *UnreachableTerminator:
+		return m.MapUnreachableTerminator(n)
+	case *VariantDiscriminantInst:
+		return m.MapVariantDiscriminantInst(n)
+	case *VariantInitInst:
+		return m.MapVariantInitInst(n)
+	case *VariantReadInst:
+		return m.MapVariantReadInst(n)
+	default:
+		panic("MIR Exporter Error: Unhandled MIR node type in MapNode")
+	}
+}
 
 // ============================================================================
 // Helpers

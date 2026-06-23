@@ -49,6 +49,12 @@ class CodegenContext {
   std::unordered_map<std::string, llvm::Type *> SymbolTypes;
   llvm::Value *getMemoryBase(std::string_view name);
 
+  llvm::Value *CurrentCoroHandle = nullptr;
+  llvm::Value *PromiseSlot = nullptr;
+  llvm::Value *CoroId = nullptr;
+  llvm::BasicBlock *CoroSuspendBlock = nullptr;
+  llvm::BasicBlock *CoroCleanupBlock = nullptr;
+
   CodegenContext(const std::string &moduleName);
   void pushScope();
   void popScope();

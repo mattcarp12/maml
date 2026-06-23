@@ -26,6 +26,7 @@ type exportFunction struct {
 	ReturnType any           `json:"return_type"`
 	Params     []exportParam `json:"params"`
 	IsAsync    bool          `json:"is_async"`
+	IsExtern   bool          `json:"is_extern"`
 	Entry      string        `json:"entry_block"`
 	Blocks     []exportBlock `json:"blocks"`
 }
@@ -91,6 +92,7 @@ func buildFunctionDTO(fn *Function, target *layout.Target) exportFunction {
 		ReturnType: lowerType(fn.ReturnType, target),
 		Params:     params,
 		IsAsync:    fn.IsAsync,
+		IsExtern:   fn.IsExtern,
 		Entry:      entry,
 		Blocks:     blocks,
 	}
@@ -113,240 +115,185 @@ func buildBlockDTO(block *BasicBlock, target *layout.Target) exportBlock {
 }
 
 // =============================================================================
-// Instruction & Terminator Mappers
+// Exporter Mapper Implementation
 // =============================================================================
 
+// Ensure Exporter implements the generated MIR Mapper
+var _ Mapper[map[string]any] = (*Exporter)(nil)
+
+type Exporter struct {
+	target *layout.Target
+}
+
 func buildInstructionDTO(inst Instruction, target *layout.Target) map[string]any {
-	switch i := inst.(type) {
-	case *TempDeclInst:
-		return map[string]any{"op": "temp_decl", "name": i.Name, "type": lowerType(i.Type, target)}
-	case *AssignInst:
-		return map[string]any{"op": "assign", "dst": i.Dst, "value": buildValueDTO(i.RValue, target)}
-	case *IndexAssignInst:
-		return map[string]any{"op": "index_assign", "target": i.Target, "target_type": lowerType(i.TargetType, target), "index": buildValueDTO(i.Index, target), "value": buildValueDTO(i.Value, target)}
-	case *BinaryOpInst:
-		return map[string]any{
-			"op":       "binary_op",
-			"dst":      i.Dst,
-			"operator": i.Operator,
-			"left":     buildValueDTO(i.Left, target),
-			"right":    buildValueDTO(i.Right, target),
-			"type":     lowerType(i.Type, target),
-		}
-	case *UnaryOpInst:
-		return map[string]any{
-			"op":       "unary_op",
-			"dst":      i.Dst,
-			"operator": i.Operator,
-			"operand":  buildValueDTO(i.Operand, target),
-			"type":     lowerType(i.Type, target),
-		}
-	case *IndexReadInst:
-		return map[string]any{
-			"op":          "index_read",
-			"dst":         i.Dst,
-			"source":      buildValueDTO(i.Source, target),
-			"source_type": lowerType(i.SourceType, target),
-			"index":       buildValueDTO(i.Index, target),
-			"type":        lowerType(i.Type, target),
-		}
-	case *CallInst:
-		args := []any{}
-		for _, arg := range i.Arguments {
-			args = append(args, map[string]any{
-				"argument": buildValueDTO(arg.Argument, target),
-				"mut":      arg.Mut,
-			})
-		}
-		return map[string]any{
-			"op":        "call_inst",
-			"dst":       i.Dst,
-			"function":  buildValueDTO(i.Function, target),
-			"arguments": args,
-			"type":      lowerType(i.Type, target),
-		}
-	case *StructInitInst:
-		m := map[string]any{
-			"op":          "struct_init",
-			"dst":         i.Dst,
-			"field_name":  i.FieldName,
-			"field_index": i.FieldIndex,
-			"value":       buildValueDTO(i.Value, target),
-		}
-		if len(i.VariantLayout) > 0 {
-			layoutList := make([]any, len(i.VariantLayout))
-			for idx, ty := range i.VariantLayout {
-				layoutList[idx] = lowerType(ty, target)
-			}
-			m["variant_layout"] = layoutList
-		}
-		return m
-	case *FieldReadInst:
-		m := map[string]any{
-			"op":          "field_read",
-			"dst":         i.Dst,
-			"object":      buildValueDTO(i.Object, target),
-			"field_name":  i.FieldName,
-			"field_index": i.FieldIndex,
-			"type":        lowerType(i.Type, target),
-		}
-		if len(i.VariantLayout) > 0 {
-			layoutList := make([]any, len(i.VariantLayout))
-			for idx, ty := range i.VariantLayout {
-				layoutList[idx] = lowerType(ty, target)
-			}
-			m["variant_layout"] = layoutList
-		}
-		return m
-	case *ArrayInitInst:
-		return map[string]any{
-			"op":    "array_init",
-			"dst":   i.Dst,
-			"index": i.Index,
-			"value": buildValueDTO(i.Value, target),
-		}
-	case *SliceInst:
-		var lowDTO, highDTO any
-		if i.Low != nil {
-			lowDTO = buildValueDTO(i.Low, target)
-		}
-		if i.High != nil {
-			highDTO = buildValueDTO(i.High, target)
-		}
-		return map[string]any{
-			"op":             "slice_read",
-			"dst":            i.Dst,
-			"left":           buildValueDTO(i.Left, target),
-			"container_type": lowerType(i.ContainerType, target),
-			"low":            lowDTO,
-			"high":           highDTO,
-			"result_type":    lowerType(i.ResultType, target),
-		}
-	case *VariantInitInst:
-		payloads := []any{}
-		for _, p := range i.Payloads {
-			payloads = append(payloads, buildValueDTO(p, target))
-		}
-		return map[string]any{
-			"op":           "variant_init",
-			"dst":          i.Dst,
-			"variant_name": i.VariantName,
-			"discriminant": i.Discriminant,
-			"payloads":     payloads,
-			"type":         lowerType(i.Type, target),
-		}
-	case *VariantReadInst:
-		return map[string]any{
-			"op":            "variant_read",
-			"dst":           i.Dst,
-			"object":        buildValueDTO(i.Object, target),
-			"variant_name":  i.VariantName,
-			"payload_index": i.PayloadIndex,
-			"type":          lowerType(i.Type, target),
-		}
-	case *VariantDiscriminantInst:
-		return map[string]any{
-			"op":     "variant_discriminant",
-			"dst":    i.Dst,
-			"object": buildValueDTO(i.Object, target),
-			"type":   lowerType(i.Type, target),
-		}
-	case *CopyInst:
-		return map[string]any{"op": "copy", "dst": i.Dst, "src": i.Src}
-	case *MoveInst:
-		return map[string]any{"op": "move", "dst": i.Dst, "src": i.Src}
-	case *RefAllocInst:
-		return map[string]any{"op": "ref_alloc", "dst": i.Dst, "type": lowerType(i.Type, target)}
-	case *RefIncInst:
-		return map[string]any{"op": "ref_inc", "src": i.Src}
-	case *RefDecInst:
-		return map[string]any{"op": "ref_dec", "src": i.Src}
-	case *MutBorrowInst:
-		return map[string]any{"op": "mut_borrow", "src": i.Src}
-	case *CastInst:
-		return map[string]any{
-			"op":   "cast",
-			"dst":  i.Dst,
-			"src":  buildValueDTO(i.Src, target),
-			"type": lowerType(i.Type, target),
-		}
-	case *LoadPtrInst:
-		return map[string]any{
-			"op":   "load_ptr",
-			"dst":  i.Dst,
-			"ptr":  buildValueDTO(i.Ptr, target),
-			"type": lowerType(i.Type, target),
-		}
-	case *StoreInst:
-		return map[string]any{
-			"op":      "store",
-			"dst_ptr": i.DstPtr,
-			"value":   buildValueDTO(i.Value, target),
-			"type":    lowerType(i.Type, target),
-		}
-	case *CoroPrologueInst:
-		return map[string]any{"op": "coro_prologue"}
-	default:
-		return map[string]any{"op": "unknown_inst"}
-	}
+	return MapNode(inst, &Exporter{target: target})
 }
 
 func buildTerminatorDTO(term Terminator, target *layout.Target) map[string]any {
-	switch t := term.(type) {
-	case *ReturnTerminator:
-		m := map[string]any{"op": "ret"}
-		if t.Value != nil {
-			m["value"] = buildValueDTO(t.Value, target)
-		}
-		return m
-	case *JumpTerminator:
-		return map[string]any{"op": "br", "target": fmt.Sprintf("%d", t.Target)}
-	case *BranchTerminator:
-		return map[string]any{
-			"op":           "cond_br",
-			"condition":    buildValueDTO(t.Condition, target),
-			"true_target":  fmt.Sprintf("%d", t.TrueTarget),
-			"false_target": fmt.Sprintf("%d", t.FalseTarget),
-		}
-	case *UnreachableTerminator:
-		return map[string]any{"op": "unreachable"}
-	case *CoroSuspendTerminator:
-		return map[string]any{
-			"op":      "coro_suspend",
-			"resume":  fmt.Sprintf("%d", t.ResumeBlock),
-			"cleanup": fmt.Sprintf("%d", t.CleanupBlock),
-			"suspend": fmt.Sprintf("%d", t.SuspendBlock),
-		}
-	default:
-		return map[string]any{"op": "unknown_term"}
-	}
+	return MapNode(term, &Exporter{target: target})
 }
 
-// =============================================================================
-// Value & Type Lowering
-// =============================================================================
-
-// buildValueDTO serializes the native MIR values for the backend.
 func buildValueDTO(val Value, target *layout.Target) any {
 	if val == nil {
 		return nil
 	}
-	switch v := val.(type) {
-	case *Register:
-		return map[string]any{"op": "ident", "name": v.Name, "type": lowerType(v.Type, target)}
-	case *IntConstant:
-		return map[string]any{"op": "const_int", "value": v.Value, "type": lowerType(v.Type, target)}
-	case *BoolConstant:
-		return map[string]any{"op": "const_bool", "value": v.Value, "type": lowerType(v.Type, target)}
-	case *StringConstant:
-		return map[string]any{"op": "const_string", "value": v.Value, "type": lowerType(v.Type, target)}
-	default:
-		panic(fmt.Sprintf("MIR Exporter Error: Illegal unflattened value type reached backend: %T", val))
-	}
+	return MapNode(val, &Exporter{target: target})
 }
 
-// lowerType handles the critical task of stripping frontend Type interfaces
-// and emitting low-level primitive strings (like "i32") or layout objects
+// -----------------------------------------------------------------------------
+// Value Mappers
+// -----------------------------------------------------------------------------
+func (e *Exporter) MapRegister(v *Register) map[string]any {
+	return map[string]any{"op": "ident", "name": v.Name, "type": lowerType(v.Type, e.target)}
+}
+func (e *Exporter) MapIntConstant(v *IntConstant) map[string]any {
+	return map[string]any{"op": "const_int", "value": v.Value, "type": lowerType(v.Type, e.target)}
+}
+func (e *Exporter) MapBoolConstant(v *BoolConstant) map[string]any {
+	return map[string]any{"op": "const_bool", "value": v.Value, "type": lowerType(v.Type, e.target)}
+}
+func (e *Exporter) MapStringConstant(v *StringConstant) map[string]any {
+	return map[string]any{"op": "const_string", "value": v.Value, "type": lowerType(v.Type, e.target)}
+}
+
+// -----------------------------------------------------------------------------
+// Instruction Mappers
+// -----------------------------------------------------------------------------
+func (e *Exporter) MapTempDeclInst(i *TempDeclInst) map[string]any {
+	return map[string]any{"op": "temp_decl", "name": i.Name, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapAssignInst(i *AssignInst) map[string]any {
+	return map[string]any{"op": "assign", "dst": i.Dst, "value": buildValueDTO(i.RValue, e.target)}
+}
+func (e *Exporter) MapIndexAssignInst(i *IndexAssignInst) map[string]any {
+	return map[string]any{"op": "index_assign", "target": i.Target, "target_type": lowerType(i.TargetType, e.target), "index": buildValueDTO(i.Index, e.target), "value": buildValueDTO(i.Value, e.target)}
+}
+func (e *Exporter) MapBinaryOpInst(i *BinaryOpInst) map[string]any {
+	return map[string]any{"op": "binary_op", "dst": i.Dst, "operator": i.Operator, "left": buildValueDTO(i.Left, e.target), "right": buildValueDTO(i.Right, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapUnaryOpInst(i *UnaryOpInst) map[string]any {
+	return map[string]any{"op": "unary_op", "dst": i.Dst, "operator": i.Operator, "operand": buildValueDTO(i.Operand, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapIndexReadInst(i *IndexReadInst) map[string]any {
+	return map[string]any{"op": "index_read", "dst": i.Dst, "source": buildValueDTO(i.Source, e.target), "source_type": lowerType(i.SourceType, e.target), "index": buildValueDTO(i.Index, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapCallInst(i *CallInst) map[string]any {
+	args := []any{}
+	for _, arg := range i.Arguments {
+		args = append(args, map[string]any{"argument": buildValueDTO(arg.Argument, e.target), "mut": arg.Mut})
+	}
+	return map[string]any{"op": "call_inst", "dst": i.Dst, "function": buildValueDTO(i.Function, e.target), "arguments": args, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapSliceInst(i *SliceInst) map[string]any {
+	var lowDTO, highDTO any
+	if i.Low != nil {
+		lowDTO = buildValueDTO(i.Low, e.target)
+	}
+	if i.High != nil {
+		highDTO = buildValueDTO(i.High, e.target)
+	}
+	return map[string]any{"op": "slice_read", "dst": i.Dst, "left": buildValueDTO(i.Left, e.target), "container_type": lowerType(i.ContainerType, e.target), "low": lowDTO, "high": highDTO, "result_type": lowerType(i.ResultType, e.target)}
+}
+func (e *Exporter) MapStructInitInst(i *StructInitInst) map[string]any {
+	m := map[string]any{"op": "struct_init", "dst": i.Dst, "field_name": i.FieldName, "field_index": i.FieldIndex, "value": buildValueDTO(i.Value, e.target)}
+	if len(i.VariantLayout) > 0 {
+		layoutList := make([]any, len(i.VariantLayout))
+		for idx, ty := range i.VariantLayout {
+			layoutList[idx] = lowerType(ty, e.target)
+		}
+		m["variant_layout"] = layoutList
+	}
+	return m
+}
+func (e *Exporter) MapFieldReadInst(i *FieldReadInst) map[string]any {
+	m := map[string]any{"op": "field_read", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "field_name": i.FieldName, "field_index": i.FieldIndex, "type": lowerType(i.Type, e.target)}
+	if len(i.VariantLayout) > 0 {
+		layoutList := make([]any, len(i.VariantLayout))
+		for idx, ty := range i.VariantLayout {
+			layoutList[idx] = lowerType(ty, e.target)
+		}
+		m["variant_layout"] = layoutList
+	}
+	return m
+}
+func (e *Exporter) MapArrayInitInst(i *ArrayInitInst) map[string]any {
+	return map[string]any{"op": "array_init", "dst": i.Dst, "index": i.Index, "value": buildValueDTO(i.Value, e.target)}
+}
+func (e *Exporter) MapVariantInitInst(i *VariantInitInst) map[string]any {
+	payloads := []any{}
+	for _, p := range i.Payloads {
+		payloads = append(payloads, buildValueDTO(p, e.target))
+	}
+	return map[string]any{"op": "variant_init", "dst": i.Dst, "variant_name": i.VariantName, "discriminant": i.Discriminant, "payloads": payloads, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapVariantReadInst(i *VariantReadInst) map[string]any {
+	return map[string]any{"op": "variant_read", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "variant_name": i.VariantName, "payload_index": i.PayloadIndex, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapVariantDiscriminantInst(i *VariantDiscriminantInst) map[string]any {
+	return map[string]any{"op": "variant_discriminant", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapCastInst(i *CastInst) map[string]any {
+	return map[string]any{"op": "cast", "dst": i.Dst, "src": buildValueDTO(i.Src, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapLoadPtrInst(i *LoadPtrInst) map[string]any {
+	return map[string]any{"op": "load_ptr", "dst": i.Dst, "ptr": buildValueDTO(i.Ptr, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapStoreInst(i *StoreInst) map[string]any {
+	return map[string]any{"op": "store", "dst_ptr": i.DstPtr, "value": buildValueDTO(i.Value, e.target), "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapCopyInst(i *CopyInst) map[string]any {
+	return map[string]any{"op": "copy", "dst": i.Dst, "src": i.Src}
+}
+func (e *Exporter) MapMoveInst(i *MoveInst) map[string]any {
+	return map[string]any{"op": "move", "dst": i.Dst, "src": i.Src}
+}
+func (e *Exporter) MapRefAllocInst(i *RefAllocInst) map[string]any {
+	return map[string]any{"op": "ref_alloc", "dst": i.Dst, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapRefIncInst(i *RefIncInst) map[string]any {
+	return map[string]any{"op": "ref_inc", "src": i.Src}
+}
+func (e *Exporter) MapRefDecInst(i *RefDecInst) map[string]any {
+	return map[string]any{"op": "ref_dec", "src": i.Src}
+}
+func (e *Exporter) MapMutBorrowInst(i *MutBorrowInst) map[string]any {
+	return map[string]any{"op": "mut_borrow", "src": i.Src}
+}
+func (e *Exporter) MapKeepAliveInst(i *KeepAliveInst) map[string]any {
+	return map[string]any{"op": "keep_alive", "src": i.Src}
+}
+func (e *Exporter) MapCoroPrologueInst(i *CoroPrologueInst) map[string]any {
+	return map[string]any{"op": "coro_prologue"}
+}
+func (e *Exporter) MapOwnInst(i *OwnInst) map[string]any       { return map[string]any{"op": "own"} }
+func (e *Exporter) MapFreezeInst(i *FreezeInst) map[string]any { return map[string]any{"op": "freeze"} }
+
+// -----------------------------------------------------------------------------
+// Terminator Mappers
+// -----------------------------------------------------------------------------
+func (e *Exporter) MapReturnTerminator(t *ReturnTerminator) map[string]any {
+	m := map[string]any{"op": "ret"}
+	if t.Value != nil {
+		m["value"] = buildValueDTO(t.Value, e.target)
+	}
+	return m
+}
+func (e *Exporter) MapJumpTerminator(t *JumpTerminator) map[string]any {
+	return map[string]any{"op": "br", "target": fmt.Sprintf("%d", t.Target)}
+}
+func (e *Exporter) MapBranchTerminator(t *BranchTerminator) map[string]any {
+	return map[string]any{"op": "cond_br", "condition": buildValueDTO(t.Condition, e.target), "true_target": fmt.Sprintf("%d", t.TrueTarget), "false_target": fmt.Sprintf("%d", t.FalseTarget)}
+}
+func (e *Exporter) MapUnreachableTerminator(t *UnreachableTerminator) map[string]any {
+	return map[string]any{"op": "unreachable"}
+}
+func (e *Exporter) MapCoroSuspendTerminator(t *CoroSuspendTerminator) map[string]any {
+	return map[string]any{"op": "coro_suspend", "resume": fmt.Sprintf("%d", t.ResumeBlock), "cleanup": fmt.Sprintf("%d", t.CleanupBlock), "suspend": fmt.Sprintf("%d", t.SuspendBlock)}
+}
+func (e *Exporter) MapCoroYieldTerminator(t *CoroYieldTerminator) map[string]any {
+	return map[string]any{"op": "coro_yield"}
+}
+
 func lowerType(t types.Type, target *layout.Target) any {
 	if t == nil {
 		return "void"

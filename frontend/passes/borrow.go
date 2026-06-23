@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/types"
 )
 
 type LockState int
@@ -33,25 +34,19 @@ func (s LockState) String() string {
 	}
 }
 
-// joinStates implements the explicit two-way merge table from Section 4.4.
 func joinStates(s1, s2 LockState) LockState {
 	if s1 == s2 {
 		return s1
 	}
-
-	// Invalidated + any non-Invalidated state = MaybeInvalidated
 	if s1 == Invalidated || s2 == Invalidated {
 		return MaybeInvalidated
 	}
-
 	if s1 == MaybeInvalidated || s2 == MaybeInvalidated {
 		return MaybeInvalidated
 	}
-
 	if s1 == SharedRead || s2 == SharedRead {
 		return SharedRead
 	}
-
 	return ExclusiveWrite
 }
 
@@ -59,21 +54,18 @@ func joinStates(s1, s2 LockState) LockState {
 // Environments & Deep Tracking
 // =============================================================================
 
-// BindingState manages the flow-sensitive lifecycle of a variable and its structural fields.
 type BindingState struct {
 	State       LockState
 	MutLockedBy string
 	DependsOn   string
-	Fields      map[string]*BindingState // Recursive tracking for struct fields
+	AliasOf     string // NEW: Tracks Reference Type Aliasing
+	Fields      map[string]*BindingState
 }
 
-// AggregateState computes the effective state of a struct as a whole (Section 9.3).
 func (b *BindingState) AggregateState() LockState {
 	effective := b.State
 	for _, field := range b.Fields {
 		fieldState := field.AggregateState()
-		// If a field degrades to Invalidated or MaybeInvalidated, the struct
-		// cannot be moved or frozen as a whole.
 		if fieldState == Invalidated || fieldState == MaybeInvalidated {
 			if effective == ExclusiveWrite || effective == SharedRead {
 				effective = MaybeInvalidated
@@ -83,24 +75,20 @@ func (b *BindingState) AggregateState() LockState {
 	return effective
 }
 
-// setPathState applies an ownership phase change to a specific nested field.
 func (b *BindingState) setPathState(path []string, state LockState) {
 	if len(path) == 0 {
 		b.State = state
 		return
 	}
-
 	if b.Fields == nil {
 		b.Fields = make(map[string]*BindingState)
 	}
-
 	head := path[0]
 	child, exists := b.Fields[head]
 	if !exists {
 		child = &BindingState{State: b.State, Fields: make(map[string]*BindingState)}
 		b.Fields[head] = child
 	}
-
 	child.setPathState(path[1:], state)
 }
 
@@ -129,6 +117,7 @@ func (b *BindingState) clone() *BindingState {
 		State:       b.State,
 		MutLockedBy: b.MutLockedBy,
 		DependsOn:   b.DependsOn,
+		AliasOf:     b.AliasOf, // Copied!
 		Fields:      make(map[string]*BindingState),
 	}
 	for k, v := range b.Fields {
@@ -158,17 +147,35 @@ func (b *BlockState) clone() *BlockState {
 // =============================================================================
 
 type Analyzer struct {
-	errors []ast.CompileError
+	errors   []ast.CompileError
+	varTypes map[string]types.Type // NEW: Access to type info for Alias detection
 }
 
 func New() *Analyzer {
 	return &Analyzer{
-		errors: []ast.CompileError{},
+		errors:   []ast.CompileError{},
+		varTypes: make(map[string]types.Type),
 	}
 }
 
-// Analyze performs a forward dataflow analysis over the MIR CFG.
+func (a *Analyzer) isRef(name string) bool {
+	t, ok := a.varTypes[name]
+	return ok && t != nil && t.IsNeedsARC()
+}
+
 func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileError {
+	// Pre-scan types to detect Reference Types (ARC) vs Value Types
+	for _, block := range g.SortedBlocks() {
+		for _, inst := range block.Statements {
+			switch i := inst.(type) {
+			case *mir.TempDeclInst:
+				a.varTypes[i.Name] = i.Type
+			case *mir.RefAllocInst:
+				a.varTypes[i.Dst] = i.Type
+			}
+		}
+	}
+
 	stateIn := make(map[mir.BlockID]*BlockState)
 	stateOut := make(map[mir.BlockID]*BlockState)
 	visited := make(map[mir.BlockID]bool)
@@ -178,7 +185,6 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 		stateOut[id] = newBlockState()
 	}
 
-	// TODO - refactor to dense bitset and rpo priority queue
 	var worklist []mir.BlockID
 	inWorklist := make(map[mir.BlockID]bool)
 
@@ -204,7 +210,6 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 
 		a.analyzeTerminator(block.Terminator, currentState)
 
-		// MAGIC: Automatic NLL Unlock at the end of the block
 		for _, binding := range currentState.Bindings {
 			if binding.MutLockedBy != "" {
 				if !live.LiveOut[block.ID][binding.MutLockedBy] {
@@ -218,10 +223,9 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 			if b == nil {
 				return
 			}
-			// If this view depends on a parent, and the parent is dead at the end of this block...
 			if b.DependsOn != "" {
 				if !live.LiveOut[block.ID][b.DependsOn] {
-					b.State = Invalidated // The parent died! This view is now a dangling pointer.
+					b.State = Invalidated
 				}
 			}
 			for _, f := range b.Fields {
@@ -246,7 +250,6 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 	}
 
 	a.validateScopeExit(g, stateOut)
-
 	return a.errors
 }
 
@@ -260,26 +263,22 @@ func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateO
 			preds = append(preds, p)
 		}
 	}
-
 	if len(preds) == 0 {
 		return merged
 	}
 
-	// Unify root keys across all predecessors
 	for _, p := range preds {
 		for k := range stateOut[p].Bindings {
 			if _, exists := merged.Bindings[k]; !exists {
-				merged.Bindings[k] = nil // Placeholder for recursive merge
+				merged.Bindings[k] = nil
 			}
 		}
 	}
 
 	for k := range merged.Bindings {
 		var currentMerged *BindingState
-
 		for _, p := range preds {
 			predVal := stateOut[p].Bindings[k]
-
 			if currentMerged == nil {
 				if predVal != nil {
 					currentMerged = predVal.clone()
@@ -292,7 +291,6 @@ func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateO
 		}
 		merged.Bindings[k] = currentMerged
 	}
-
 	return merged
 }
 
@@ -322,11 +320,17 @@ func mergeBindings(b1, b2 *BindingState) *BindingState {
 		res.MutLockedBy = b2.MutLockedBy
 	}
 
-	// Inherit provenance on branch merges
 	if b1 != nil && b1.DependsOn != "" {
 		res.DependsOn = b1.DependsOn
 	} else if b2 != nil && b2.DependsOn != "" {
 		res.DependsOn = b2.DependsOn
+	}
+
+	// Alias inherit
+	if b1 != nil && b1.AliasOf != "" {
+		res.AliasOf = b1.AliasOf
+	} else if b2 != nil && b2.AliasOf != "" {
+		res.AliasOf = b2.AliasOf
 	}
 
 	allKeys := make(map[string]bool)
@@ -349,18 +353,14 @@ func mergeBindings(b1, b2 *BindingState) *BindingState {
 		if b2 != nil {
 			f2 = b2.Fields[k]
 		}
-
-		// If a field isn't explicitly tracked on one path, it inherits its parent's base state.
 		if f1 == nil && b1 != nil {
 			f1 = &BindingState{State: b1.State}
 		}
 		if f2 == nil && b2 != nil {
 			f2 = &BindingState{State: b2.State}
 		}
-
 		res.Fields[k] = mergeBindings(f1, f2)
 	}
-
 	return res
 }
 
@@ -416,22 +416,18 @@ func bindingsEqual(b1, b2 *BindingState) bool {
 	if b1 == nil || b2 == nil {
 		return false
 	}
-
 	if b1.State != b2.State || b1.MutLockedBy != b2.MutLockedBy {
 		return false
 	}
-
 	if len(b1.Fields) != len(b2.Fields) {
 		return false
 	}
-
 	for k, f1 := range b1.Fields {
 		f2, ok := b2.Fields[k]
 		if !ok || !bindingsEqual(f1, f2) {
 			return false
 		}
 	}
-
 	return true
 }
 
@@ -440,7 +436,7 @@ func bindingsEqual(b1, b2 *BindingState) bool {
 // =============================================================================
 
 func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
-	pos := ast.Position{} // Fallback
+	pos := ast.Position{}
 
 	releaseLocksHeldBy := func(refName string) {
 		for _, binding := range state.Bindings {
@@ -453,7 +449,8 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	initOrRevive := func(name string) {
 		if binding, exists := state.Bindings[name]; exists {
 			binding.State = ExclusiveWrite
-			binding.Fields = make(map[string]*BindingState) // Wipes out partial sub-states
+			binding.Fields = make(map[string]*BindingState)
+			binding.AliasOf = ""
 		} else {
 			state.Bindings[name] = &BindingState{State: ExclusiveWrite}
 		}
@@ -469,13 +466,66 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	case *mir.AssignInst:
 		a.checkOperandAccess(i.RValue, state, pos)
 		releaseLocksHeldBy(i.Dst)
-		initOrRevive(i.Dst)
+		if reg, ok := i.RValue.(*mir.Register); ok {
+			if rBinding, exists := state.Bindings[reg.Name]; exists {
+				newBinding := rBinding.clone()
+				// Shared Alias Tracking (Ignore compiler temporaries)
+				if a.isRef(reg.Name) && !isCompilerGenerated(reg.Name) {
+					newBinding.AliasOf = reg.Name
+					newBinding.State = SharedRead
+					rBinding.State = SharedRead
+				} else {
+					newBinding.AliasOf = ""
+				}
+				state.Bindings[i.Dst] = newBinding
+			} else {
+				initOrRevive(i.Dst)
+			}
+		} else {
+			initOrRevive(i.Dst)
+		}
 
+	case *mir.CopyInst:
+		a.checkStringAccess(i.Src, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		if sBinding, exists := state.Bindings[i.Src]; exists {
+			newBinding := sBinding.clone()
+			// Shared Alias Tracking (Ignore compiler temporaries)
+			if a.isRef(i.Src) && !isCompilerGenerated(i.Src) {
+				newBinding.AliasOf = i.Src
+				newBinding.State = SharedRead
+				sBinding.State = SharedRead
+			} else {
+				newBinding.AliasOf = ""
+			}
+			state.Bindings[i.Dst] = newBinding
+		} else {
+			initOrRevive(i.Dst)
+		}
+
+	case *mir.MoveInst:
+		a.checkStringAccess(i.Src, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		if binding, exists := state.Bindings[i.Src]; exists {
+			newBinding := binding.clone()
+			// Shared Alias Tracking (Ignore compiler temporaries)
+			if a.isRef(i.Src) && !isCompilerGenerated(i.Src) {
+				newBinding.AliasOf = i.Src
+				newBinding.State = SharedRead
+				binding.State = SharedRead
+			} else {
+				newBinding.AliasOf = ""
+			}
+			// Note: We no longer invalidate `binding.State` here!
+			// Explicit invalidation is strictly delegated to `*mir.OwnInst`.
+			state.Bindings[i.Dst] = newBinding
+		} else {
+			initOrRevive(i.Dst)
+		}
 	case *mir.OwnInst:
 		a.checkOperandAccess(i.Root, state, pos)
 		if reg, ok := i.Root.(*mir.Register); ok && !isCompilerGenerated(reg.Name) {
 			if binding, exists := state.Bindings[reg.Name]; exists {
-				// Apply Invalidated precisely to the path designated by the syntax tree
 				binding.setPathState(i.Path, Invalidated)
 			}
 		}
@@ -506,32 +556,37 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		}
 		initOrRevive(i.Dst)
 
-	case *mir.CopyInst:
-		a.checkStringAccess(i.Src, state, pos)
+	// NEW: FieldReadInst must be present to check struct field accesses!
+	case *mir.FieldReadInst:
+		a.checkOperandAccess(i.Object, state, pos)
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
-
-	case *mir.MoveInst:
-		a.checkStringAccess(i.Src, state, pos)
-		releaseLocksHeldBy(i.Dst)
-		if binding, exists := state.Bindings[i.Src]; exists && !isCompilerGenerated(i.Src) {
-			binding.State = Invalidated
+		if reg, ok := i.Object.(*mir.Register); ok {
+			if objBinding, exists := state.Bindings[reg.Name]; exists {
+				if fieldBinding, exists := objBinding.Fields[i.FieldName]; exists {
+					state.Bindings[i.Dst].DependsOn = fieldBinding.DependsOn
+					state.Bindings[i.Dst].AliasOf = fieldBinding.AliasOf
+				}
+			}
 		}
-		initOrRevive(i.Dst)
 
 	case *mir.IndexAssignInst:
 		a.checkOperandAccess(i.Index, state, pos)
 		a.checkOperandAccess(i.Value, state, pos)
 		a.checkStringAccess(i.Target, state, pos)
+		// Reject mutation if target is an alias
+		if binding, exists := state.Bindings[i.Target]; exists {
+			if binding.AliasOf != "" {
+				a.errorf(pos, "mutation of aliased data '%s' (aliases '%s')", i.Target, binding.AliasOf)
+			}
+		}
 
 	case *mir.StructInitInst:
 		a.checkOperandAccess(i.Value, state, pos)
 		a.checkStringAccess(i.Dst, state, pos)
-		// Flow provenance into the struct field!
 		if reg, ok := i.Value.(*mir.Register); ok {
 			if vBinding, exists := state.Bindings[reg.Name]; exists && vBinding.DependsOn != "" {
 				if dstBinding, exists := state.Bindings[i.Dst]; exists {
-					// Attach the parent buffer's name to this specific struct field
 					dstBinding.setPathDependsOn([]string{i.FieldName}, vBinding.DependsOn)
 				}
 			}
@@ -552,13 +607,17 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		for _, arg := range i.Arguments {
 			a.checkOperandAccess(arg.Argument, state, pos)
 
-			// 2. mut arguments require ExclusiveWrite
 			if arg.Mut {
 				if reg, ok := arg.Argument.(*mir.Register); ok && !isCompilerGenerated(reg.Name) {
 					if binding, exists := state.Bindings[reg.Name]; exists {
-						agg := binding.AggregateState()
-						if agg != ExclusiveWrite {
-							a.errorf(pos, "cannot pass '%s' as a mutable argument because its current state is %s", reg.Name, agg.String())
+						// XOR MUTABILITY: Rejects 'mut' if it's an alias
+						if binding.AliasOf != "" {
+							a.errorf(pos, "mutation of aliased data '%s' (aliases '%s')", reg.Name, binding.AliasOf)
+						} else {
+							agg := binding.AggregateState()
+							if agg != ExclusiveWrite {
+								a.errorf(pos, "cannot pass '%s' as a mutable argument because its current state is %s", reg.Name, agg.String())
+							}
 						}
 					}
 				}
@@ -573,7 +632,6 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		a.checkOperandAccess(i.Left, state, pos)
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
-		// Link the View to its parent buffer!
 		if reg, ok := i.Left.(*mir.Register); ok {
 			state.Bindings[i.Dst].DependsOn = reg.Name
 		}
@@ -586,10 +644,11 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	}
 }
 
+// NEW: ReturnTerminator must be analyzed to catch "return dead_var.id"!
 func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 	pos := ast.Position{}
 
-	switch term.(type) {
+	switch t := term.(type) {
 	case *mir.CoroSuspendTerminator:
 		var names []string
 		for name := range state.Bindings {
@@ -602,6 +661,14 @@ func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 			if binding.MutLockedBy != "" {
 				a.errorf(pos, "mutable reference '%s' borrowing '%s' cannot be held across an `await` point", binding.MutLockedBy, name)
 			}
+		}
+	case *mir.ReturnTerminator:
+		if t.Value != nil {
+			a.checkOperandAccess(t.Value, state, pos)
+		}
+	case *mir.BranchTerminator:
+		if t.Condition != nil {
+			a.checkOperandAccess(t.Condition, state, pos)
 		}
 	}
 }
@@ -649,7 +716,6 @@ func isCompilerGenerated(name string) bool {
 	return strings.HasPrefix(name, "__") || strings.HasPrefix(name, "_t")
 }
 
-// validateScopeExit enforces Axiom 12: No partially moved states can escape a function scope.
 func (a *Analyzer) validateScopeExit(g *mir.Graph, stateOut map[mir.BlockID]*BlockState) {
 	isParam := make(map[string]bool)
 	for _, p := range g.Params {
@@ -673,13 +739,11 @@ func (a *Analyzer) validateScopeExit(g *mir.Graph, stateOut map[mir.BlockID]*Blo
 	}
 }
 
-// Pass isParam down so we can verify the provenance target
 func (a *Analyzer) auditBinding(name string, b *BindingState, isParam map[string]bool, pos ast.Position) {
 	if b.State == MaybeInvalidated {
 		a.errorf(pos, "binding '%s' is in a conditionally moved (MaybeInvalidated) state and cannot be returned.", name)
 	}
 
-	// Lifetime Escape Error
 	if b.DependsOn != "" && !isParam[b.DependsOn] {
 		a.errorf(pos, "Lifetime Escape Error: cannot return view '%s' because it depends on local variable '%s' which will be dropped", name, b.DependsOn)
 	}

@@ -70,6 +70,9 @@ func (t *TypeDecl) String() string {
 func (a *AwaitExpr) String() string {
 	return fmt.Sprintf("(await %s)", a.Value.String())
 }
+func (a *SpawnExpr) String() string {
+	return fmt.Sprintf("(spawn %s)", a.Value.String())
+}
 func (i *Identifier) String() string  { return i.Value }
 func (il *IntLiteral) String() string { return fmt.Sprintf("%d", il.Value) }
 func (b *BoolLiteral) String() string { return fmt.Sprintf("%t", b.Value) }

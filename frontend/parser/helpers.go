@@ -221,7 +221,7 @@ func (p *Parser) synchronize() {
 func (p *Parser) synchronizeToDecl() {
 	for p.curToken.Type != token.EOF {
 		switch p.curToken.Type {
-		case token.FN, token.TYPE, token.ASYNC: // NEW: Stop recovering if we see ASYNC
+		case token.FN, token.TYPE, token.ASYNC: // Stop recovering if we see ASYNC
 			return // ready to try parsing the next declaration
 		}
 		p.nextToken()

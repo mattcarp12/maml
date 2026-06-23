@@ -175,6 +175,7 @@ type FnDecl struct {
 	End_       Position `json:"-"`
 	Body       *BlockStmt
 	IsAsync    bool
+	IsExtern   bool
 	Name       string
 	Params     []*Param
 	ReturnType types.Type
@@ -377,6 +378,18 @@ func (n *SliceExpr) Pos() Position    { return n.Pos_ }
 func (n *SliceExpr) End() Position    { return n.End_ }
 func (n *SliceExpr) Accept(v Visitor) { v.VisitSliceExpr(n) }
 func (n *SliceExpr) exprNode()        {}
+
+type SpawnExpr struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Type  types.Type
+	Value Expr
+}
+
+func (n *SpawnExpr) Pos() Position    { return n.Pos_ }
+func (n *SpawnExpr) End() Position    { return n.End_ }
+func (n *SpawnExpr) Accept(v Visitor) { v.VisitSpawnExpr(n) }
+func (n *SpawnExpr) exprNode()        {}
 
 type StringLiteral struct {
 	Pos_  Position `json:"-"`
@@ -604,6 +617,7 @@ type Visitor interface {
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
 	VisitSliceExpr(n *SliceExpr)
+	VisitSpawnExpr(n *SpawnExpr)
 	VisitStringLiteral(n *StringLiteral)
 	VisitStructLiteral(n *StructLiteral)
 	VisitTypeDecl(n *TypeDecl)
@@ -659,6 +673,8 @@ func TypeOf(expr Expr) types.Type {
 	case *PrefixExpr:
 		return e.Type
 	case *SliceExpr:
+		return e.Type
+	case *SpawnExpr:
 		return e.Type
 	case *StringLiteral:
 		return e.Type

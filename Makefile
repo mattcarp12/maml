@@ -78,6 +78,10 @@ test: all
 
 e2e: all
 	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/integration_test.go -v -cover
+	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/compile_fail_test.go -v -cover
+
+e2efail:
+	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/compile_fail_test.go -v -cover
 
 # =============================================================================
 # The End-to-End Execution Pipeline (The Verification Loop)

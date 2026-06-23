@@ -15,6 +15,7 @@
       "fields": {
         "Name": "string",
         "IsAsync": "bool",
+        "IsExtern": "bool",
         "Params": "[]*Param",
         "ReturnType": "TypeExpr",
         "Body": "*BlockStmt"
@@ -255,6 +256,14 @@
       ],
       "fields": {
         "Value": "Expr"
+      }
+    },
+    "SpawnExpr": {
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "*CallExpr"
       }
     },
     "WildcardPattern": {

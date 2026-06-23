@@ -1,6 +1,7 @@
 package frontend
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"strings"
@@ -28,16 +29,24 @@ type FrontendResult struct {
 	MIR  *mir.Program
 }
 
-// Frontend executes the canonical frontend pipeline.
-func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
-	// -------------------------------------------------------------------------
-	// Syntax Analysis -> AST
-	// -------------------------------------------------------------------------
+func (c *Compiler) parse(src string) (*ast.Program, error) {
 	l := lexer.New(src)
 	p := parser.New(l)
 	astProgram := p.ParseProgram()
 	if len(p.Errors()) > 0 {
 		return nil, fmt.Errorf("parser syntax errors:\n%s", strings.Join(p.Errors(), "\n"))
+	}
+	return astProgram, nil
+}
+
+// Frontend executes the canonical frontend pipeline.
+func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
+	// -------------------------------------------------------------------------
+	// Syntax Analysis -> AST
+	// -------------------------------------------------------------------------
+	astProgram, err := c.parse(src)
+	if err != nil {
+		return nil, err
 	}
 
 	// -------------------------------------------------------------------------
@@ -102,25 +111,15 @@ func formatErrors(stage string, errs []ast.CompileError) error {
 
 // CompileAST executes only Phase 1 (Syntax Analysis) and returns the raw AST.
 func (c *Compiler) CompileAST(src string) (*ast.Program, error) {
-	l := lexer.New(src)
-	p := parser.New(l)
-	astProgram := p.ParseProgram()
-
-	if len(p.Errors()) > 0 {
-		return nil, fmt.Errorf("[PARSER] errors:\n%s", strings.Join(p.Errors(), "\n"))
-	}
-
-	return astProgram, nil
+	return c.parse(src)
 }
 
 // CompileTAST executes Phase 1 (Syntax Analysis) and Phase 2 (Semantic Analysis)
 // and returns the typed AST.
 func (c *Compiler) CompileTAST(src string) (*tast.Program, error) {
-	l := lexer.New(src)
-	p := parser.New(l)
-	astProgram := p.ParseProgram()
-	if len(p.Errors()) > 0 {
-		return nil, fmt.Errorf("[PARSER] errors:\n%s", strings.Join(p.Errors(), "\n"))
+	astProgram, err := c.parse(src)
+	if err != nil {
+		return nil, err
 	}
 
 	semaChecker := sema.New()

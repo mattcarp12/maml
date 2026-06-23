@@ -91,6 +91,13 @@ void handle(CodegenContext &ctx, const mir::SliceInst &inst) {
     baseTy = llvmTypeFor(ctx, viewTy->base);
   }
 
+  if (lowVal->getType() != ctx.Builder->getInt32Ty()) {
+    lowVal = ctx.Builder->CreateZExtOrTrunc(lowVal, ctx.Builder->getInt32Ty(), "low_cast");
+  }
+  if (highVal->getType() != ctx.Builder->getInt32Ty()) {
+    highVal = ctx.Builder->CreateZExtOrTrunc(highVal, ctx.Builder->getInt32Ty(), "high_cast");
+  }
+
   llvm::Value *newLen = ctx.Builder->CreateSub(highVal, lowVal, "slice_len");
   llvm::Value *newCap = ctx.Builder->CreateSub(originalCap, lowVal, "slice_cap");
 
@@ -104,13 +111,6 @@ void handle(CodegenContext &ctx, const mir::SliceInst &inst) {
       newLen, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(2)}));
   ctx.Builder->CreateStore(
       newCap, ctx.Builder->CreateGEP(sliceTy, dstPtr, {ctx.Builder->getInt32(0), ctx.Builder->getInt32(3)}));
-
-  if (!std::holds_alternative<maml::ArrayType>(inst.container_type->inner)) {
-    llvm::FunctionCallee retainFn = ctx.Module->getOrInsertFunction(
-        "maml_retain", llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context),
-                                               {llvm::PointerType::getUnqual(ctx.Context)}, false));
-    ctx.Builder->CreateCall(retainFn, {originalRawPtr});
-  }
 }
 
 void handle(CodegenContext &ctx, const mir::IndexReadInst &inst) {

@@ -111,7 +111,7 @@ func (t *SumType) GetVariant(name string) *SumVariant {
 
 // --- Future ---
 
-func (t FutureType) String() string { return "Future<" + t.Base.String() + ">" }
+func (t *FutureType) String() string { return "Future<" + t.Base.String() + ">" }
 
 // --- FUNCTION ---
 type FunctionType struct {

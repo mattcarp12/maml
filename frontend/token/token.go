@@ -57,6 +57,7 @@ const (
 	STRUCT   // struct
 	ASYNC    // async
 	AWAIT    // await
+	SPAWN    // spawn
 	IF       // if
 	ELSE     // else
 	MUT      // mut
@@ -66,6 +67,7 @@ const (
 	FREEZE   // freeze
 	BREAK    // break
 	CONTINUE // continue
+	EXTERN   //extern
 )
 
 var keywords = map[string]TokenType{
@@ -76,6 +78,7 @@ var keywords = map[string]TokenType{
 	"struct":   STRUCT,
 	"async":    ASYNC,
 	"await":    AWAIT,
+	"spawn":    SPAWN,
 	"if":       IF,
 	"else":     ELSE,
 	"true":     BOOL,
@@ -87,6 +90,7 @@ var keywords = map[string]TokenType{
 	"freeze":   FREEZE,
 	"continue": CONTINUE,
 	"break":    BREAK,
+	"extern":   EXTERN,
 }
 
 func LookupIdent(ident string) TokenType {

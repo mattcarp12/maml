@@ -35,111 +35,24 @@ func (a *Analyzer) drainViolations(vs []Violation) {
 // doesn't have to deal with type assertions.
 
 func (a *Analyzer) mapDecl(decl ast.Decl) tast.Decl {
-	if decl == nil {
-		return nil
+	if res := ast.MapNode(decl, a); res != nil {
+		return res.(tast.Decl)
 	}
-	var res any
-	switch d := decl.(type) {
-	case *ast.FnDecl:
-		res = a.MapFnDecl(d)
-	case *ast.TypeDecl:
-		res = a.MapTypeDecl(d)
-	default:
-		a.errorf(decl.Pos(), "unsupported declaration type: %T", decl)
-		return nil
-	}
-	if res == nil {
-		return nil
-	}
-	return res.(tast.Decl)
+	return nil
 }
 
 func (a *Analyzer) mapStmt(stmt ast.Stmt) tast.Stmt {
-	if stmt == nil {
-		return nil
+	if res := ast.MapNode(stmt, a); res != nil {
+		return res.(tast.Stmt)
 	}
-	var res tast.Node
-	switch s := stmt.(type) {
-	case *ast.BlockStmt:
-		res = a.MapBlockStmt(s)
-	case *ast.DeclareStmt:
-		res = a.MapDeclareStmt(s)
-	case *ast.AssignStmt:
-		res = a.MapAssignStmt(s)
-	case *ast.ReturnStmt:
-		res = a.MapReturnStmt(s)
-	case *ast.YieldStmt:
-		res = a.MapYieldStmt(s)
-	case *ast.ExprStmt:
-		res = a.MapExprStmt(s)
-	case *ast.ForStmt:
-		res = a.MapForStmt(s)
-	case *ast.BreakStmt:
-		res = a.MapBreakStmt(s)
-	case *ast.ContinueStmt:
-		res = a.MapContinueStmt(s)
-	case *ast.VecPushStmt:
-		res = a.MapVecPushStmt(s)
-	default:
-		a.errorf(stmt.Pos(), "unsupported statement type: %T", stmt)
-		return nil
-	}
-	if res == nil {
-		return nil
-	}
-	return res.(tast.Stmt)
+	return nil
 }
 
 func (a *Analyzer) mapExpr(expr ast.Expr) tast.Expr {
-	if expr == nil {
-		return nil
+	if res := ast.MapNode(expr, a); res != nil {
+		return res.(tast.Expr)
 	}
-	var res tast.Node
-	switch e := expr.(type) {
-	case *ast.Identifier:
-		res = a.MapIdentifier(e)
-	case *ast.IntLiteral:
-		res = a.MapIntLiteral(e)
-	case *ast.BoolLiteral:
-		res = a.MapBoolLiteral(e)
-	case *ast.StringLiteral:
-		res = a.MapStringLiteral(e)
-	case *ast.CompositeLiteral:
-		res = a.MapCompositeLiteral(e)
-	case *ast.CallExpr:
-		res = a.MapCallExpr(e)
-	case *ast.OwnExpr:
-		res = a.MapOwnExpr(e)
-	case *ast.FreezeExpr:
-		res = a.MapFreezeExpr(e)
-	case *ast.InfixExpr:
-		res = a.MapInfixExpr(e)
-	case *ast.PrefixExpr:
-		res = a.MapPrefixExpr(e)
-	case *ast.FieldAccess:
-		res = a.MapFieldAccess(e)
-	case *ast.IndexExpr:
-		res = a.MapIndexExpr(e)
-	case *ast.SliceExpr:
-		res = a.MapSliceExpr(e)
-	case *ast.IfExpr:
-		res = a.MapIfExpr(e)
-	case *ast.MatchExpr:
-		res = a.MapMatchExpr(e)
-	case *ast.AwaitExpr:
-		res = a.MapAwaitExpr(e)
-	case *ast.BlockStmt:
-		res = a.MapBlockStmt(e)
-	case *ast.TypeExprWrapper:
-		res = a.MapTypeExprWrapper(e)
-	default:
-		a.errorf(expr.Pos(), "unsupported expression type: %T", expr)
-		return nil
-	}
-	if res == nil {
-		return nil
-	}
-	return res.(tast.Expr)
+	return nil
 }
 
 func (a *Analyzer) mapPattern(pat ast.Pattern, subjectType types.Type) tast.Pattern {
@@ -267,6 +180,7 @@ func (a *Analyzer) MapFnDecl(v *ast.FnDecl) tast.Node {
 		ReturnType: fnType.Return,
 		Body:       tastBody,
 		IsAsync:    v.IsAsync,
+		IsExtern:   v.IsExtern,
 		Symbol:     fnSym,
 	}
 
@@ -452,26 +366,107 @@ func (a *Analyzer) MapIfExpr(e *ast.IfExpr) tast.Node {
 }
 
 func (a *Analyzer) MapCallExpr(e *ast.CallExpr) tast.Node {
+	// 1. Variant literal intercept
 	if funcIdent, ok := e.Function.(*ast.Identifier); ok {
 		if sym := a.resolve(funcIdent.Value); sym != nil && sym.Kind == types.VariantSymbol {
 			return a.mapTupleVariantLiteral(e, sym)
 		}
 	}
 
-	funcNode := a.mapExpr(e.Function)
-	ft, ok := tast.TypeOf(funcNode).(*types.FunctionType)
-	if !ok {
-		node := &tast.CallExpr{Pos_: e.Pos_, Function: funcNode, Type: types.UnknownType{}}
-		a.drainViolations(a.registry.Check(node, a.ctx()))
-		return node
+	// 2. Map Function and Arguments
+	fnNode := a.mapExpr(e.Function)
+	var tastArgs []tast.CallArg
+	for _, arg := range e.Arguments {
+		tastArgs = append(tastArgs, tast.CallArg{
+			Pos_:     arg.Pos_,
+			Argument: a.mapExpr(arg.Argument),
+			Mut:      arg.Mut,
+		})
 	}
 
-	tastArgs := make([]tast.CallArg, len(e.Arguments))
-	for i, arg := range e.Arguments {
-		tastArgs[i] = tast.CallArg{Pos_: arg.Pos_, Argument: a.mapExpr(arg.Argument), Mut: arg.Mut}
+	// 3. Resolve Return Type and Async State
+	fnType := tast.TypeOf(fnNode)
+	var returnType types.Type = types.UnknownType{}
+	isAsync := false
+
+	if ft, ok := fnType.(*types.FunctionType); ok {
+		returnType = ft.Return
+		if _, ok := ft.Return.(*types.FutureType); ok {
+			isAsync = true
+		}
 	}
 
-	node := &tast.CallExpr{Pos_: e.Pos_, End_: e.End_, Function: funcNode, Arguments: tastArgs, Type: ft.Return}
+	// 4. Built-in intercepts
+	returnType = a.handleRunExecutor(e, fnNode, tastArgs, returnType)
+
+	// 5. The "No Bare Call" Trap (Driven by context state!)
+	if isAsync && !a.allowAsyncCall {
+		fnName := "async function"
+		if ident, ok := fnNode.(*tast.Identifier); ok {
+			fnName = "'" + ident.Value + "'"
+		}
+		a.errorf(e.Pos(), "%s must be called with 'await' or 'spawn'", fnName)
+	}
+
+	node := &tast.CallExpr{
+		Pos_:      e.Pos_,
+		End_:      e.End_,
+		Function:  fnNode,
+		Arguments: tastArgs,
+		Type:      returnType,
+	}
+
+	// Fire rules: CalleeIsCallable, CallArgumentCount, CallArgumentTypeCompatibility
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
+}
+
+// handleRunExecutor extracts the T from Future<T> at compile time
+func (a *Analyzer) handleRunExecutor(e *ast.CallExpr, fnNode tast.Expr, args []tast.CallArg, currentReturn types.Type) types.Type {
+	if ident, ok := fnNode.(*tast.Identifier); ok && ident.Value == "run_executor" {
+		if len(args) != 1 {
+			a.errorf(e.Pos(), "'run_executor' expects exactly 1 argument")
+		} else {
+			argType := tast.TypeOf(args[0].Argument)
+			if futTy, ok := argType.(*types.FutureType); ok {
+				return futTy.Base
+			} else if !types.IsUnknown(argType) {
+				a.errorf(e.Pos(), "'run_executor' expects a Future, got '%s'", argType.String())
+			}
+		}
+	}
+	return currentReturn
+}
+
+func (a *Analyzer) MapSpawnExpr(e *ast.SpawnExpr) tast.Node {
+	// Temporarily allow async calls, map the child, then reset
+	a.allowAsyncCall = true
+	valueNode := a.mapExpr(e.Value)
+	a.allowAsyncCall = false
+
+	tastCall, _ := valueNode.(*tast.CallExpr)
+	futType := &types.FutureType{Base: types.UnknownType{}}
+	if fut, ok := tast.TypeOf(tastCall).(*types.FutureType); ok {
+		futType = fut
+	}
+
+	node := &tast.SpawnExpr{Pos_: e.Pos_, Value: tastCall, Type: futType}
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	return node
+}
+
+func (a *Analyzer) MapAwaitExpr(e *ast.AwaitExpr) tast.Node {
+	// Temporarily allow async calls, map the child, then reset
+	a.allowAsyncCall = true
+	valueNode := a.mapExpr(e.Value)
+	a.allowAsyncCall = false
+
+	var baseType types.Type = types.UnknownType{}
+	if fut, ok := tast.TypeOf(valueNode).(*types.FutureType); ok {
+		baseType = fut.Base
+	}
+
+	node := &tast.AwaitExpr{Pos_: e.Pos_, Value: valueNode, Type: baseType}
 	a.drainViolations(a.registry.Check(node, a.ctx()))
 	return node
 }
@@ -565,24 +560,6 @@ func (a *Analyzer) MapSliceExpr(e *ast.SliceExpr) tast.Node {
 	}
 
 	return &tast.SliceExpr{Pos_: e.Pos_, Left: left, Low: low, High: high, Type: resultType}
-}
-
-func (a *Analyzer) MapAwaitExpr(e *ast.AwaitExpr) tast.Node {
-	if a.currentFn == nil || !a.currentFn.IsAsync {
-		a.errorf(e.Pos(), "cannot use 'await' outside of an async function")
-	}
-
-	value := a.mapExpr(e.Value)
-	valType := tast.TypeOf(value)
-
-	var resultType types.Type = types.UnknownType{}
-	if futTy, ok := valType.(*types.FutureType); ok {
-		resultType = futTy.Base
-	} else if !types.IsUnknown(valType) {
-		a.errorf(e.Pos(), "cannot await non-Future type '%s'", valType.String())
-	}
-
-	return &tast.AwaitExpr{Pos_: e.Pos_, Value: value, Type: resultType}
 }
 
 func (a *Analyzer) MapMatchExpr(e *ast.MatchExpr) tast.Node {

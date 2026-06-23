@@ -59,6 +59,7 @@ func generateCpp(outDir string) error {
 			Interfaces []string          `json:"interfaces"`
 			Fields     map[string]string `json:"fields"`
 			EmitCpp    *bool             `json:"emitCpp,omitempty"` // Add this field
+			Opcode     string            `json:"opcode"`
 		} `json:"nodes"`
 		Helpers map[string]struct {
 			Fields map[string]string `json:"fields"`
@@ -76,7 +77,7 @@ func generateCpp(outDir string) error {
 
 		spec := StructSpec{
 			Name:   name,
-			Opcode: toSnakeCase(strings.ReplaceAll(strings.ReplaceAll(name, "Inst", ""), "Terminator", "")),
+			Opcode: node.Opcode,
 			Fields: buildFields(node.Fields),
 		}
 

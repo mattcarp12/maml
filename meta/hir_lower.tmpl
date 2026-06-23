@@ -3,16 +3,15 @@ package hir
 
 import "github.com/mattcarp12/maml/frontend/tast"
 
+// Ensure Lowerer satisfies the TAST Mapper interface at compile time.
+var _ tast.Mapper[Node] = (*Lowerer)(nil)
+
 // =============================================================================
-// Generated node lowering methods
-//
-// Each method here corresponds to a TAST node that maps 1-to-1 to an HIR node
-// of the same name with the same fields. The hand-written lowerExpr/lowerStmt
-// dispatchers call these for the straightforward cases.
+// Generated node lowering methods (Implementing tast.Mapper[hir.Node])
 // =============================================================================
 
 {{- range .Nodes }}{{- if .Lower }}
-func (l *Lowerer) lower{{ .Name }}(s *tast.{{ .Name }}) *{{ .Name }} {
+func (l *Lowerer) Map{{ .Name }}(s *tast.{{ .Name }}) Node {
 	if s == nil {
 		return nil
 	}
@@ -49,9 +48,6 @@ func (l *Lowerer) lower{{ .Name }}(s *tast.{{ .Name }}) *{{ .Name }} {
 
 // =============================================================================
 // Generated helper lowering functions
-//
-// Each function lowers a TAST helper struct (used in slices by hand-written
-// lowerers) that maps 1-to-1 to the corresponding HIR helper struct.
 // =============================================================================
 
 {{- range .Helpers }}{{- if .Lower }}

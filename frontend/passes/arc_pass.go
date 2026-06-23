@@ -71,6 +71,14 @@ func InjectARC(g *mir.Graph, liveness *LivenessResult, escapes map[string]Escape
 					drops = append(drops, emitDrop(tempName, field.Type)...)
 				}
 			}
+		} else if _, isFut := t.(*types.FutureType); isFut {
+			// NEW: Futures use the detached task protocol!
+			drops = append(drops, &mir.CallInst{
+				Dst:       newTemp(),
+				Function:  &mir.Register{Name: "maml_task_release", Type: types.UnknownType{}},
+				Arguments: []mir.MIRCallArg{{Argument: &mir.Register{Name: name, Type: t}, Mut: false}},
+				Type:      types.UnitType{},
+			})
 		} else if t.IsNeedsARC() {
 			// It's a base ARC type, just decrement it
 			drops = append(drops, &mir.RefDecInst{Src: name})

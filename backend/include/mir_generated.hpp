@@ -184,6 +184,8 @@ struct CoroSuspendTerminator {
     std::string resume_block;
     std::string suspend_block;
 };
+struct CoroYieldTerminator {
+};
 struct JumpTerminator {
     std::string target;
 };
@@ -193,7 +195,7 @@ struct ReturnTerminator {
 struct UnreachableTerminator {
 };
 
-using TermVariant = std::variant<BranchTerminator, CoroSuspendTerminator, JumpTerminator, ReturnTerminator, UnreachableTerminator
+using TermVariant = std::variant<BranchTerminator, CoroSuspendTerminator, CoroYieldTerminator, JumpTerminator, ReturnTerminator, UnreachableTerminator
 >;
 
 struct Terminator {
@@ -217,6 +219,7 @@ struct Function {
     std::shared_ptr<maml::Type> return_type;
     std::vector<ExportParam> params;
     bool is_async;
+    bool is_extern;
     std::string entry_block;
     std::vector<BasicBlock> blocks;
 };
@@ -258,6 +261,7 @@ void from_json(const nlohmann::json& j, VariantInitInst& t);
 void from_json(const nlohmann::json& j, VariantReadInst& t);
 void from_json(const nlohmann::json& j, BranchTerminator& t);
 void from_json(const nlohmann::json& j, CoroSuspendTerminator& t);
+void from_json(const nlohmann::json& j, CoroYieldTerminator& t);
 void from_json(const nlohmann::json& j, JumpTerminator& t);
 void from_json(const nlohmann::json& j, ReturnTerminator& t);
 void from_json(const nlohmann::json& j, UnreachableTerminator& t);
@@ -615,6 +619,8 @@ inline void from_json(const nlohmann::json& j, CoroSuspendTerminator& t) {
         j.at("suspend_block").get_to(t.suspend_block);
     }
 }
+inline void from_json(const nlohmann::json& j, CoroYieldTerminator& t) {
+}
 inline void from_json(const nlohmann::json& j, JumpTerminator& t) {
     if (j.contains("target") && !j.at("target").is_null()) {
         j.at("target").get_to(t.target);
@@ -645,6 +651,7 @@ inline void from_json(const nlohmann::json& j, Function& t) {
     if (j.contains("return_type")) j.at("return_type").get_to(t.return_type);
     if (j.contains("params")) j.at("params").get_to(t.params);
     if (j.contains("is_async")) j.at("is_async").get_to(t.is_async);
+    if (j.contains("is_extern")) j.at("is_extern").get_to(t.is_extern);
     if (j.contains("entry_block")) j.at("entry_block").get_to(t.entry_block);
     if (j.contains("blocks")) j.at("blocks").get_to(t.blocks);
 }
@@ -657,11 +664,11 @@ inline void from_json(const nlohmann::json& j, Program& t) {
 inline void from_json(const nlohmann::json& j, Value& v) {
     if (j.is_null()) return;
     auto op = j.at("op").get<std::string>();
-    if (op == "ident") { v.inner = j.get<Register>(); }
-    else if (op == "const_int") { v.inner = j.get<IntConstant>(); }
-    else if (op == "const_bool") { v.inner = j.get<BoolConstant>(); }
-    else if (op == "const_string") { v.inner = j.get<StringConstant>(); }
-    else { throw std::runtime_error("Unknown Value op: " + op); }
+    if (op == "const_bool") { v.inner = j.get<BoolConstant>(); return; }
+    if (op == "const_int") { v.inner = j.get<IntConstant>(); return; }
+    if (op == "ident") { v.inner = j.get<Register>(); return; }
+    if (op == "const_string") { v.inner = j.get<StringConstant>(); return; }
+    throw std::runtime_error("Unknown Value op: " + op);
 }
 
 inline void from_json(const nlohmann::json& j, Instruction& inst) {
@@ -669,7 +676,7 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "array_init") { inst.inner = j.get<ArrayInitInst>(); return; }
     if (op == "assign") { inst.inner = j.get<AssignInst>(); return; }
     if (op == "binary_op") { inst.inner = j.get<BinaryOpInst>(); return; }
-    if (op == "call") { inst.inner = j.get<CallInst>(); return; }
+    if (op == "call_inst") { inst.inner = j.get<CallInst>(); return; }
     if (op == "cast") { inst.inner = j.get<CastInst>(); return; }
     if (op == "copy") { inst.inner = j.get<CopyInst>(); return; }
     if (op == "coro_prologue") { inst.inner = j.get<CoroPrologueInst>(); return; }
@@ -681,7 +688,7 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "ref_alloc") { inst.inner = j.get<RefAllocInst>(); return; }
     if (op == "ref_dec") { inst.inner = j.get<RefDecInst>(); return; }
     if (op == "ref_inc") { inst.inner = j.get<RefIncInst>(); return; }
-    if (op == "slice") { inst.inner = j.get<SliceInst>(); return; }
+    if (op == "slice_read") { inst.inner = j.get<SliceInst>(); return; }
     if (op == "store") { inst.inner = j.get<StoreInst>(); return; }
     if (op == "struct_init") { inst.inner = j.get<StructInitInst>(); return; }
     if (op == "temp_decl") { inst.inner = j.get<TempDeclInst>(); return; }
@@ -689,24 +696,19 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "variant_discriminant") { inst.inner = j.get<VariantDiscriminantInst>(); return; }
     if (op == "variant_init") { inst.inner = j.get<VariantInitInst>(); return; }
     if (op == "variant_read") { inst.inner = j.get<VariantReadInst>(); return; }
-    
-    // Custom overrides mapped from export.go
-    if (op == "temp_decl") { inst.inner = j.get<TempDeclInst>(); return; }
-    if (op == "call_inst") { inst.inner = j.get<CallInst>(); return; }
-    if (op == "slice_read") { inst.inner = j.get<SliceInst>(); return; }
-    
     throw std::runtime_error("Unknown Instruction op: " + op);
 }
 
 inline void from_json(const nlohmann::json& j, Terminator& term) {
     if (j.is_null()) return;
     auto op = j.at("op").get<std::string>();
-    if (op == "ret") { term.inner = j.get<ReturnTerminator>(); }
-    else if (op == "br") { term.inner = j.get<JumpTerminator>(); }
-    else if (op == "cond_br") { term.inner = j.get<BranchTerminator>(); }
-    else if (op == "unreachable") { term.inner = j.get<UnreachableTerminator>(); }
-    else if (op == "coro_suspend") { term.inner = j.get<CoroSuspendTerminator>(); }
-    else { throw std::runtime_error("Unknown Terminator op: " + op); }
+    if (op == "cond_br") { term.inner = j.get<BranchTerminator>(); return; }
+    if (op == "coro_suspend") { term.inner = j.get<CoroSuspendTerminator>(); return; }
+    if (op == "coro_yield") { term.inner = j.get<CoroYieldTerminator>(); return; }
+    if (op == "br") { term.inner = j.get<JumpTerminator>(); return; }
+    if (op == "ret") { term.inner = j.get<ReturnTerminator>(); return; }
+    if (op == "unreachable") { term.inner = j.get<UnreachableTerminator>(); return; }
+    throw std::runtime_error("Unknown Terminator op: " + op);
 }
 
 } // namespace mir

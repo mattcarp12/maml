@@ -1,3 +1,5 @@
+#include <llvm/IR/Intrinsics.h>
+
 #include "ExprGenerator.hpp"
 #include "RuntimeConstants.h"
 #include "TypeLowering.hpp"
@@ -170,6 +172,33 @@ void handle(CodegenContext &ctx, const mir::CastInst &inst) {
   ctx.SymbolEnv.back()[inst.dst] = castVal;
 }
 
-void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) { /* Not implemented */ }
+void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {
+  auto &Builder = ctx.Builder;
+  auto &Context = ctx.Context;
+  auto *Module = ctx.Module.get();
+
+  // 1. Allocate a generic 32-byte Promise slot to hold the return value
+  llvm::Type *promiseTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(Context), 4);
+  ctx.PromiseSlot = Builder->CreateAlloca(promiseTy, nullptr, "promise");
+
+  // 2. Pass the Promise into coro.id so LLVM tracks its offset in the frame
+  llvm::Function *coroIdFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_id);
+  llvm::Value *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context));
+  llvm::Value *promisePtr = Builder->CreatePointerCast(ctx.PromiseSlot, llvm::PointerType::getUnqual(Context));
+
+  ctx.CoroId = Builder->CreateCall(
+      coroIdFn, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(Context), 0), promisePtr, nullPtr, nullPtr}, "coro.id");
+
+  // 3. Size and Alloc
+  llvm::Function *coroSizeFn =
+      llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_size, {llvm::Type::getInt64Ty(Context)});
+  llvm::Value *coroSize = Builder->CreateCall(coroSizeFn, {}, "coro.size");
+  llvm::Function *allocFn = Module->getFunction("maml_alloc");
+  llvm::Value *framePtr = Builder->CreateCall(allocFn, {coroSize}, "coro.frame.alloc");
+
+  // 4. Begin
+  llvm::Function *coroBeginFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_begin);
+  ctx.CurrentCoroHandle = Builder->CreateCall(coroBeginFn, {ctx.CoroId, framePtr}, "coro.handle");
+}
 
 }  // namespace maml

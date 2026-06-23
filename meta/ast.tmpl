@@ -99,6 +99,23 @@ type ASTMapper[R any] interface {
 {{- end }}
 }
 
+// MapNode is a strongly-typed, auto-generated dispatcher that safely routes 
+// an AST Node to the correct Map function without manual type assertions.
+func MapNode[R any](node Node, m ASTMapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+{{- range .Nodes }}
+	case *{{ .Name }}:
+		return m.Map{{ .Name }}(n)
+{{- end }}
+	default:
+		panic(fmt.Sprintf("unhandled AST node type in MapNode dispatcher: %T", node))
+	}
+}
+
 // =============================================================================
 // Position & Interface Methods
 // =============================================================================

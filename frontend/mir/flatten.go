@@ -121,24 +121,58 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		resumeBlock := b.newBlock()
 		cleanupBlock := b.newBlock()
 		suspendBlock := b.newBlock()
+		regTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: regTmp, Type: types.UnitType{}})
+		current.Statements = append(current.Statements, &CallInst{
+			Dst:      regTmp,
+			Function: &Register{Name: "maml_task_await", Type: types.UnknownType{}},
+			Arguments: []MIRCallArg{
+				{Argument: flatTask, Mut: false},
+				// Note: The C++ backend will need to implicitly pass the CURRENT
+				// coroutine handle into this runtime function so Zig knows who to wake up.
+			},
+			Type: types.UnitType{},
+		})
 		current.Terminator = &CoroSuspendTerminator{
 			ResumeBlock:  resumeBlock.ID,
 			CleanupBlock: cleanupBlock.ID,
 			SuspendBlock: suspendBlock.ID,
 		}
 		cleanupBlock.Terminator = &JumpTerminator{Target: suspendBlock.ID}
-		suspendBlock.Terminator = &ReturnTerminator{}
+		suspendBlock.Terminator = &CoroYieldTerminator{}
 		tmp := b.newTemp()
 		resumeBlock.Statements = append(resumeBlock.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 		resumeBlock.Statements = append(resumeBlock.Statements, &CallInst{
 			Dst:      tmp,
 			Function: &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
 			Arguments: []MIRCallArg{
-				{Argument: flatTask, Mut: false},
+				// This as a MUTATING/OWNING move into the runtime!
+				{Argument: flatTask, Mut: true},
 			},
 			Type: e.Type,
 		})
 		return &Register{Name: tmp, Type: e.Type}, resumeBlock
+
+	case *hir.SpawnExpr:
+		// 1. Flatten the inner call.
+		// For async functions, this doesn't run the function;
+		// it allocates the frame and returns the Future (coroutine handle).
+		flatFuture, current := b.flattenExpr(e.Value, current)
+
+		// 2. Call the Zig runtime to eagerly schedule the task.
+		spawnTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: spawnTmp, Type: types.UnitType{}})
+		current.Statements = append(current.Statements, &CallInst{
+			Dst:      spawnTmp,
+			Function: &Register{Name: "maml_spawn_task", Type: types.UnknownType{}},
+			Arguments: []MIRCallArg{
+				{Argument: flatFuture, Mut: false},
+			},
+			Type: types.UnitType{},
+		})
+
+		// 3. The result of the spawn expression is the Future handle itself
+		return flatFuture, current
 
 	case *hir.StructLiteral:
 		return b.flattenStructLiteral(e, current)
@@ -225,7 +259,6 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 				{Argument: hashVal},
 				{Argument: ptrVal},
 				{Argument: lenVal},
-				// {Argument: intKey},
 			},
 			Type: types.AnyType{},
 		})
@@ -464,6 +497,60 @@ func (b *Builder) flattenBlockExpr(block *hir.BlockStmt, current *BasicBlock) (V
 func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *BasicBlock) {
 	if ident, ok := e.Function.(*hir.Identifier); ok {
 		switch ident.Value {
+		case "yield_now":
+			resumeBlock := b.newBlock()
+			cleanupBlock := b.newBlock()
+			suspendBlock := b.newBlock()
+
+			tmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
+			current.Statements = append(current.Statements, &CallInst{
+				Dst:       tmp,
+				Function:  &Register{Name: "maml_yield_now", Type: types.UnknownType{}},
+				Arguments: []MIRCallArg{}, // C++ backend will inject CurrentCoroHandle!
+				Type:      types.UnitType{},
+			})
+
+			current.Terminator = &CoroSuspendTerminator{
+				ResumeBlock:  resumeBlock.ID,
+				CleanupBlock: cleanupBlock.ID,
+				SuspendBlock: suspendBlock.ID,
+			}
+			cleanupBlock.Terminator = &JumpTerminator{Target: suspendBlock.ID}
+			suspendBlock.Terminator = &CoroYieldTerminator{}
+
+			return &Register{Name: "_unit", Type: types.UnitType{}}, resumeBlock
+
+		// Inside flattenCall in flatten.go:
+		case "run_executor":
+			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
+			current = nextBlock
+
+			// 1. Call the Zig runtime to spin the event loop until the future is done.
+			// It takes the opaque pointer and returns the opaque pointer.
+			blockTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: blockTmp, Type: types.AnyType{}})
+			current.Statements = append(current.Statements, &CallInst{
+				Dst:       blockTmp,
+				Function:  &Register{Name: "maml_run_executor", Type: types.UnknownType{}},
+				Arguments: []MIRCallArg{{Argument: flatArg, Mut: false}},
+				Type:      types.AnyType{},
+			})
+
+			// 2. Extract the concrete type (e.g., int) from the frame!
+			// This calls the intrinsic that the C++ backend will lower into a memory read.
+			// Note: Mut: true signals to InjectARC that the future is consumed here!
+			resTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: resTmp, Type: e.Type})
+			current.Statements = append(current.Statements, &CallInst{
+				Dst:       resTmp,
+				Function:  &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
+				Arguments: []MIRCallArg{{Argument: flatArg, Mut: true}},
+				Type:      e.Type,
+			})
+
+			return &Register{Name: resTmp, Type: e.Type}, current
+
 		case "len":
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock

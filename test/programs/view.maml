@@ -1,0 +1,64 @@
+// EXIT_CODE: 88
+// Tests: Stack views, Heap views, Agnostic parameters, and In-place mutation.
+
+// 1. Allocator-Agnostic Parameter
+// This function doesn't care if the memory is on the stack or the heap.
+// It takes no ownership and triggers no ARC increments!
+fn sum_three(v View<int>) int {
+    return v[0] + v[1] + v[2]
+}
+
+// 2. Mutable View Parameter
+// Mutates the underlying buffer in place without taking ownership.
+fn triple_values(mut v View<int>) {
+    v[0] = v[0] * 3
+    v[1] = v[1] * 3
+    v[2] = v[2] * 3
+}
+
+fn main() int {
+    // ==========================================
+    // Part A: Stack-Allocated Memory
+    // ==========================================
+    mut stack_arr := [3]int{1, 2, 3}
+    
+    // Create a mutable view to modify the stack array in place.
+    // The borrow checker applies an ExclusiveWrite lock to 'stack_arr'.
+    mut mut_stack_view := stack_arr[:]
+    triple_values(mut mut_stack_view) 
+    
+    // 'mut_stack_view' is never used again, so the NLL engine unlocks 'stack_arr'.
+    // stack_arr is now {3, 6, 9}
+
+    // Safely create an immutable view to read it.
+    read_stack_view := stack_arr[:]
+    stack_sum := sum_three(read_stack_view) // 3 + 6 + 9 = 18
+
+
+    // ==========================================
+    // Part B: Heap-Allocated Memory (Vec)
+    // ==========================================
+    mut heap_vec := Vec<int>{}
+    heap_vec << 10
+    heap_vec << 20
+    heap_vec << 30
+    heap_vec << 40 // Extra capacity; the View won't care!
+    
+    // Create a mutable view of the vector.
+    mut mut_heap_view := heap_vec[:]
+    triple_values(mut mut_heap_view)
+    
+    // 'mut_heap_view' dies. heap_vec is now {30, 60, 90, 40}.
+    
+    // Create an immutable view to read it.
+    read_heap_view := heap_vec[:]
+    heap_sum := sum_three(read_heap_view) // 30 + 60 + 90 = 180
+
+
+    // ==========================================
+    // Result Calculation
+    // ==========================================
+    // stack_sum (18) + heap_sum (180) = 198
+    // Return 198 - 110 = 88
+    return stack_sum + heap_sum - 110
+}

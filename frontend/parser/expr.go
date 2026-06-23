@@ -464,6 +464,30 @@ func (p *Parser) parseAwaitExpression() ast.Expr {
 	}
 }
 
+func (p *Parser) parseSpawnExpression() ast.Expr {
+	pos := p.curPos()
+	p.nextToken() // step off 'spawn'
+
+	value := p.parseExpression(PREFIX)
+	if value == nil {
+		return nil
+	}
+
+	var call *ast.CallExpr
+	if callExpr, ok := value.(*ast.CallExpr); !ok {
+		p.addError("can only `spawn` a call expression")
+		return nil
+	} else {
+		call = callExpr
+	}
+
+	return &ast.SpawnExpr{
+		Value: call,
+		Pos_:  pos,
+		End_:  p.curEndPos(),
+	}
+}
+
 func (p *Parser) parseOwnExpression() ast.Expr {
 	pos := p.curPos()
 	p.nextToken() // step off 'own'

@@ -589,3 +589,45 @@ func (r CannotReassignBorrowedParameter) Check(node *tast.AssignStmt, ctx *RuleC
 	}
 	return nil
 }
+
+// ==========================================================================
+// Async function fules
+// ==========================================================================
+type SpawnRequiresAsyncCall struct{}
+
+func (r SpawnRequiresAsyncCall) Name() string { return "spawn-requires-async-call" }
+
+func (r SpawnRequiresAsyncCall) Check(node *tast.SpawnExpr, ctx *RuleContext) []Violation {
+	if node.Value == nil {
+		return nil // structural error already caught by mapper
+	}
+	callType := tast.TypeOf(node.Value)
+	if _, ok := callType.(*types.FutureType); !ok && !types.IsUnknown(callType) {
+		return []Violation{violation(node.Pos_,
+			"spawn can only be applied to async functions, got '%s'", callType.String())}
+	}
+	return nil
+}
+
+type AwaitRequiresFuture struct{}
+
+func (r AwaitRequiresFuture) Name() string { return "await-requires-future" }
+
+func (r AwaitRequiresFuture) Check(node *tast.AwaitExpr, ctx *RuleContext) []Violation {
+	var violations []Violation
+
+	// Check Context
+	if !ctx.IsAsync {
+		violations = append(violations, violation(node.Pos_,
+			"cannot use 'await' outside of an async function"))
+	}
+
+	// Check Type
+	valType := tast.TypeOf(node.Value)
+	if _, ok := valType.(*types.FutureType); !ok && !types.IsUnknown(valType) {
+		violations = append(violations, violation(node.Pos_,
+			"cannot await non-Future type '%s'", valType.String()))
+	}
+
+	return violations
+}

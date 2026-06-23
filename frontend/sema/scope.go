@@ -56,9 +56,18 @@ func newGlobalScope() *Scope {
 		Kind: types.FuncSymbol,
 		Name: "run_executor",
 		Type: &types.FunctionType{
+			Params:     []types.Type{&types.FutureType{Base: types.AnyType{}}},
+			ParamModes: []types.ParamMode{types.ParamBorrow},
+			Return:     types.AnyType{},
+		},
+	}
+	global.symbols["yield_now"] = &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: "yield_now",
+		Type: &types.FunctionType{
 			Params:     []types.Type{},
 			ParamModes: []types.ParamMode{},
-			Return:     types.IntType{},
+			Return:     types.AnyType{},
 		},
 	}
 	// Builtin: len(collection)

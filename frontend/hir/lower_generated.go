@@ -3,14 +3,13 @@ package hir
 
 import "github.com/mattcarp12/maml/frontend/tast"
 
+// Ensure Lowerer satisfies the TAST Mapper interface at compile time.
+var _ tast.Mapper[Node] = (*Lowerer)(nil)
+
 // =============================================================================
-// Generated node lowering methods
-//
-// Each method here corresponds to a TAST node that maps 1-to-1 to an HIR node
-// of the same name with the same fields. The hand-written lowerExpr/lowerStmt
-// dispatchers call these for the straightforward cases.
+// Generated node lowering methods (Implementing tast.Mapper[hir.Node])
 // =============================================================================
-func (l *Lowerer) lowerArrayLiteral(s *tast.ArrayLiteral) *ArrayLiteral {
+func (l *Lowerer) MapArrayLiteral(s *tast.ArrayLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -25,7 +24,7 @@ func (l *Lowerer) lowerArrayLiteral(s *tast.ArrayLiteral) *ArrayLiteral {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) lowerAwaitExpr(s *tast.AwaitExpr) *AwaitExpr {
+func (l *Lowerer) MapAwaitExpr(s *tast.AwaitExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -36,7 +35,7 @@ func (l *Lowerer) lowerAwaitExpr(s *tast.AwaitExpr) *AwaitExpr {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) lowerBoolLiteral(s *tast.BoolLiteral) *BoolLiteral {
+func (l *Lowerer) MapBoolLiteral(s *tast.BoolLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -47,7 +46,7 @@ func (l *Lowerer) lowerBoolLiteral(s *tast.BoolLiteral) *BoolLiteral {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) lowerBreakStmt(s *tast.BreakStmt) *BreakStmt {
+func (l *Lowerer) MapBreakStmt(s *tast.BreakStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -56,7 +55,7 @@ func (l *Lowerer) lowerBreakStmt(s *tast.BreakStmt) *BreakStmt {
 		End_: s.End_,
 	}
 }
-func (l *Lowerer) lowerContinueStmt(s *tast.ContinueStmt) *ContinueStmt {
+func (l *Lowerer) MapContinueStmt(s *tast.ContinueStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -65,7 +64,7 @@ func (l *Lowerer) lowerContinueStmt(s *tast.ContinueStmt) *ContinueStmt {
 		End_: s.End_,
 	}
 }
-func (l *Lowerer) lowerDeclareStmt(s *tast.DeclareStmt) *DeclareStmt {
+func (l *Lowerer) MapDeclareStmt(s *tast.DeclareStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -76,7 +75,7 @@ func (l *Lowerer) lowerDeclareStmt(s *tast.DeclareStmt) *DeclareStmt {
 		Value:  l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) lowerFreezeExpr(s *tast.FreezeExpr) *FreezeExpr {
+func (l *Lowerer) MapFreezeExpr(s *tast.FreezeExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -87,7 +86,7 @@ func (l *Lowerer) lowerFreezeExpr(s *tast.FreezeExpr) *FreezeExpr {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) lowerIdentifier(s *tast.Identifier) *Identifier {
+func (l *Lowerer) MapIdentifier(s *tast.Identifier) Node {
 	if s == nil {
 		return nil
 	}
@@ -99,7 +98,7 @@ func (l *Lowerer) lowerIdentifier(s *tast.Identifier) *Identifier {
 		Value:  s.Value,
 	}
 }
-func (l *Lowerer) lowerIfExpr(s *tast.IfExpr) *IfExpr {
+func (l *Lowerer) MapIfExpr(s *tast.IfExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -112,7 +111,7 @@ func (l *Lowerer) lowerIfExpr(s *tast.IfExpr) *IfExpr {
 		Type:        s.Type,
 	}
 }
-func (l *Lowerer) lowerIntLiteral(s *tast.IntLiteral) *IntLiteral {
+func (l *Lowerer) MapIntLiteral(s *tast.IntLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -123,7 +122,7 @@ func (l *Lowerer) lowerIntLiteral(s *tast.IntLiteral) *IntLiteral {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) lowerOwnExpr(s *tast.OwnExpr) *OwnExpr {
+func (l *Lowerer) MapOwnExpr(s *tast.OwnExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -134,7 +133,7 @@ func (l *Lowerer) lowerOwnExpr(s *tast.OwnExpr) *OwnExpr {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) lowerPrefixExpr(s *tast.PrefixExpr) *PrefixExpr {
+func (l *Lowerer) MapPrefixExpr(s *tast.PrefixExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -146,7 +145,7 @@ func (l *Lowerer) lowerPrefixExpr(s *tast.PrefixExpr) *PrefixExpr {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) lowerReturnStmt(s *tast.ReturnStmt) *ReturnStmt {
+func (l *Lowerer) MapReturnStmt(s *tast.ReturnStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -156,7 +155,7 @@ func (l *Lowerer) lowerReturnStmt(s *tast.ReturnStmt) *ReturnStmt {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) lowerSliceExpr(s *tast.SliceExpr) *SliceExpr {
+func (l *Lowerer) MapSliceExpr(s *tast.SliceExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -169,7 +168,18 @@ func (l *Lowerer) lowerSliceExpr(s *tast.SliceExpr) *SliceExpr {
 		Type: s.Type,
 	}
 }
-func (l *Lowerer) lowerStringLiteral(s *tast.StringLiteral) *StringLiteral {
+func (l *Lowerer) MapSpawnExpr(s *tast.SpawnExpr) Node {
+	if s == nil {
+		return nil
+	}
+	return &SpawnExpr{
+		Pos_:  s.Pos_,
+		End_:  s.End_,
+		Type:  s.Type,
+		Value: l.lowerExpr(s.Value),
+	}
+}
+func (l *Lowerer) MapStringLiteral(s *tast.StringLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -180,7 +190,7 @@ func (l *Lowerer) lowerStringLiteral(s *tast.StringLiteral) *StringLiteral {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) lowerVecLiteral(s *tast.VecLiteral) *VecLiteral {
+func (l *Lowerer) MapVecLiteral(s *tast.VecLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -195,7 +205,7 @@ func (l *Lowerer) lowerVecLiteral(s *tast.VecLiteral) *VecLiteral {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) lowerYieldStmt(s *tast.YieldStmt) *YieldStmt {
+func (l *Lowerer) MapYieldStmt(s *tast.YieldStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -208,9 +218,6 @@ func (l *Lowerer) lowerYieldStmt(s *tast.YieldStmt) *YieldStmt {
 
 // =============================================================================
 // Generated helper lowering functions
-//
-// Each function lowers a TAST helper struct (used in slices by hand-written
-// lowerers) that maps 1-to-1 to the corresponding HIR helper struct.
 // =============================================================================
 func lowerTASTCallArg(l *Lowerer, h tast.CallArg) CallArg {
 	return CallArg{

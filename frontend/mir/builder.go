@@ -17,6 +17,7 @@ type Function struct {
 	Params     []*hir.Param
 	ReturnType types.Type
 	IsAsync    bool
+	IsExtern   bool
 	Graph      *Graph
 }
 
@@ -44,6 +45,9 @@ func BuildProgram(hirProg *hir.Program) *Program {
 		case *hir.FnDecl:
 			// Generate the CFG for the function body
 			graph := buildFn(d)
+			if !d.IsExtern {
+				graph = buildFn(d)
+			}
 
 			// Bundle the CFG with the function's static signature
 			mirProg.Functions = append(mirProg.Functions, Function{
@@ -51,6 +55,7 @@ func BuildProgram(hirProg *hir.Program) *Program {
 				Params:     d.Params,
 				ReturnType: d.ReturnType,
 				IsAsync:    d.IsAsync,
+				IsExtern:   d.IsExtern,
 				Graph:      graph,
 			})
 		}

@@ -38,6 +38,31 @@ func (*{{ $nodeName }}) {{ . }}() {}
 {{- end }}
 
 // ============================================================================
+// Generic Mapper & Dispatcher
+// ============================================================================
+
+type Mapper[R any] interface {
+{{- range .Nodes }}
+	Map{{ .Name }}(n *{{ .Name }}) R
+{{- end }}
+}
+
+func MapNode[R any](node any, m Mapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+{{- range .Nodes }}
+	case *{{ .Name }}:
+		return m.Map{{ .Name }}(n)
+{{- end }}
+	default:
+		panic("MIR Exporter Error: Unhandled MIR node type in MapNode")
+	}
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 {{- range .Helpers }}

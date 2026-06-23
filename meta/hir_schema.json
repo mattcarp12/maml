@@ -18,6 +18,7 @@
         "ReturnType": "types.Type",
         "Body": "*BlockStmt",
         "IsAsync": "bool",
+        "IsExtern": "bool",
         "Symbol": "*types.Symbol"
       }
     },
@@ -310,6 +311,16 @@
       }
     },
     "AwaitExpr": {
+      "interfaces": [
+        "Expr"
+      ],
+      "fields": {
+        "Value": "Expr",
+        "Type": "types.Type"
+      },
+      "lower": true
+    },
+    "SpawnExpr": {
       "interfaces": [
         "Expr"
       ],
