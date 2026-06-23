@@ -1,22 +1,64 @@
 #include "CodegenContext.hpp"
 
-#include <iostream>
+#include <llvm/Support/raw_ostream.h>
 
 namespace maml {
 
+// =========================================================================
+// LLVM Stringification Helpers
+// =========================================================================
+std::string ErrorHandler::stringify(llvm::Value *val) {
+  if (!val) return "null";
+  std::string str;
+  llvm::raw_string_ostream rso(str);
+  val->print(rso);
+  return str;
+}
+
+std::string ErrorHandler::stringify(llvm::Type *ty) {
+  if (!ty) return "null";
+  std::string str;
+  llvm::raw_string_ostream rso(str);
+  ty->print(rso);
+  return str;
+}
+
+// =========================================================================
+// Context-Aware Error Reporting
+// =========================================================================
 void ErrorHandler::report(std::string_view message) {
   hasError = true;
-  std::cerr << "Semantic Error: " << message << "\n";
+
+  // Use llvm::errs() which is tightly integrated with LLVM's internal diagnostics
+  llvm::errs() << "\n\033[1;31m[MAML Codegen Error]\033[0m ";
+
+  if (Ctx) {
+    llvm::errs() << "In function '\033[1;33m" << Ctx->CurrentFunctionName << "\033[0m' near instruction '\033[1;36m"
+                 << Ctx->CurrentInstructionName << "\033[0m':\n";
+  }
+
+  llvm::errs() << "  -> " << message << "\n\n";
+}
+
+void ErrorHandler::warn(std::string_view message) {
+  llvm::errs() << "\033[1;33m[MAML Warning]\033[0m " << message << "\n";
 }
 
 void ErrorHandler::fatal(std::string_view message) {
   report(message);
-  llvm::report_fatal_error(llvm::StringRef(message.data(), message.size()));
+  llvm::report_fatal_error(llvm::StringRef(message.data(), message.size()), false);
+  // 'false' prevents LLVM from printing the massive C++ stack trace, keeping output clean.
 }
 
+// =========================================================================
+// Context Initialization
+// =========================================================================
 CodegenContext::CodegenContext(const std::string &moduleName) {
   Module = std::make_unique<llvm::Module>(moduleName, Context);
   Builder = std::make_unique<llvm::IRBuilder<>>(Context);
+
+  // Link the error handler to this specific context instance
+  Error.setContext(this);
 }
 
 void CodegenContext::pushScope() { SymbolEnv.push_back({}); }
@@ -37,14 +79,11 @@ llvm::Value *CodegenContext::getMemoryBase(std::string_view name) {
     return nullptr;
   }
 
-  // If the variable was promoted to the heap, our local symbol is just a pointer
-  // to the heap address. We must load the actual heap address before accessing memory.
   if (HeapVars.count(std::string(name))) {
     llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
     return Builder->CreateLoad(ptrTy, symbol, std::string(name) + "_heap_addr");
   }
 
-  // Memory is directly on the stack. Return the allocation pointer.
   return symbol;
 }
 

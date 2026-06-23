@@ -288,7 +288,7 @@ func (e *Exporter) MapUnreachableTerminator(t *UnreachableTerminator) map[string
 	return map[string]any{"op": "unreachable"}
 }
 func (e *Exporter) MapCoroSuspendTerminator(t *CoroSuspendTerminator) map[string]any {
-	return map[string]any{"op": "coro_suspend", "resume": fmt.Sprintf("%d", t.ResumeBlock), "cleanup": fmt.Sprintf("%d", t.CleanupBlock), "suspend": fmt.Sprintf("%d", t.SuspendBlock)}
+	return map[string]any{"op": "coro_suspend", "resume_block": fmt.Sprintf("%d", t.ResumeBlock), "cleanup_block": fmt.Sprintf("%d", t.CleanupBlock), "suspend_block": fmt.Sprintf("%d", t.SuspendBlock)}
 }
 func (e *Exporter) MapCoroYieldTerminator(t *CoroYieldTerminator) map[string]any {
 	return map[string]any{"op": "coro_yield"}

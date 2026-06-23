@@ -47,9 +47,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		if hir.TypeOf(e.Left).Equals(types.StringType{}) && (e.Operator == "==" || e.Operator == "!=") {
 			return b.flattenStringEq(e, flatLeft, flatRight, current)
 		}
-
-		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &BinaryOpInst{
 			Dst:      tmp,
 			Operator: e.Operator,
@@ -61,9 +59,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 
 	case *hir.PrefixExpr:
 		flatRight, current := b.flattenExpr(e.Right, current)
-		tmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &UnaryOpInst{
 			Dst:      tmp,
 			Operator: e.Operator,
@@ -75,9 +71,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 	case *hir.IndexExpr:
 		flatLeft, current := b.flattenExpr(e.Left, current)
 		flatIndex, current := b.flattenExpr(e.Index, current)
-		tmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &IndexReadInst{
 			Dst:        tmp,
 			Source:     flatLeft,
@@ -92,9 +86,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 
 	case *hir.OwnExpr:
 		root, path, current := b.flattenPlace(e.Value, current)
-		tmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &OwnInst{
 			Dst:  tmp,
 			Root: root,
@@ -105,9 +97,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 
 	case *hir.FreezeExpr:
 		root, path, current := b.flattenPlace(e.Value, current)
-		tmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &FreezeInst{
 			Dst:  tmp,
 			Root: root,
@@ -128,11 +118,10 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 			Function: &Register{Name: "maml_task_await", Type: types.UnknownType{}},
 			Arguments: []MIRCallArg{
 				{Argument: flatTask, Mut: false},
-				// Note: The C++ backend will need to implicitly pass the CURRENT
-				// coroutine handle into this runtime function so Zig knows who to wake up.
 			},
 			Type: types.UnitType{},
 		})
+
 		current.Terminator = &CoroSuspendTerminator{
 			ResumeBlock:  resumeBlock.ID,
 			CleanupBlock: cleanupBlock.ID,
@@ -140,13 +129,13 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		}
 		cleanupBlock.Terminator = &JumpTerminator{Target: suspendBlock.ID}
 		suspendBlock.Terminator = &CoroYieldTerminator{}
+
 		tmp := b.newTemp()
 		resumeBlock.Statements = append(resumeBlock.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 		resumeBlock.Statements = append(resumeBlock.Statements, &CallInst{
 			Dst:      tmp,
 			Function: &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
 			Arguments: []MIRCallArg{
-				// This as a MUTATING/OWNING move into the runtime!
 				{Argument: flatTask, Mut: true},
 			},
 			Type: e.Type,
@@ -154,24 +143,8 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		return &Register{Name: tmp, Type: e.Type}, resumeBlock
 
 	case *hir.SpawnExpr:
-		// 1. Flatten the inner call.
-		// For async functions, this doesn't run the function;
-		// it allocates the frame and returns the Future (coroutine handle).
 		flatFuture, current := b.flattenExpr(e.Value, current)
-
-		// 2. Call the Zig runtime to eagerly schedule the task.
-		spawnTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: spawnTmp, Type: types.UnitType{}})
-		current.Statements = append(current.Statements, &CallInst{
-			Dst:      spawnTmp,
-			Function: &Register{Name: "maml_spawn_task", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatFuture, Mut: false},
-			},
-			Type: types.UnitType{},
-		})
-
-		// 3. The result of the spawn expression is the Future handle itself
+		_, current = b.EmitMamlSpawnTask(current, flatFuture)
 		return flatFuture, current
 
 	case *hir.StructLiteral:
@@ -202,8 +175,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		if e.High != nil {
 			flatHigh, current = b.flattenExpr(e.High, current)
 		}
-		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &SliceInst{
 			Dst:           tmp,
 			Left:          flatLeft,
@@ -223,8 +195,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 
 	case *hir.VariantDiscriminantExpr:
 		flatObj, current := b.flattenExpr(e.Object, current)
-		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &VariantDiscriminantInst{
 			Dst:    tmp,
 			Object: flatObj,
@@ -234,8 +205,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 
 	case *hir.VariantReadExpr:
 		flatObj, current := b.flattenExpr(e.Object, current)
-		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		current.Statements = append(current.Statements, &VariantReadInst{
 			Dst:          tmp,
 			Object:       flatObj,
@@ -249,27 +219,11 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		flatMap, current := b.flattenExpr(e.Map, current)
 		hashVal, ptrVal, lenVal, _, current := b.lowerMapKey(e.Key, current)
 
-		opaqueTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: opaqueTmp, Type: types.AnyType{}})
-		current.Statements = append(current.Statements, &CallInst{
-			Dst:      opaqueTmp,
-			Function: &Register{Name: "maml_map_get", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatMap},
-				{Argument: hashVal},
-				{Argument: ptrVal},
-				{Argument: lenVal},
-			},
-			Type: types.AnyType{},
-		})
-		opaquePtr := &Register{Name: opaqueTmp, Type: types.AnyType{}}
+		opaquePtr, current := b.EmitMamlMapGet(current, flatMap, hashVal, ptrVal, lenVal)
 
 		// Option<V> Branching Logic
-		resTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: resTmp, Type: e.Type})
-
-		cmpTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: cmpTmp, Type: types.BoolType{}})
+		resTmp := b.emitTemp(current, e.Type)
+		cmpTmp := b.emitTemp(current, types.BoolType{})
 		current.Statements = append(current.Statements, &BinaryOpInst{
 			Dst: cmpTmp, Operator: "!=", Left: opaquePtr, Right: &IntConstant{Value: 0, Type: types.AnyType{}}, Type: types.BoolType{},
 		})
@@ -292,8 +246,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		thenBlock.Statements = append(thenBlock.Statements, &TempDeclInst{Name: valTmp, Type: valType})
 		thenBlock.Statements = append(thenBlock.Statements, &LoadPtrInst{Dst: valTmp, Ptr: opaquePtr, Type: valType})
 
-		someTmp := b.newTemp()
-		thenBlock.Statements = append(thenBlock.Statements, &TempDeclInst{Name: someTmp, Type: e.Type})
+		someTmp := b.emitTemp(thenBlock, e.Type)
 		thenBlock.Statements = append(thenBlock.Statements, &VariantInitInst{
 			Dst: someTmp, VariantName: "Some", Discriminant: 0,
 			Payloads: []Value{&Register{Name: valTmp, Type: valType}}, Type: e.Type,
@@ -320,19 +273,7 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		flatVec, current := b.flattenExpr(e.Vec, current)
 		flatIdx, current := b.flattenExpr(e.Index, current)
 
-		opaqueTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: opaqueTmp, Type: types.AnyType{}})
-
-		current.Statements = append(current.Statements, &CallInst{
-			Dst:      opaqueTmp,
-			Function: &Register{Name: "maml_vec_get", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatVec},
-				{Argument: flatIdx},
-			},
-			Type: types.AnyType{},
-		})
-		opaquePtr := &Register{Name: opaqueTmp, Type: types.AnyType{}}
+		opaquePtr, current := b.EmitMamlVecGet(current, flatVec, flatIdx)
 
 		valTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: e.Type})
@@ -503,11 +444,13 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			suspendBlock := b.newBlock()
 
 			tmp := b.newTemp()
+
+			// KEEPING MANUAL: Relies on missing arguments in MIR to signal implicit C++ injection
 			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
 			current.Statements = append(current.Statements, &CallInst{
 				Dst:       tmp,
 				Function:  &Register{Name: "maml_yield_now", Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{}, // C++ backend will inject CurrentCoroHandle!
+				Arguments: []MIRCallArg{},
 				Type:      types.UnitType{},
 			})
 
@@ -521,25 +464,13 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 
 			return &Register{Name: "_unit", Type: types.UnitType{}}, resumeBlock
 
-		// Inside flattenCall in flatten.go:
 		case "run_executor":
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock
 
-			// 1. Call the Zig runtime to spin the event loop until the future is done.
-			// It takes the opaque pointer and returns the opaque pointer.
-			blockTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: blockTmp, Type: types.AnyType{}})
-			current.Statements = append(current.Statements, &CallInst{
-				Dst:       blockTmp,
-				Function:  &Register{Name: "maml_run_executor", Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{{Argument: flatArg, Mut: false}},
-				Type:      types.AnyType{},
-			})
+			_, current = b.EmitMamlRunExecutor(current, flatArg)
 
-			// 2. Extract the concrete type (e.g., int) from the frame!
-			// This calls the intrinsic that the C++ backend will lower into a memory read.
-			// Note: Mut: true signals to InjectARC that the future is consumed here!
+			// KEEPING MANUAL: Polymorphic Return Type requires explicit type tagging
 			resTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: resTmp, Type: e.Type})
 			current.Statements = append(current.Statements, &CallInst{
@@ -555,42 +486,25 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock
 
-			var rtSym string
 			switch hir.TypeOf(e.Arguments[0].Argument).(type) {
 			case *types.VectorType, *types.ViewType:
-				rtSym = "maml_vec_len"
+				return b.EmitMamlVecLen(current, flatArg)
 			case *types.MapType:
-				rtSym = "maml_map_len"
+				return b.EmitMamlMapLen(current, flatArg)
 			}
-
-			tmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.IntType{}})
-			current.Statements = append(current.Statements, &CallInst{
-				Dst: tmp, Function: &Register{Name: rtSym, Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{{Argument: flatArg, Mut: false}}, Type: types.IntType{},
-			})
-			return &Register{Name: tmp, Type: types.IntType{}}, current
 
 		case "delete":
 			flatMap, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			hashVal, ptrVal, lenVal, intKey, nextBlock := b.lowerMapKey(e.Arguments[1].Argument, nextBlock)
 			current = nextBlock
 
-			tmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
-			current.Statements = append(current.Statements, &CallInst{
-				Dst: tmp, Function: &Register{Name: "maml_map_delete", Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{
-					{Argument: flatMap, Mut: true}, {Argument: hashVal}, {Argument: ptrVal}, {Argument: lenVal}, {Argument: intKey},
-				}, Type: types.UnitType{},
-			})
-			return &Register{Name: tmp, Type: types.UnitType{}}, current
+			_, current = b.EmitMamlMapDelete(current, flatMap, hashVal, ptrVal, lenVal, intKey)
+			return &Register{Name: "_unit", Type: types.UnitType{}}, current
 
 		case "print":
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock
 
-			// 1. Extract the raw pointer from the String fat-pointer
 			strPtrTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: strPtrTmp, Type: types.AnyType{}})
 			current.Statements = append(current.Statements, &FieldReadInst{
@@ -601,7 +515,6 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 				Type:       types.AnyType{},
 			})
 
-			// 2. Extract the length from the String fat-pointer
 			strLenTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: strLenTmp, Type: types.IntType{}})
 			current.Statements = append(current.Statements, &FieldReadInst{
@@ -612,20 +525,8 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 				Type:       types.IntType{},
 			})
 
-			// 3. Route both arguments to the safe Zig maml_print runtime function
-			tmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: types.UnitType{}})
-
-			current.Statements = append(current.Statements, &CallInst{
-				Dst:      tmp,
-				Function: &Register{Name: "maml_print", Type: types.UnknownType{}}, // 2. Call the Zig runtime function!
-				Arguments: []MIRCallArg{
-					{Argument: &Register{Name: strPtrTmp, Type: types.AnyType{}}, Mut: false},
-					{Argument: &Register{Name: strLenTmp, Type: types.IntType{}}, Mut: false},
-				},
-				Type: types.UnitType{},
-			})
-			return &Register{Name: tmp, Type: types.UnitType{}}, current
+			_, current = b.EmitMamlPrint(current, &Register{Name: strPtrTmp, Type: types.AnyType{}}, &Register{Name: strLenTmp, Type: types.IntType{}})
+			return &Register{Name: "_unit", Type: types.UnitType{}}, current
 		}
 	}
 
@@ -656,8 +557,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 func (b *Builder) flattenArrayLiteral(e *hir.ArrayLiteral, current *BasicBlock) (Value, *BasicBlock) {
 	arrayType, ok := e.Type.(*types.ArrayType)
 	if !ok {
-		tmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+		tmp := b.emitTemp(current, e.Type)
 		return &Register{Name: tmp, Type: e.Type}, current
 	}
 
@@ -743,20 +643,7 @@ func (b *Builder) flattenVecLiteral(e *hir.VecLiteral, current *BasicBlock) (Val
 	for _, elem := range e.Elements {
 		var flatElem Value
 		flatElem, current = b.flattenExpr(elem, current)
-
-		pushFn := &Register{Name: "maml_vec_push", Type: types.UnknownType{}}
-		pushTmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: pushTmp, Type: types.UnitType{}})
-		current.Statements = append(current.Statements, &CallInst{
-			Dst:      pushTmp,
-			Function: pushFn,
-			Arguments: []MIRCallArg{
-				{Argument: &Register{Name: tmp, Type: t}, Mut: true},
-				{Argument: flatElem, Mut: false},
-			},
-			Type: types.UnitType{},
-		})
+		_, current = b.EmitMamlVecPush(current, &Register{Name: tmp, Type: t}, flatElem)
 	}
 
 	return &Register{Name: tmp, Type: t}, current
@@ -804,23 +691,7 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 		var hashVal, ptrVal, lenVal, intKey Value
 		hashVal, ptrVal, lenVal, intKey, current = b.lowerMapKey(kv.Key, current)
 
-		putFn := &Register{Name: "maml_map_put", Type: types.UnknownType{}}
-		putTmp := b.newTemp()
-
-		current.Statements = append(current.Statements, &TempDeclInst{Name: putTmp, Type: types.UnitType{}})
-		current.Statements = append(current.Statements, &CallInst{
-			Dst:      putTmp,
-			Function: putFn,
-			Arguments: []MIRCallArg{
-				{Argument: &Register{Name: tmp, Type: t}, Mut: true},
-				{Argument: hashVal},
-				{Argument: ptrVal},
-				{Argument: lenVal},
-				{Argument: intKey},
-				{Argument: flatVal},
-			},
-			Type: types.UnitType{},
-		})
+		_, current = b.EmitMamlMapPut(current, &Register{Name: tmp, Type: t}, hashVal, ptrVal, lenVal, intKey, flatVal)
 	}
 	return &Register{Name: tmp, Type: t}, current
 }
@@ -857,13 +728,7 @@ func (b *Builder) lowerMapKey(keyExpr hir.Expr, current *BasicBlock) (hash, ptr,
 		current.Statements = append(current.Statements, &FieldReadInst{Dst: lenTmp, Object: safeKey, FieldName: "len", FieldIndex: 1, Type: types.IntType{}})
 		lenVal := &Register{Name: lenTmp, Type: types.IntType{}}
 
-		hashTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: hashTmp, Type: types.IntType{}})
-		current.Statements = append(current.Statements, &CallInst{
-			Dst: hashTmp, Function: &Register{Name: "maml_str_hash", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{{Argument: ptrVal}, {Argument: lenVal}}, Type: types.IntType{},
-		})
-		hashVal := &Register{Name: hashTmp, Type: types.IntType{}}
+		hashVal, current := b.EmitMamlStrHash(current, ptrVal, lenVal)
 
 		intKeyVal := &IntConstant{Value: 0, Type: types.IntType{}}
 		return hashVal, ptrVal, lenVal, intKeyVal, current
@@ -908,26 +773,19 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value, c
 		Dst: rightLenTmp, Object: safeRight, FieldName: "len", FieldIndex: 1, Type: types.IntType{},
 	})
 
-	callTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: callTmp, Type: types.IntType{}})
-	current.Statements = append(current.Statements, &CallInst{
-		Dst:      callTmp,
-		Function: &Register{Name: "maml_str_eq", Type: types.UnknownType{}},
-		Arguments: []MIRCallArg{
-			{Argument: &Register{Name: leftPtrTmp, Type: types.AnyType{}}},
-			{Argument: &Register{Name: leftLenTmp, Type: types.IntType{}}},
-			{Argument: &Register{Name: rightPtrTmp, Type: types.AnyType{}}},
-			{Argument: &Register{Name: rightLenTmp, Type: types.IntType{}}},
-		},
-		Type: types.IntType{},
-	})
+	callVal, current := b.EmitMamlStrEq(current,
+		&Register{Name: leftPtrTmp, Type: types.AnyType{}},
+		&Register{Name: leftLenTmp, Type: types.IntType{}},
+		&Register{Name: rightPtrTmp, Type: types.AnyType{}},
+		&Register{Name: rightLenTmp, Type: types.IntType{}},
+	)
 
 	boolTmp := b.newTemp()
 	current.Statements = append(current.Statements, &TempDeclInst{Name: boolTmp, Type: types.BoolType{}})
 	current.Statements = append(current.Statements, &BinaryOpInst{
 		Dst:      boolTmp,
 		Operator: "!=",
-		Left:     &Register{Name: callTmp, Type: types.IntType{}},
+		Left:     callVal,
 		Right:    &IntConstant{Value: 0, Type: types.IntType{}},
 		Type:     types.BoolType{},
 	})

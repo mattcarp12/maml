@@ -1,11 +1,14 @@
 #include <llvm/IR/Intrinsics.h>
 
 #include "ExprGenerator.hpp"
+#include "RuntimeConstants.h"
 #include "TypeLowering.hpp"
 
 namespace maml {
 
 void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst) {
+  ctx.CurrentInstructionName = "BinaryOpInst (" + inst.operator_ + ")";
+
   llvm::Value *left = evaluateValue(ctx, inst.left);
   llvm::Value *right = evaluateValue(ctx, inst.right);
   llvm::Value *result = nullptr;
@@ -64,6 +67,8 @@ void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst) {
 }
 
 void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
+  ctx.CurrentInstructionName = "UnaryOpInst (" + inst.operator_ + ")";
+
   llvm::Value *operand = evaluateValue(ctx, inst.operand);
   llvm::Value *result = nullptr;
 
@@ -75,36 +80,20 @@ void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
   ctx.SymbolEnv.back()[inst.dst] = result;
 }
 
-void handle(CodegenContext &ctx, const mir::CallInst &inst) {
-  llvm::Value *callee = evaluateValue(ctx, inst.function);
+static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
+  llvm::Value *hdl = evaluateValue(ctx, inst.arguments[0].argument);
 
-  // Resolve name from callee if possible to support map/vec hooks AND interceptors
-  std::string funcName = "";
-  if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
-    funcName = F->getName().str();
-  } else if (auto *reg = std::get_if<mir::Register>(&inst.function.inner)) {
-    funcName = reg->name;
-  }
+  llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
+  llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
+  llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+  llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from});
 
-  // =========================================================================
-  // INTERCEPT: LLVM Promise Extraction
-  // =========================================================================
-  if (funcName == "maml_task_get_result") {
-    // 1. Get the opaque future handle
-    llvm::Value *hdl = evaluateValue(ctx, inst.arguments[0].argument);
+  llvm::Type *expectedTy = llvmTypeFor(ctx, inst.type);
 
-    // 2. Calculate the promise pointer location inside the frame
-    llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
-    llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
-    llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
-    llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from});
-
-    // 3. Cast the promise pointer to our expected return type and load the value
-    llvm::Type *expectedTy = llvmTypeFor(ctx, inst.type);
+  if (!expectedTy->isVoidTy()) {
     llvm::Value *typedPromise = ctx.Builder->CreatePointerCast(promisePtr, llvm::PointerType::getUnqual(expectedTy));
     llvm::Value *res = ctx.Builder->CreateLoad(expectedTy, typedPromise, "coro.result");
 
-    // 4. Store the extracted result directly into the MIR destination register
     if (llvm::Value *existing = ctx.resolveSymbol(inst.dst)) {
       if (llvm::isa<llvm::AllocaInst>(existing)) {
         ctx.Builder->CreateStore(res, existing);
@@ -114,28 +103,11 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
     } else {
       ctx.SymbolEnv.back()[inst.dst] = res;
     }
-
-    // 5. Destroy the frame natively, then return early!
-    llvm::Function *destroyFn = ctx.Module->getFunction("maml_coro_destroy_helper");
-    ctx.Builder->CreateCall(destroyFn, {hdl});
-    return;
   }
-  // =========================================================================
+}
 
-  // Standard Function Resolution
-  llvm::FunctionType *FT = nullptr;
-  if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
-    FT = F->getFunctionType();
-  } else {
-    llvm::Type *expectedRetTy = llvmTypeFor(ctx, inst.type);
-    std::vector<llvm::Type *> expectedArgTys;
-    for (const auto &argWrapper : inst.arguments) {
-      llvm::Value *tmp = evaluateValue(ctx, argWrapper.argument);
-      expectedArgTys.push_back(tmp->getType());
-    }
-    FT = llvm::FunctionType::get(expectedRetTy, expectedArgTys, false);
-  }
-
+static std::vector<llvm::Value *> prepareCallArguments(CodegenContext &ctx, const mir::CallInst &inst,
+                                                       llvm::FunctionType *FT, const std::string &funcName) {
   std::vector<llvm::Value *> args;
   size_t i = 0;
 
@@ -145,19 +117,14 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
     if (FT && i < FT->getNumParams()) {
       llvm::Type *expectedTy = FT->getParamType(i);
       llvm::Type *actualTy = argVal->getType();
+
       if (expectedTy != actualTy) {
         if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
-          auto *structTy = llvm::dyn_cast<llvm::StructType>(actualTy);
-          if (structTy && structTy->isLiteral() && funcName.compare(0, 9, "maml_vec_") != 0 &&
-              funcName.compare(0, 9, "maml_map_") != 0) {
-            argVal = ctx.Builder->CreateExtractValue(argVal, {0}, "fat_ptr_unwrap");
-          } else {
-            llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
-            llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
-            llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_struct_spill");
-            ctx.Builder->CreateStore(argVal, spill);
-            argVal = spill;
-          }
+          llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+          llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
+          llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_struct_spill");
+          ctx.Builder->CreateStore(argVal, spill);
+          argVal = spill;
         } else if (expectedTy->isIntegerTy() && actualTy->isIntegerTy()) {
           argVal = ctx.Builder->CreateIntCast(argVal, expectedTy, false, "arg_cast");
         } else if (expectedTy->isPointerTy() && actualTy->isPointerTy()) {
@@ -173,15 +140,55 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
             ctx.Builder->CreateStore(argVal, spill);
             argVal = spill;
           }
+        } else {
+          // --- Strict Observability Check ---
+          // If we exhaust all safe coercion techniques, halt the compiler nicely!
+          std::string errMsg = "Type mismatch for argument " + std::to_string(i) + " in " + funcName + ".\n" +
+                               "     Expected: " + maml::ErrorHandler::stringify(expectedTy) + "\n" +
+                               "     Got:      " + maml::ErrorHandler::stringify(actualTy) + "\n" +
+                               "     Value:    " + maml::ErrorHandler::stringify(argVal);
+          ctx.Error.fatal(errMsg);
         }
       }
     }
     args.push_back(argVal);
     i++;
   }
+  return args;
+}
 
-  // Inject the implicitly required coroutine handle!
-  if (funcName == "maml_task_await" || funcName == "maml_yield_now") {
+void handle(CodegenContext &ctx, const mir::CallInst &inst) {
+  llvm::Value *callee = evaluateValue(ctx, inst.function);
+
+  std::string funcName = "";
+  if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
+    funcName = F->getName().str();
+  } else if (auto *reg = std::get_if<mir::Register>(&inst.function.inner)) {
+    funcName = reg->name;
+  }
+
+  ctx.CurrentInstructionName = "CallInst (" + funcName + ")";
+
+  if (funcName == maml::rt::TASK_GET_RESULT) {
+    lowerTaskGetResult(ctx, inst);
+    return;
+  }
+
+  llvm::FunctionType *FT = nullptr;
+  if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {
+    FT = F->getFunctionType();
+  } else {
+    llvm::Type *expectedRetTy = llvmTypeFor(ctx, inst.type);
+    std::vector<llvm::Type *> expectedArgTys;
+    for (const auto &argWrapper : inst.arguments) {
+      expectedArgTys.push_back(evaluateValue(ctx, argWrapper.argument)->getType());
+    }
+    FT = llvm::FunctionType::get(expectedRetTy, expectedArgTys, false);
+  }
+
+  std::vector<llvm::Value *> args = prepareCallArguments(ctx, inst, FT, funcName);
+
+  if (funcName == maml::rt::TASK_AWAIT || funcName == maml::rt::YIELD_NOW) {
     args.push_back(ctx.CurrentCoroHandle);
   }
 
@@ -192,6 +199,7 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
   if (!callResult->getType()->isVoidTy()) {
     llvm::Type *expectedRetTy = llvmTypeFor(ctx, inst.type);
     llvm::Value *finalResult = callResult;
+
     if (callResult->getType() != expectedRetTy) {
       if (callResult->getType()->isIntegerTy() && expectedRetTy->isIntegerTy()) {
         finalResult = ctx.Builder->CreateIntCast(callResult, expectedRetTy, true, "call_ret_cast");

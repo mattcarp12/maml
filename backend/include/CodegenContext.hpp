@@ -13,13 +13,25 @@
 
 namespace maml {
 
+// Forward declaration so ErrorHandler can access context tracking
+class CodegenContext;
+
 class ErrorHandler {
   bool hasError = false;
+  CodegenContext *Ctx = nullptr;
 
  public:
+  void setContext(CodegenContext *c) { Ctx = c; }
+
   void report(std::string_view message);
   void fatal(std::string_view message);
+  void warn(std::string_view message);
+
   bool hasErrors() const { return hasError; }
+
+  // Vital LLVM Stringification Helpers
+  static std::string stringify(llvm::Value *val);
+  static std::string stringify(llvm::Type *ty);
 };
 
 struct StringViewHash {
@@ -40,6 +52,10 @@ class CodegenContext {
   std::unique_ptr<llvm::IRBuilder<>> Builder;
   ErrorHandler Error;
 
+  // --- Observability & Tracking ---
+  std::string CurrentFunctionName = "<top-level>";
+  std::string CurrentInstructionName = "<unknown>";
+
   ViewMap<llvm::Value *> SymbolTable;
   std::vector<FastMap<llvm::Value *>> SymbolEnv;
   std::unordered_map<int, llvm::BasicBlock *> Blocks;
@@ -54,6 +70,7 @@ class CodegenContext {
   llvm::Value *CoroId = nullptr;
   llvm::BasicBlock *CoroSuspendBlock = nullptr;
   llvm::BasicBlock *CoroCleanupBlock = nullptr;
+  int CoroEntryBlockId = 0;
 
   CodegenContext(const std::string &moduleName);
   void pushScope();

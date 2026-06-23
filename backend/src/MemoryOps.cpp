@@ -199,6 +199,24 @@ void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {
   // 4. Begin
   llvm::Function *coroBeginFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_begin);
   ctx.CurrentCoroHandle = Builder->CreateCall(coroBeginFn, {ctx.CoroId, framePtr}, "coro.handle");
+
+  // Initial suspend
+  llvm::Function *coroSaveFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_save);
+  llvm::Value *initSaveToken = Builder->CreateCall(coroSaveFn, {ctx.CurrentCoroHandle}, "init.save");
+  llvm::Function *coroSuspendFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_suspend);
+  llvm::Value *suspendResult =
+      Builder->CreateCall(coroSuspendFn, {initSaveToken, Builder->getInt1(false)}, "init.suspend");
+
+  // Route: resume → bb0 (the actual MIR entry block), destroy → cleanup
+  // NOTE: no userCodeBB needed — bb0 IS the user code block
+  llvm::BasicBlock *mirEntryBB = ctx.Blocks[ctx.CoroEntryBlockId];
+  llvm::SwitchInst *sw = Builder->CreateSwitch(suspendResult, ctx.CoroSuspendBlock, 2);
+  sw->addCase(Builder->getInt8(0), mirEntryBB);
+  sw->addCase(Builder->getInt8(1), ctx.CoroCleanupBlock);
+
+  // allocBB is now terminated. Point builder at bb0 for the
+  // second-pass instruction emission that's about to happen.
+  // Builder->SetInsertPoint(mirEntryBB);
 }
 
 }  // namespace maml

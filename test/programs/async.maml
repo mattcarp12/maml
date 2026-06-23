@@ -1,10 +1,38 @@
-// EXIT_CODE: 42
+// EXIT_CODE: 99
 
-async fn fetch_user_data() int {
-    print("Fetching data...")
+async fn background_ticker() {
+    print("Ticker: Tick 1")
+    yield_now() 
+    print("Ticker: Tick 2")
+    yield_now()
+    print("Ticker: Tick 3 (Done)")
+}
+
+async fn get_data() int {
+    print("GetData: Starting computation...")
+    yield_now()
+    print("GetData: Finished computation!")
     return 42
 }
 
+async fn async_main() {
+    print("Main: Spawning ticker (detached)")
+    spawn background_ticker() 
+
+    print("Main: Spawning get_data")
+    data_handle := spawn get_data()
+
+    print("Main: Awaiting data...")
+    result := await data_handle
+
+    if result == 42{
+        print("Main: Got result!") 
+    }
+    
+}
+
 fn main() int {
-    return run_executor(spawn fetch_user_data())
+    s := spawn async_main()
+    run_executor(s)
+    return 99
 }

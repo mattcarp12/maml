@@ -346,23 +346,7 @@ func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBloc
 
 	hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(stmt.Key, current)
 
-	putTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: putTmp, Type: types.UnitType{}})
-
-	// EMIT EXACTLY 6 ARGUMENTS FOR ZIG ABI
-	current.Statements = append(current.Statements, &CallInst{
-		Dst:      putTmp,
-		Function: &Register{Name: "maml_map_put", Type: types.UnknownType{}},
-		Arguments: []MIRCallArg{
-			{Argument: flatMap, Mut: true},
-			{Argument: hashVal},
-			{Argument: ptrVal},
-			{Argument: lenVal},
-			{Argument: intKey},
-			{Argument: flatVal},
-		},
-		Type: types.UnitType{},
-	})
+	_, current = b.EmitMamlMapPut(current, flatMap, hashVal, ptrVal, lenVal, intKey, flatVal)
 
 	return current
 }
@@ -379,24 +363,8 @@ func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock)
 	flatIdx, current = b.flattenExpr(stmt.Index, current)
 	flatVal, current = b.flattenExpr(stmt.Value, current)
 
-	// 2. Create a temporary for the unit return value
-	setTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: setTmp,
-		Type: types.UnitType{},
-	})
-
-	// 3. Emit the runtime call to mutate the vector in-place
-	current.Statements = append(current.Statements, &CallInst{
-		Dst:      setTmp,
-		Function: &Register{Name: "maml_vec_set", Type: types.UnknownType{}},
-		Arguments: []MIRCallArg{
-			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
-			{Argument: flatIdx},            // The integer index
-			{Argument: flatVal},            // The value to write
-		},
-		Type: types.UnitType{},
-	})
+	// 2. Emit the runtime call to mutate the vector in-place
+	_, current = b.EmitMamlVecSet(current, flatVec, flatIdx, flatVal)
 
 	return current
 }
@@ -412,23 +380,8 @@ func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *
 	flatVec, current = b.flattenExpr(stmt.Vec, current)
 	flatVal, current = b.flattenExpr(stmt.Value, current)
 
-	// 2. Create a temporary for the unit return value
-	setTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: setTmp,
-		Type: types.UnitType{},
-	})
-
-	// 3. Emit the runtime call to mutate the vector in-place
-	current.Statements = append(current.Statements, &CallInst{
-		Dst:      setTmp,
-		Function: &Register{Name: "maml_vec_push", Type: types.UnknownType{}},
-		Arguments: []MIRCallArg{
-			{Argument: flatVec, Mut: true}, // Pass vector by mutable reference
-			{Argument: flatVal},            // The value to write
-		},
-		Type: types.UnitType{},
-	})
+	// 2. Emit the runtime call to mutate the vector in-place
+	_, current = b.EmitMamlVecPush(current, flatVec, flatVal)
 
 	return current
 }
@@ -479,4 +432,23 @@ func (b *Builder) getSymbolName(sym *types.Symbol) string {
 
 	b.symNames[sym] = uniqueName
 	return uniqueName
+}
+
+// =============================================================================
+// Utilities
+// =============================================================================
+
+// emitTemp generates a new temporary variable and appends its declaration to the basic block.
+func (b *Builder) emitTemp(current *BasicBlock, t types.Type) string {
+	tmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+	return tmp
+}
+
+// getARCHooks returns the runtime ARC function names needed for a specific type.
+func (b *Builder) getARCHooks(t types.Type) (string, string) {
+	if t != nil && t.IsNeedsARC() {
+		return "maml_retain", "maml_release"
+	}
+	return "null", "null"
 }

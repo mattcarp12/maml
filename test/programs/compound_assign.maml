@@ -1,0 +1,36 @@
+// EXIT_CODE: 100
+
+type Stats = { health int, armor int }
+
+fn main() int {
+    // 1. Basic local variables
+    mut score := 10
+    score += 5   // 15
+    score -= 2   // 13
+    score *= 10  // 130
+    score /= 2   // 65
+
+    if score != 65 { return 1 }
+
+    // 2. Struct field mutation
+    mut player := Stats{ health: 100, armor: 50 }
+    player.health -= 20
+    player.armor += 10
+
+    if player.health != 80 { return 2 }
+    if player.armor != 60 { return 3 }
+
+    // 3. Vector/Array index mutation
+    mut hits := Vec<int>{}
+    hits << 5
+    hits << 10
+    
+    hits[0] += 15 // 20
+    hits[1] *= 2  // 20
+
+    if hits[0] != 20 { return 4 }
+    if hits[1] != 20 { return 5 }
+
+    // Return final calculated value to verify
+    return score + player.health - player.armor + hits[0] - 5 // 65 + 80 - 60 + 20 - 5 = 100
+}

@@ -29,6 +29,9 @@ var cppTemplateStr string
 //go:embed runtime_zig.tmpl
 var zigTemplateStr string
 
+//go:embed mir_runtime_go.tmpl
+var mirTemplateStr string
+
 type TypeAlias struct {
 	Alias   string `yaml:"alias"`
 	GoType  string `yaml:"go_type"`
@@ -36,9 +39,14 @@ type TypeAlias struct {
 	ZigType string `yaml:"zig_type"`
 }
 
+type ArgDef struct {
+	Type string `yaml:"type"`
+	Mut  bool   `yaml:"mut"`
+}
+
 type FunctionDef struct {
 	Symbol string   `yaml:"symbol"`
-	Args   []string `yaml:"args"`
+	Args   []ArgDef `yaml:"args"`
 	Return string   `yaml:"return"`
 }
 
@@ -51,21 +59,44 @@ type TemplateContext struct {
 	Functions []FunctionContext
 }
 
+type ArgContext struct {
+	Alias   string
+	GoType  string
+	CppType string
+	ZigType string
+	IsMut   bool
+}
+
 type FunctionContext struct {
 	Symbol    string
 	ConstName string
+	CamelName string
 	ReturnGo  string
 	ReturnCpp string
 	ReturnZig string
-	ArgsGo    []string
-	ArgsCpp   []string
-	ArgsZig   []string
+	ArgsGo    []string // Retained for backwards compatibility
+	ArgsCpp   []string // Retained for backwards compatibility
+	ArgsZig   []string // Retained for backwards compatibility
+	Args      []ArgContext
+}
+
+// toCamelCase converts snake_case to CamelCase (e.g. maml_vec_push -> MamlVecPush)
+func toCamelCase(s string) string {
+	parts := strings.Split(s, "_")
+	var result string
+	for _, p := range parts {
+		if len(p) > 0 {
+			result += strings.ToUpper(p[:1]) + p[1:]
+		}
+	}
+	return result
 }
 
 func main() {
 	goOut := flag.String("goOut", "frontend/types/", "output directory for runtime_generated.go")
 	cppOut := flag.String("cppOut", "backend/include/", "output directory for autogen_runtime.inc")
 	zigOut := flag.String("zigOut", "runtime/src/", "output directory for abi_assertions.zig")
+	mirOut := flag.String("mirOut", "frontend/mir/", "output directory for MIR runtime calls")
 	flag.Parse()
 
 	var schema Schema
@@ -91,6 +122,9 @@ func main() {
 	// 3. Generate Zig
 	executeTemplate("Zig Assertions", zigTemplateStr, path.Join(*zigOut, "abi_assertions.zig"), ctx, false)
 
+	// 4. Generate MIR Builder Calls
+	executeTemplate("MIR Builders", mirTemplateStr, path.Join(*mirOut, "runtime_calls_generated.go"), ctx, true)
+
 	fmt.Println("✅ Successfully generated unified Runtime ABI via templates.")
 }
 
@@ -100,14 +134,22 @@ func buildContext(schema Schema, tm map[string]TypeAlias) TemplateContext {
 		fCtx := FunctionContext{
 			Symbol:    fn.Symbol,
 			ConstName: "SYM_" + strings.ToUpper(strings.ReplaceAll(fn.Symbol, "maml_", "")),
+			CamelName: toCamelCase(fn.Symbol),
 			ReturnGo:  tm[fn.Return].GoType,
 			ReturnCpp: tm[fn.Return].CppType,
 			ReturnZig: tm[fn.Return].ZigType,
 		}
 		for _, arg := range fn.Args {
-			fCtx.ArgsGo = append(fCtx.ArgsGo, tm[arg].GoType)
-			fCtx.ArgsCpp = append(fCtx.ArgsCpp, tm[arg].CppType)
-			fCtx.ArgsZig = append(fCtx.ArgsZig, tm[arg].ZigType)
+			fCtx.ArgsGo = append(fCtx.ArgsGo, tm[arg.Type].GoType)
+			fCtx.ArgsCpp = append(fCtx.ArgsCpp, tm[arg.Type].CppType)
+			fCtx.ArgsZig = append(fCtx.ArgsZig, tm[arg.Type].ZigType)
+			fCtx.Args = append(fCtx.Args, ArgContext{
+				Alias:   arg.Type,
+				GoType:  tm[arg.Type].GoType,
+				CppType: tm[arg.Type].CppType,
+				ZigType: tm[arg.Type].ZigType,
+				IsMut:   arg.Mut,
+			})
 		}
 		ctx.Functions = append(ctx.Functions, fCtx)
 	}
@@ -130,7 +172,7 @@ func executeTemplate(name, tmplStr, outPath string, data TemplateContext, format
 		formatted, err := format.Source(outData)
 		if err != nil {
 			os.WriteFile(outPath+".debug", outData, 0644)
-			fmt.Fprintf(os.Stderr, "Go Format Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Go Format Error in %s: %v\n", name, err)
 			os.Exit(1)
 		}
 		outData = formatted

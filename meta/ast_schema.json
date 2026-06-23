@@ -55,7 +55,8 @@
       ],
       "fields": {
         "LValue": "Expr",
-        "RValue": "Expr"
+        "RValue": "Expr",
+        "Operator": "string"
       }
     },
     "ReturnStmt": {

@@ -43,93 +43,93 @@ types:
 functions:
   # --- Memory & ARC ---
   - symbol: "maml_alloc"
-    args: ["SizeT"]
+    args: [{type: "SizeT"}]
     return: "Ptr"
   - symbol: "maml_free"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
   - symbol: "maml_retain"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
   - symbol: "maml_release"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
 
   # --- Vector Operations ---
   - symbol: "maml_vec_create"
-    args: ["u32", "ArcHook", "ArcHook"]
+    args: [{type: "u32"}, {type: "ArcHook"}, {type: "ArcHook"}]
     return: "Ptr"
   - symbol: "maml_vec_push"
-    args: ["Ptr", "Ptr"]
+    args: [{type: "Ptr", mut: true}, {type: "Ptr"}]
     return: "void"
   - symbol: "maml_vec_set"
-    args: ["Ptr", "u32", "Ptr"]
+    args: [{type: "Ptr", mut: true}, {type: "u32"}, {type: "Ptr"}]
     return: "void"
   - symbol: "maml_vec_get"
-    args: ["Ptr", "u32"]
+    args: [{type: "Ptr"}, {type: "u32"}]
     return: "Ptr"
   - symbol: "maml_vec_len"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "u32"
 
   # --- Map Operations ---
   - symbol: "maml_map_create"
-    args: ["u32", "i8", "ArcHook", "ArcHook", "ArcHook", "ArcHook"]
+    args: [{type: "u32"}, {type: "i8"}, {type: "ArcHook"}, {type: "ArcHook"}, {type: "ArcHook"}, {type: "ArcHook"}]
     return: "Ptr"
   - symbol: "maml_map_put"
-    args: ["Ptr", "u32", "Ptr", "u32", "i32", "Ptr"]
+    args: [{type: "Ptr", mut: true}, {type: "u32"}, {type: "Ptr"}, {type: "u32"}, {type: "i32"}, {type: "Ptr"}]
     return: "void"
   - symbol: "maml_map_get"
-    args: ["Ptr", "u32", "Ptr", "u32"]
+    args: [{type: "Ptr"}, {type: "u32"}, {type: "Ptr"}, {type: "u32"}]
     return: "Ptr"
   - symbol: "maml_map_delete"
-    args: ["Ptr", "u32", "Ptr", "u32", "i32"]
+    args: [{type: "Ptr", mut: true}, {type: "u32"}, {type: "Ptr"}, {type: "u32"}, {type: "i32"}]
     return: "void"
   - symbol: "maml_map_len"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "u32"
 
   # --- String Operations ---
   - symbol: "maml_str_hash"
-    args: ["Ptr", "u32"]
+    args: [{type: "Ptr"}, {type: "u32"}]
     return: "u32"
   - symbol: "maml_str_eq"
-    args: ["Ptr", "u32", "Ptr", "u32"]
+    args: [{type: "Ptr"}, {type: "u32"}, {type: "Ptr"}, {type: "u32"}]
     return: "i32"
 
   # --- Coroutine Executor ---
   - symbol: "maml_coro_resume_helper"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
   - symbol: "maml_coro_done_helper"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "bool"
   - symbol: "maml_coro_destroy_helper"
-    args: ["Ptr"]
+    args: [{type: "Ptr", mut: true}]
     return: "void"
   - symbol: "maml_spawn_task"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
   - symbol: "maml_run_executor"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "Ptr"
   - symbol: "maml_runtime_init"
     args: []
     return: "void"
   - symbol: "maml_task_await"
-    args: ["Ptr", "Ptr"] # target_task, waiting_task
+    args: [{type: "Ptr"}, {type: "Ptr"}] # target_task, waiting_task
     return: "void"
   - symbol: "maml_task_release"
-    args: ["Ptr"]
+    args: [{type: "Ptr", mut: true}]
     return: "void"
   - symbol: "maml_task_get_result"
-    args: ["Ptr"]
+    args: [{type: "Ptr"}]
     return: "void"
   - symbol: "maml_yield_now"
-    args: ["Ptr"] # takes current_coro
+    args: [{type: "Ptr"}] # takes current_coro
     return: "void"
 
   # --- IO Functions ---
   - symbol: "maml_print"
-    args: ["Ptr", "i32"]
+    args: [{type: "Ptr"}, {type: "i32"}]
     return: "void"
