@@ -11,6 +11,7 @@ void handle(CodegenContext &ctx, const mir::AssignInst &inst);
 void handle(CodegenContext &ctx, const mir::IndexAssignInst &inst);
 void handle(CodegenContext &ctx, const mir::StructInitInst &inst);
 void handle(CodegenContext &ctx, const mir::FieldReadInst &inst);
+void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst);
 void handle(CodegenContext &ctx, const mir::ArrayInitInst &inst);
 void handle(CodegenContext &ctx, const mir::SliceInst &inst);
 void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst);

@@ -78,6 +78,53 @@ void handle(CodegenContext &ctx, const mir::FieldReadInst &inst) {
   ctx.SymbolEnv.back()[inst.dst] = ctx.Builder->CreateLoad(fieldTy, fieldGep, inst.dst + "_val");
 }
 
+void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst) {
+  llvm::Value *objPtr = nullptr;
+  llvm::Type *structTy = nullptr;
+
+  // 1. Try to fetch the underlying memory pointer directly from the symbol table
+  // This bypasses the auto-load mechanism, giving us the raw L-Value pointer for mutation!
+  if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
+    if (llvm::Value *sym = ctx.resolveSymbol(reg->name)) {
+      if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(sym)) {
+        objPtr = alloca;
+        structTy = alloca->getAllocatedType();
+      }
+    }
+  }
+
+  // 2. If it's not a local stack variable, evaluate it normally (handles heap pointers & views)
+  if (!objPtr) {
+    llvm::Value *objVal = evaluateValue(ctx, inst.object);
+    if (!objVal) {
+      ctx.Error.fatal("field_write: Failed to evaluate object expression");
+      return;
+    }
+
+    if (objVal->getType()->isPointerTy()) {
+      objPtr = objVal;
+      if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(objVal)) {
+        structTy = alloca->getAllocatedType();
+      } else if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
+        structTy = llvmTypeFor(ctx, reg->type);
+      } else {
+        ctx.Error.fatal("field_write: Unable to deduce parent struct layout for opaque pointer.");
+        return;
+      }
+    } else {
+      ctx.Error.fatal("field_write: Cannot mutate a by-value struct. It must be stored in memory.");
+      return;
+    }
+  }
+
+  // Generate the GEP (GetElementPtr) to find the exact byte offset of the field
+  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, inst.field_index, "field_write_gep");
+
+  // Evaluate the right-hand side and store it directly into the memory location
+  llvm::Value *writeVal = evaluateValue(ctx, inst.value);
+  ctx.Builder->CreateStore(writeVal, fieldGep);
+}
+
 void handle(CodegenContext &ctx, const mir::VariantDiscriminantInst &inst) {
   llvm::Value *objectPtr = evaluateValue(ctx, inst.object);
   llvm::Value *discrimVal = nullptr;

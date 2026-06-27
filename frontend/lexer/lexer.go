@@ -89,19 +89,34 @@ func (l *Lexer) NextToken() token.Token {
 			tok = l.newToken(token.GT, l.ch, startLine, startCol)
 		}
 
-	// === Single-character tokens & Delimiters ===
+	// === Arithmetic & Compound Operators ===
 	case '+':
-		tok = l.newToken(token.PLUS, l.ch, startLine, startCol)
+		if l.peekChar() == '=' {
+			tok = l.twoCharToken(token.PLUS_EQ, startLine, startCol)
+		} else {
+			tok = l.newToken(token.PLUS, l.ch, startLine, startCol)
+		}
 	case '-':
-		tok = l.newToken(token.MINUS, l.ch, startLine, startCol)
+		if l.peekChar() == '=' {
+			tok = l.twoCharToken(token.MINUS_EQ, startLine, startCol)
+		} else {
+			tok = l.newToken(token.MINUS, l.ch, startLine, startCol)
+		}
 	case '*':
-		tok = l.newToken(token.MULTIPLY, l.ch, startLine, startCol)
+		if l.peekChar() == '=' {
+			tok = l.twoCharToken(token.MUL_EQ, startLine, startCol)
+		} else {
+			tok = l.newToken(token.MULTIPLY, l.ch, startLine, startCol)
+		}
 	case '/':
 		if l.peekChar() == '/' {
 			l.skipComment()
 			return l.NextToken() // Recurse to get the next meaningful token
+		} else if l.peekChar() == '=' {
+			tok = l.twoCharToken(token.DIV_EQ, startLine, startCol)
+		} else {
+			tok = l.newToken(token.DIVIDE, l.ch, startLine, startCol)
 		}
-		tok = l.newToken(token.DIVIDE, l.ch, startLine, startCol)
 	case '%':
 		tok = l.newToken(token.MODULO, l.ch, startLine, startCol)
 	case '.':

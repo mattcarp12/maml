@@ -270,16 +270,73 @@ func (b *Builder) buildDeclareStmt(stmt *hir.DeclareStmt, current *BasicBlock) *
 
 // buildAssignStmt translates a reassignment into explicit memory ops without re-allocating.
 func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *BasicBlock {
-	// Guard against uninitialized or partially empty statements
 	if stmt == nil || stmt.LValue == nil || stmt.RValue == nil {
 		return current
 	}
 
-	// Intercept array/slice index mutations before they are flattened into read evaluations
+	// 1. FIELD ASSIGNMENT (e.g., player.health = 80 OR player.health -= 20)
+	if fa, ok := stmt.LValue.(*hir.FieldAccess); ok {
+		// Evaluate the object pointer exactly ONCE
+		flatObj, nextBlock := b.flattenExpr(fa.Object, current)
+		current = nextBlock
+
+		fieldIndex := -1
+		if reg, isReg := flatObj.(*Register); isReg {
+			if st, isSt := reg.Type.(*types.StructType); isSt {
+				fieldIndex = st.GetFieldIndex(fa.Field.Value)
+			}
+		}
+
+		var writeVal Value
+		if stmt.Operator != "" {
+			// Read the current value using the evaluated pointer
+			readTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: fa.Type})
+			current.Statements = append(current.Statements, &FieldReadInst{
+				Dst:        readTmp,
+				Object:     flatObj,
+				FieldName:  fa.Field.Value,
+				FieldIndex: fieldIndex,
+				Type:       fa.Type,
+			})
+
+			// Evaluate RHS
+			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
+			current = nextBlock
+
+			// Apply Compound Operator
+			opTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: fa.Type})
+			current.Statements = append(current.Statements, &BinaryOpInst{
+				Dst:      opTmp,
+				Operator: stmt.Operator,
+				Left:     &Register{Name: readTmp, Type: fa.Type},
+				Right:    flatRHS,
+				Type:     fa.Type,
+			})
+			writeVal = &Register{Name: opTmp, Type: fa.Type}
+		} else {
+			writeVal, current = b.flattenExpr(stmt.RValue, current)
+		}
+
+		// Write back using our new MIR instruction!
+		current.Statements = append(current.Statements, &FieldWriteInst{
+			Object:     flatObj,
+			FieldName:  fa.Field.Value,
+			FieldIndex: fieldIndex,
+			Value:      writeVal,
+		})
+		return current
+	}
+
+	// 2. ARRAY / VIEW INDEX ASSIGNMENT (e.g., arr[0] = 5 OR arr[0] += 5)
 	if idx, ok := stmt.LValue.(*hir.IndexExpr); ok {
-		flatTarget, current := b.flattenExpr(idx.Left, current)
-		flatIdx, current := b.flattenExpr(idx.Index, current)
-		flatRHS, current := b.flattenExpr(stmt.RValue, current)
+		// Evaluate target and index exactly ONCE
+		flatTarget, nextBlock := b.flattenExpr(idx.Left, current)
+		current = nextBlock
+
+		flatIdx, nextBlock := b.flattenExpr(idx.Index, current)
+		current = nextBlock
 
 		targetName := ""
 		var targetType types.Type
@@ -290,48 +347,88 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 			panic(fmt.Sprintf("Unsupported target for IndexExpr: %T\n", flatTarget))
 		}
 
+		var writeVal Value
+		if stmt.Operator != "" {
+			elemType := hir.TypeOf(stmt.LValue)
+			readTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
+			current.Statements = append(current.Statements, &IndexReadInst{
+				Dst:        readTmp,
+				Source:     flatTarget,
+				SourceType: targetType,
+				Index:      flatIdx,
+				Type:       elemType,
+			})
+
+			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
+			current = nextBlock
+
+			opTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
+			current.Statements = append(current.Statements, &BinaryOpInst{
+				Dst:      opTmp,
+				Operator: stmt.Operator,
+				Left:     &Register{Name: readTmp, Type: elemType},
+				Right:    flatRHS,
+				Type:     elemType,
+			})
+			writeVal = &Register{Name: opTmp, Type: elemType}
+		} else {
+			writeVal, current = b.flattenExpr(stmt.RValue, current)
+		}
+
 		current.Statements = append(current.Statements, &IndexAssignInst{
 			Target:     targetName,
 			TargetType: targetType,
 			Index:      flatIdx,
-			Value:      flatRHS,
+			Value:      writeVal,
 		})
 		return current
 	}
 
-	flatLHS, current := b.flattenExpr(stmt.LValue, current)
-	flatRHS, current := b.flattenExpr(stmt.RValue, current)
+	// 3. LOCAL VARIABLE ASSIGNMENT (e.g., score = 100 OR score += 5)
+	if ident, ok := stmt.LValue.(*hir.Identifier); ok {
+		var writeVal Value
+		if stmt.Operator != "" {
+			flatLHS, nextBlock := b.flattenExpr(stmt.LValue, current)
+			current = nextBlock
 
-	dstName := ""
+			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
+			current = nextBlock
 
-	// 1. Extract the true variable name and its type safely
-	if flatLHS != nil {
-		if reg, ok := flatLHS.(*Register); ok && reg != nil {
-			dstName = reg.Name
+			opTmp := b.newTemp()
+			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: ident.Type})
+			current.Statements = append(current.Statements, &BinaryOpInst{
+				Dst:      opTmp,
+				Operator: stmt.Operator,
+				Left:     flatLHS,
+				Right:    flatRHS,
+				Type:     ident.Type,
+			})
+			writeVal = &Register{Name: opTmp, Type: ident.Type}
 		} else {
-			panic(fmt.Sprintf("Unsupported LHS for AssignStmt: %T\n", flatLHS))
+			writeVal, current = b.flattenExpr(stmt.RValue, current)
 		}
-	}
 
-	// Failsafe guard if destination evaluation completely dropped out
-	if dstName == "" {
+		dstName := b.getSymbolName(ident.Symbol)
+		if reg, isReg := writeVal.(*Register); isReg && reg != nil {
+			if reg.Type != nil && reg.Type.IsReferenceType() {
+				current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: reg.Name})
+			} else {
+				current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: reg.Name})
+			}
+		} else {
+			current.Statements = append(current.Statements, &AssignInst{Dst: dstName, RValue: writeVal})
+		}
 		return current
 	}
 
-	// 2. ABI Routing: Perform direct transfers
-	if reg, isReg := flatRHS.(*Register); isReg && reg != nil {
-		if reg.Type != nil && reg.Type.IsReferenceType() {
-			// Affine transfer of ownership
-			current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: reg.Name})
-		} else {
-			// Primitive duplication
-			current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: reg.Name})
-		}
-	} else if flatRHS != nil {
-		// Pure flat expression evaluation assignment
-		current.Statements = append(current.Statements, &AssignInst{Dst: dstName, RValue: flatRHS})
+	// Failsafe catch-all
+	flatLHS, current := b.flattenExpr(stmt.LValue, current)
+	flatRHS, current := b.flattenExpr(stmt.RValue, current)
+	if reg, ok := flatLHS.(*Register); ok {
+		current.Statements = append(current.Statements, &AssignInst{Dst: reg.Name, RValue: flatRHS})
 	}
-
 	return current
 }
 
@@ -340,14 +437,38 @@ func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBloc
 		return current
 	}
 
-	var flatMap, flatVal Value
-	flatMap, current = b.flattenExpr(stmt.Map, current)
-	flatVal, current = b.flattenExpr(stmt.Value, current)
-
+	flatMap, current := b.flattenExpr(stmt.Map, current)
 	hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(stmt.Key, current)
 
-	_, current = b.EmitMamlMapPut(current, flatMap, hashVal, ptrVal, lenVal, intKey, flatVal)
+	var writeVal Value
+	if stmt.Operator != "" {
+		// Read the opaque pointer exactly once
+		opaquePtr, nextBlock := b.EmitMamlMapGet(current, flatMap, hashVal, ptrVal, lenVal)
+		current = nextBlock
 
+		elemType := hir.TypeOf(stmt.Value)
+		readTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
+		current.Statements = append(current.Statements, &LoadPtrInst{Dst: readTmp, Ptr: opaquePtr, Type: elemType})
+
+		flatRHS, nextBlock := b.flattenExpr(stmt.Value, current)
+		current = nextBlock
+
+		opTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
+		current.Statements = append(current.Statements, &BinaryOpInst{
+			Dst:      opTmp,
+			Operator: stmt.Operator,
+			Left:     &Register{Name: readTmp, Type: elemType},
+			Right:    flatRHS,
+			Type:     elemType,
+		})
+		writeVal = &Register{Name: opTmp, Type: elemType}
+	} else {
+		writeVal, current = b.flattenExpr(stmt.Value, current)
+	}
+
+	_, current = b.EmitMamlMapPut(current, flatMap, hashVal, ptrVal, lenVal, intKey, writeVal)
 	return current
 }
 
@@ -356,16 +477,38 @@ func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock)
 		return current
 	}
 
-	var flatVec, flatIdx, flatVal Value
+	// Evaluate Receiver and Index exactly ONCE
+	flatVec, current := b.flattenExpr(stmt.Vec, current)
+	flatIdx, current := b.flattenExpr(stmt.Index, current)
 
-	// 1. Flatten the receiver, index, and value into atomic operands
-	flatVec, current = b.flattenExpr(stmt.Vec, current)
-	flatIdx, current = b.flattenExpr(stmt.Index, current)
-	flatVal, current = b.flattenExpr(stmt.Value, current)
+	var writeVal Value
+	if stmt.Operator != "" {
+		opaquePtr, nextBlock := b.EmitMamlVecGet(current, flatVec, flatIdx)
+		current = nextBlock
 
-	// 2. Emit the runtime call to mutate the vector in-place
-	_, current = b.EmitMamlVecSet(current, flatVec, flatIdx, flatVal)
+		elemType := hir.TypeOf(stmt.Value)
+		readTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
+		current.Statements = append(current.Statements, &LoadPtrInst{Dst: readTmp, Ptr: opaquePtr, Type: elemType})
 
+		flatRHS, nextBlock := b.flattenExpr(stmt.Value, current)
+		current = nextBlock
+
+		opTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
+		current.Statements = append(current.Statements, &BinaryOpInst{
+			Dst:      opTmp,
+			Operator: stmt.Operator,
+			Left:     &Register{Name: readTmp, Type: elemType},
+			Right:    flatRHS,
+			Type:     elemType,
+		})
+		writeVal = &Register{Name: opTmp, Type: elemType}
+	} else {
+		writeVal, current = b.flattenExpr(stmt.Value, current)
+	}
+
+	_, current = b.EmitMamlVecSet(current, flatVec, flatIdx, writeVal)
 	return current
 }
 

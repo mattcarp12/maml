@@ -1,7 +1,9 @@
 {
   "nodes": {
     "Register": {
-      "interfaces": ["Value"],
+      "interfaces": [
+        "Value"
+      ],
       "opcode": "ident",
       "fields": {
         "Name": "string",
@@ -9,7 +11,9 @@
       }
     },
     "IntConstant": {
-      "interfaces": ["Value"],
+      "interfaces": [
+        "Value"
+      ],
       "opcode": "const_int",
       "fields": {
         "Value": "int64",
@@ -17,7 +21,9 @@
       }
     },
     "BoolConstant": {
-      "interfaces": ["Value"],
+      "interfaces": [
+        "Value"
+      ],
       "opcode": "const_bool",
       "fields": {
         "Value": "bool",
@@ -25,7 +31,9 @@
       }
     },
     "StringConstant": {
-      "interfaces": ["Value"],
+      "interfaces": [
+        "Value"
+      ],
       "opcode": "const_string",
       "fields": {
         "Value": "string",
@@ -33,7 +41,9 @@
       }
     },
     "AssignInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "assign",
       "fields": {
         "Dst": "string",
@@ -41,7 +51,9 @@
       }
     },
     "IndexAssignInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "index_assign",
       "fields": {
         "Target": "string",
@@ -51,7 +63,9 @@
       }
     },
     "StructInitInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "struct_init",
       "fields": {
         "Dst": "string",
@@ -63,7 +77,9 @@
       }
     },
     "FieldReadInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "field_read",
       "fields": {
         "Dst": "string",
@@ -75,8 +91,24 @@
         "VariantLayout": "[]types.Type"
       }
     },
+    "FieldWriteInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "field_write",
+      "fields": {
+        "Object": "Value",
+        "FieldName": "string",
+        "FieldIndex": "int",
+        "FieldOffset": "int",
+        "Value": "Value",
+        "VariantLayout": "[]types.Type"
+      }
+    },
     "ArrayInitInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "array_init",
       "fields": {
         "Dst": "string",
@@ -85,7 +117,9 @@
       }
     },
     "SliceInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "slice_read",
       "fields": {
         "Dst": "string",
@@ -97,7 +131,9 @@
       }
     },
     "BinaryOpInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "binary_op",
       "fields": {
         "Dst": "string",
@@ -108,7 +144,9 @@
       }
     },
     "UnaryOpInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "unary_op",
       "fields": {
         "Dst": "string",
@@ -118,7 +156,9 @@
       }
     },
     "IndexReadInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "index_read",
       "fields": {
         "Dst": "string",
@@ -129,7 +169,9 @@
       }
     },
     "CallInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "call_inst",
       "fields": {
         "Dst": "string",
@@ -139,7 +181,9 @@
       }
     },
     "OwnInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "own",
       "fields": {
         "Dst": "string",
@@ -150,7 +194,9 @@
       "emitCpp": false
     },
     "FreezeInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "freeze",
       "fields": {
         "Dst": "string",
@@ -161,7 +207,9 @@
       "emitCpp": false
     },
     "VariantInitInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "variant_init",
       "fields": {
         "Dst": "string",
@@ -172,7 +220,9 @@
       }
     },
     "VariantReadInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "variant_read",
       "fields": {
         "Dst": "string",
@@ -183,7 +233,9 @@
       }
     },
     "VariantDiscriminantInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "variant_discriminant",
       "fields": {
         "Dst": "string",
@@ -192,7 +244,9 @@
       }
     },
     "CastInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "cast",
       "fields": {
         "Dst": "string",
@@ -201,7 +255,9 @@
       }
     },
     "LoadPtrInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "load_ptr",
       "fields": {
         "Dst": "string",
@@ -210,7 +266,9 @@
       }
     },
     "StoreInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "store",
       "fields": {
         "DstPtr": "string",
@@ -219,7 +277,9 @@
       }
     },
     "TempDeclInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "temp_decl",
       "fields": {
         "Name": "string",
@@ -227,7 +287,9 @@
       }
     },
     "CopyInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "copy",
       "fields": {
         "Dst": "string",
@@ -235,7 +297,9 @@
       }
     },
     "MoveInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "move",
       "fields": {
         "Dst": "string",
@@ -243,7 +307,9 @@
       }
     },
     "RefAllocInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "ref_alloc",
       "fields": {
         "Dst": "string",
@@ -251,21 +317,27 @@
       }
     },
     "RefIncInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "ref_inc",
       "fields": {
         "Src": "string"
       }
     },
     "RefDecInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "ref_dec",
       "fields": {
         "Src": "string"
       }
     },
     "MutBorrowInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "mut_borrow",
       "fields": {
         "Src": "string",
@@ -274,12 +346,16 @@
       "emitCpp": false
     },
     "CoroPrologueInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "coro_prologue",
       "fields": {}
     },
     "KeepAliveInst": {
-      "interfaces": ["Instruction"],
+      "interfaces": [
+        "Instruction"
+      ],
       "opcode": "keep_alive",
       "fields": {
         "Src": "string"
@@ -287,21 +363,27 @@
       "emitCpp": false
     },
     "ReturnTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "ret",
       "fields": {
         "Value": "Value"
       }
     },
     "JumpTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "br",
       "fields": {
         "Target": "BlockID"
       }
     },
     "BranchTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "cond_br",
       "fields": {
         "Condition": "Value",
@@ -310,12 +392,16 @@
       }
     },
     "UnreachableTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "unreachable",
       "fields": {}
     },
     "CoroSuspendTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "coro_suspend",
       "fields": {
         "ResumeBlock": "BlockID",
@@ -324,7 +410,9 @@
       }
     },
     "CoroYieldTerminator": {
-      "interfaces": ["Terminator"],
+      "interfaces": [
+        "Terminator"
+      ],
       "opcode": "coro_yield"
     }
   },

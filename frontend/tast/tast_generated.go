@@ -53,10 +53,11 @@ func (n *ArrayLiteral) Accept(v Visitor) { v.VisitArrayLiteral(n) }
 func (n *ArrayLiteral) exprNode()        {}
 
 type AssignStmt struct {
-	Pos_   Position `json:"-"`
-	End_   Position `json:"-"`
-	LValue Expr
-	RValue Expr
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	LValue   Expr
+	Operator string
+	RValue   Expr
 }
 
 func (n *AssignStmt) Pos() Position    { return n.Pos_ }

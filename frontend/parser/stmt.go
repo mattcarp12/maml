@@ -177,22 +177,41 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 		return nil
 	}
 
-	// Handle the case where an expression is followed by an assignment, e.g., 'x = 5'
+	// Handle the case where an expression is followed by an assignment or compound assignment
 	switch p.peekToken.Type {
-	case token.ASSIGN:
-		p.nextToken() // get onto '='
-		p.nextToken() // move to the expression on the right side of '='
+	case token.ASSIGN, token.PLUS_EQ, token.MINUS_EQ, token.MUL_EQ, token.DIV_EQ:
+		opToken := p.peekToken // Capture the exact token type
+
+		p.nextToken() // get onto the assignment operator
+		p.nextToken() // move to the expression on the right side
+
 		value := p.parseExpression(LOWEST)
 		if value == nil {
 			return nil
 		}
 		p.expectStatementEnd() // Consume the newline after the assignment
-		return &ast.AssignStmt{
-			LValue: expr,
-			RValue: value,
-			Pos_:   pos,
-			End_:   p.curEndPos(),
+
+		// Map the token to the string representation of the operator
+		opStr := ""
+		switch opToken.Type {
+		case token.PLUS_EQ:
+			opStr = "+"
+		case token.MINUS_EQ:
+			opStr = "-"
+		case token.MUL_EQ:
+			opStr = "*"
+		case token.DIV_EQ:
+			opStr = "/"
 		}
+
+		return &ast.AssignStmt{
+			LValue:   expr,
+			Operator: opStr, // Will be "" for standard assignment
+			RValue:   value,
+			Pos_:     pos,
+			End_:     p.curEndPos(),
+		}
+
 	case token.PUSH:
 		p.nextToken() // get onto '<<'
 		p.nextToken() // move to the expression on the right side of '<<'

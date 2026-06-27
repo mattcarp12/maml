@@ -118,6 +118,17 @@ type FieldReadInst struct {
 
 func (*FieldReadInst) isInstruction() {}
 
+type FieldWriteInst struct {
+	FieldIndex    int
+	FieldName     string
+	FieldOffset   int
+	Object        Value
+	Value         Value
+	VariantLayout []types.Type
+}
+
+func (*FieldWriteInst) isInstruction() {}
+
 type FreezeInst struct {
 	Dst  string
 	Path []string
@@ -331,6 +342,7 @@ type Mapper[R any] interface {
 	MapCoroSuspendTerminator(n *CoroSuspendTerminator) R
 	MapCoroYieldTerminator(n *CoroYieldTerminator) R
 	MapFieldReadInst(n *FieldReadInst) R
+	MapFieldWriteInst(n *FieldWriteInst) R
 	MapFreezeInst(n *FreezeInst) R
 	MapIndexAssignInst(n *IndexAssignInst) R
 	MapIndexReadInst(n *IndexReadInst) R
@@ -388,6 +400,8 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapCoroYieldTerminator(n)
 	case *FieldReadInst:
 		return m.MapFieldReadInst(n)
+	case *FieldWriteInst:
+		return m.MapFieldWriteInst(n)
 	case *FreezeInst:
 		return m.MapFreezeInst(n)
 	case *IndexAssignInst:

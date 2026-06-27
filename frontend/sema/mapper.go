@@ -223,7 +223,7 @@ func (a *Analyzer) MapAssignStmt(s *ast.AssignStmt) tast.Node {
 	lhs := a.mapExpr(s.LValue)
 	rhs := a.mapExpr(s.RValue)
 
-	node := &tast.AssignStmt{Pos_: s.Pos_, LValue: lhs, RValue: rhs}
+	node := &tast.AssignStmt{Pos_: s.Pos_, LValue: lhs, RValue: rhs, Operator: s.Operator}
 	a.drainViolations(a.registry.Check(node, a.ctx()))
 	return node
 }

@@ -53,10 +53,11 @@ func (n *ArrayLiteral) Accept(v Visitor) { v.VisitArrayLiteral(n) }
 func (n *ArrayLiteral) exprNode()        {}
 
 type AssignStmt struct {
-	Pos_   Position `json:"-"`
-	End_   Position `json:"-"`
-	LValue Expr
-	RValue Expr
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	LValue   Expr
+	Operator string
+	RValue   Expr
 }
 
 func (n *AssignStmt) Pos() Position    { return n.Pos_ }
@@ -281,11 +282,12 @@ func (n *LoopStmt) Accept(v Visitor) { v.VisitLoopStmt(n) }
 func (n *LoopStmt) stmtNode()        {}
 
 type MapInsertStmt struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Key   Expr
-	Map   Expr
-	Value Expr
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	Key      Expr
+	Map      Expr
+	Operator string
+	Value    Expr
 }
 
 func (n *MapInsertStmt) Pos() Position    { return n.Pos_ }
@@ -508,11 +510,12 @@ func (n *VecReadExpr) Accept(v Visitor) { v.VisitVecReadExpr(n) }
 func (n *VecReadExpr) exprNode()        {}
 
 type VecWriteStmt struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Index Expr
-	Value Expr
-	Vec   Expr
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	Index    Expr
+	Operator string
+	Value    Expr
+	Vec      Expr
 }
 
 func (n *VecWriteStmt) Pos() Position    { return n.Pos_ }

@@ -124,15 +124,18 @@ func (l *Lowerer) MapBlockStmt(block *tast.BlockStmt) Node {
 }
 
 func (l *Lowerer) MapAssignStmt(s *tast.AssignStmt) Node {
+	hirLValue := l.lowerExpr(s.LValue)
+	hirRValue := l.lowerExpr(s.RValue)
+
 	if idxExpr, ok := s.LValue.(*tast.IndexExpr); ok {
 		switch tast.TypeOf(idxExpr.Left).(type) {
 		case *types.MapType:
-			return &MapInsertStmt{Pos_: s.Pos_, Map: l.lowerExpr(idxExpr.Left), Key: l.lowerExpr(idxExpr.Index), Value: l.lowerExpr(s.RValue)}
+			return &MapInsertStmt{Pos_: s.Pos_, Map: l.lowerExpr(idxExpr.Left), Key: l.lowerExpr(idxExpr.Index), Value: hirRValue, Operator: s.Operator}
 		case *types.VectorType:
-			return &VecWriteStmt{Pos_: s.Pos_, Vec: l.lowerExpr(idxExpr.Left), Index: l.lowerExpr(idxExpr.Index), Value: l.lowerExpr(s.RValue)}
+			return &VecWriteStmt{Pos_: s.Pos_, Vec: l.lowerExpr(idxExpr.Left), Index: l.lowerExpr(idxExpr.Index), Value: hirRValue, Operator: s.Operator}
 		}
 	}
-	return &AssignStmt{Pos_: s.Pos_, LValue: l.lowerExpr(s.LValue), RValue: l.lowerExpr(s.RValue)}
+	return &AssignStmt{Pos_: s.Pos_, LValue: hirLValue, RValue: hirRValue, Operator: s.Operator}
 }
 
 func (l *Lowerer) MapVecPushStmt(s *tast.VecPushStmt) Node {

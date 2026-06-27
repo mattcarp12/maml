@@ -216,6 +216,24 @@ func (e *Exporter) MapFieldReadInst(i *FieldReadInst) map[string]any {
 	}
 	return m
 }
+func (e *Exporter) MapFieldWriteInst(i *FieldWriteInst) map[string]any {
+	m := map[string]any{
+		"op":          "field_write",
+		"object":      buildValueDTO(i.Object, e.target),
+		"field_name":  i.FieldName,
+		"field_index": i.FieldIndex,
+		"value":       buildValueDTO(i.Value, e.target),
+	}
+	// Pass along the variant layout if this is a sum-type payload mutation
+	if len(i.VariantLayout) > 0 {
+		layoutList := make([]any, len(i.VariantLayout))
+		for idx, ty := range i.VariantLayout {
+			layoutList[idx] = lowerType(ty, e.target)
+		}
+		m["variant_layout"] = layoutList
+	}
+	return m
+}
 func (e *Exporter) MapArrayInitInst(i *ArrayInitInst) map[string]any {
 	return map[string]any{"op": "array_init", "dst": i.Dst, "index": i.Index, "value": buildValueDTO(i.Value, e.target)}
 }

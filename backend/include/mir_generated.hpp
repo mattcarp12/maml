@@ -85,6 +85,14 @@ struct FieldReadInst {
     std::shared_ptr<maml::Type> type;
     std::vector<std::shared_ptr<maml::Type>> variant_layout;
 };
+struct FieldWriteInst {
+    int32_t field_index;
+    std::string field_name;
+    int32_t field_offset;
+    Value object;
+    Value value;
+    std::vector<std::shared_ptr<maml::Type>> variant_layout;
+};
 struct IndexAssignInst {
     Value index;
     std::string target;
@@ -168,7 +176,7 @@ struct VariantReadInst {
     std::string variant_name;
 };
 
-using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldReadInst, IndexAssignInst, IndexReadInst, LoadPtrInst, MoveInst, RefAllocInst, RefDecInst, RefIncInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
+using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldReadInst, FieldWriteInst, IndexAssignInst, IndexReadInst, LoadPtrInst, MoveInst, RefAllocInst, RefDecInst, RefIncInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
 >;
 
 struct Instruction {
@@ -244,6 +252,7 @@ void from_json(const nlohmann::json& j, CastInst& t);
 void from_json(const nlohmann::json& j, CopyInst& t);
 void from_json(const nlohmann::json& j, CoroPrologueInst& t);
 void from_json(const nlohmann::json& j, FieldReadInst& t);
+void from_json(const nlohmann::json& j, FieldWriteInst& t);
 void from_json(const nlohmann::json& j, IndexAssignInst& t);
 void from_json(const nlohmann::json& j, IndexReadInst& t);
 void from_json(const nlohmann::json& j, LoadPtrInst& t);
@@ -406,6 +415,26 @@ inline void from_json(const nlohmann::json& j, FieldReadInst& t) {
     }
     if (j.contains("type") && !j.at("type").is_null()) {
         j.at("type").get_to(t.type);
+    }
+    if (j.contains("variant_layout") && !j.at("variant_layout").is_null()) {
+        j.at("variant_layout").get_to(t.variant_layout);
+    }
+}
+inline void from_json(const nlohmann::json& j, FieldWriteInst& t) {
+    if (j.contains("field_index") && !j.at("field_index").is_null()) {
+        j.at("field_index").get_to(t.field_index);
+    }
+    if (j.contains("field_name") && !j.at("field_name").is_null()) {
+        j.at("field_name").get_to(t.field_name);
+    }
+    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
+        j.at("field_offset").get_to(t.field_offset);
+    }
+    if (j.contains("object") && !j.at("object").is_null()) {
+        j.at("object").get_to(t.object);
+    }
+    if (j.contains("value") && !j.at("value").is_null()) {
+        j.at("value").get_to(t.value);
     }
     if (j.contains("variant_layout") && !j.at("variant_layout").is_null()) {
         j.at("variant_layout").get_to(t.variant_layout);
@@ -681,6 +710,7 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "copy") { inst.inner = j.get<CopyInst>(); return; }
     if (op == "coro_prologue") { inst.inner = j.get<CoroPrologueInst>(); return; }
     if (op == "field_read") { inst.inner = j.get<FieldReadInst>(); return; }
+    if (op == "field_write") { inst.inner = j.get<FieldWriteInst>(); return; }
     if (op == "index_assign") { inst.inner = j.get<IndexAssignInst>(); return; }
     if (op == "index_read") { inst.inner = j.get<IndexReadInst>(); return; }
     if (op == "load_ptr") { inst.inner = j.get<LoadPtrInst>(); return; }

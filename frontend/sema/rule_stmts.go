@@ -106,6 +106,21 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 			rvalType.String(), expectedType.String(),
 		)}
 	}
+
+	if node.Operator != "" {
+		// Both types must be integers (or floats if you support them later)
+		// for +, -, *, /. (Strings might support + later, but keep it simple for now).
+		_, isExpectedInt := expectedType.(types.IntType)
+		_, isRvalInt := rvalType.(types.IntType)
+
+		if !isExpectedInt || !isRvalInt {
+			return []Violation{violation(node.Pos_,
+				"invalid operation: operator '%s=' not defined on type '%s'",
+				node.Operator, expectedType.String(),
+			)}
+		}
+	}
+
 	return nil
 }
 

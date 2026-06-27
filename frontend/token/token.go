@@ -18,6 +18,10 @@ const (
 	// Operators
 	DECLARE   // :=
 	ASSIGN    // =
+	PLUS_EQ   // +=
+	MINUS_EQ  // -=
+	MUL_EQ    // *=
+	DIV_EQ    // /=
 	YIELD     // =>
 	SEPARATOR // |
 	PIPE      // |>

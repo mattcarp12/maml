@@ -118,7 +118,8 @@
       "fields": {
         "Map": "Expr",
         "Key": "Expr",
-        "Value": "Expr"
+        "Value": "Expr",
+        "Operator": "string"
       }
     },
     "VecWriteStmt": {
@@ -128,7 +129,8 @@
       "fields": {
         "Vec": "Expr",
         "Index": "Expr",
-        "Value": "Expr"
+        "Value": "Expr",
+        "Operator": "string"
       }
     },
     "VecPushStmt": {

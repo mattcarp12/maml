@@ -54,10 +54,11 @@ type ArrayTypeExpr struct {
 	Size int
 }
 type AssignStmt struct {
-	Pos_   Position `json:"-"`
-	End_   Position `json:"-"`
-	LValue Expr
-	RValue Expr
+	Pos_     Position `json:"-"`
+	End_     Position `json:"-"`
+	LValue   Expr
+	Operator string
+	RValue   Expr
 }
 type AwaitExpr struct {
 	Pos_  Position `json:"-"`
