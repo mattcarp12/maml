@@ -7,7 +7,7 @@
 #include "RuntimeConstants.h"
 #include "StmtGenerator.hpp"
 #include "TypeLowering.hpp"
-#include "autogen_runtime.inc"
+#include "autogen_runtime.hpp"
 
 namespace maml {
 
@@ -21,9 +21,7 @@ void defineCoroHelperStubs(CodegenContext &ctx) {
   // Define BEFORE any declarations to prevent LLVM suffixing
   auto defineIfMissing = [&](const char *name, llvm::FunctionType *FT, auto body) {
     if (Module->getFunction(name)) return;  // already exists
-
     llvm::Function *F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, name, *Module);
-
     llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "entry", F);
     ctx.Builder->SetInsertPoint(BB);
     body(F);
@@ -106,14 +104,6 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
   }
 
   ctx.HeapVars.clear();
-  for (const auto &block : fn.blocks) {
-    for (const auto &inst : block.instructions) {
-      if (std::holds_alternative<mir::RefAllocInst>(inst.inner)) {
-        auto &refAlloc = std::get<mir::RefAllocInst>(inst.inner);
-        ctx.HeapVars.insert(refAlloc.dst);
-      }
-    }
-  }
 
   unsigned idx = 0;
   for (auto &arg : F->args()) {
@@ -135,27 +125,34 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
         ctx.Blocks[blockId] = BB;
       }
 
+      // 1. First, emit ALL TempDeclInsts from all blocks so they sit at the top of allocBB
       for (const auto &block : fn.blocks) {
         for (const auto &inst : block.instructions) {
-          if (std::holds_alternative<mir::TempDeclInst>(inst.inner) ||
-              std::holds_alternative<mir::CoroPrologueInst>(inst.inner)) {
+          if (std::holds_alternative<mir::TempDeclInst>(inst.inner)) {
             compileInstruction(ctx, inst);
           }
         }
       }
 
-      // if (!fn.entry_block.empty()) {
-      //   int entryId = std::stoi(fn.entry_block);
-      //   Builder->CreateBr(ctx.Blocks[entryId]);
-      // }
-
-      // Only emit the entry branch now for non-async functions.
-      // For async functions, CoroPrologueInst will close allocBB itself.
-      if (!fn.entry_block.empty()) {
-        int entryId = std::stoi(fn.entry_block);
-        if (!fn.is_async) {
-          Builder->CreateBr(ctx.Blocks[entryId]);
+      // 2. Then, emit the CoroPrologueInst (if async) to seal the allocBB block
+      if (fn.is_async) {
+        bool foundPrologue = false;
+        for (const auto &block : fn.blocks) {
+          for (const auto &inst : block.instructions) {
+            if (std::holds_alternative<mir::CoroPrologueInst>(inst.inner)) {
+              compileInstruction(ctx, inst);
+              foundPrologue = true;
+              break;
+            }
+          }
+          if (foundPrologue) break;
         }
+      }
+
+      // 3. If not async, explicitly branch to bb0 to seal the allocBB block
+      if (!fn.entry_block.empty() && !fn.is_async) {
+        int entryId = std::stoi(fn.entry_block);
+        Builder->CreateBr(ctx.Blocks[entryId]);
       }
 
       for (const auto &block : fn.blocks) {

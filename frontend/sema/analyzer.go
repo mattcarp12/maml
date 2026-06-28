@@ -141,18 +141,11 @@ func (a *Analyzer) registerFunctions(program *ast.Program) {
 
 func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	paramTypes := make([]types.Type, len(v.Params))
-	paramModes := make([]types.ParamMode, len(v.Params))
+	caps := make([]types.Cap, len(v.Params)) // Using strings instead of ParamModes
 
 	for i, p := range v.Params {
 		paramTypes[i] = a.resolveAstType(p.Type)
-		switch {
-		case p.Mut:
-			paramModes[i] = types.ParamMutBorrow
-		case p.Own:
-			paramModes[i] = types.ParamOwn
-		default:
-			paramModes[i] = types.ParamBorrow
-		}
+		caps[i] = types.Cap(p.Cap) // Map the unified capability string directly!
 	}
 
 	var returnType types.Type = types.UnitType{}
@@ -165,9 +158,9 @@ func (a *Analyzer) registerFunction(v *ast.FnDecl) {
 	}
 
 	fnType := &types.FunctionType{
-		Params:     paramTypes,
-		ParamModes: paramModes,
-		Return:     returnType,
+		Params: paramTypes,
+		Caps:   caps, // Inject the capabilities into the type signature
+		Return: returnType,
 	}
 
 	sym := &types.Symbol{

@@ -8,7 +8,7 @@ import (
 
 // Target defines the physical architecture constraints.
 type Target struct {
-	PointerSize  int // e.g., 8 for 64-bit
+	PointerSize  int
 	PointerAlign int
 	IntSize      int
 }
@@ -16,51 +16,27 @@ type Target struct {
 var DefaultTarget = &Target{
 	PointerSize:  8,
 	PointerAlign: 8,
-	IntSize:      4,
+	IntSize:      8,
 }
 
 // ============================================================================
 // Public Layout API
 // ============================================================================
 
-// SizeOf computes the total byte size of a type.
-// If isEscaped is true, it accounts for the 8-byte ARC RefCount header.
-func SizeOf(t types.Type, target *Target, isEscaped bool) int {
+func SizeOf(t types.Type, target *Target) int {
 	if t == nil {
 		return 0
 	}
-
-	// 1. Calculate internal payload size
-	var baseSize int
-	if t.IsReferenceType() {
-		baseSize = sizeOfReference(t, target)
-	} else {
-		baseSize = sizeOfDynamic(t, target, false) // Recursive fields are never 'escaped' themselves
-	}
-
-	// 2. Add header if this specific instance is escaped
-	if isEscaped {
-		return baseSize + target.PointerSize
-	}
-	return baseSize
+	// We no longer check t.IsReferenceType() for ARC headers
+	return sizeOfDynamic(t, target)
 }
 
-// OffsetOf returns the byte offset of a field.
-// If isEscaped is true, offsets are shifted by 8 bytes to account for the ARC header.
-func OffsetOf(t *types.StructType, fieldIndex int, target *Target, isEscaped bool) int {
+func OffsetOf(t *types.StructType, fieldIndex int, target *Target) int {
 	if t == nil || fieldIndex < 0 || fieldIndex >= len(t.Fields) {
 		return 0
 	}
-
-	headerShift := 0
-	if isEscaped {
-		headerShift = target.PointerSize
-	}
-
-	// Note: We compute layout with isEscaped=false because fields are packed
-	// relative to the struct start, not the potential ARC header.
 	offsets, _ := computeStructLayout(t, target)
-	return headerShift + offsets[fieldIndex]
+	return offsets[fieldIndex]
 }
 
 // AlignOf computes alignment based on contents.
@@ -73,7 +49,7 @@ func AlignOf(t types.Type, target *Target) int {
 	}
 
 	switch v := t.(type) {
-	case types.IntType:
+	case types.I64Type:
 		return target.IntSize
 	case types.BoolType:
 		return 1
@@ -97,12 +73,22 @@ func AlignOf(t types.Type, target *Target) int {
 // Internal Calculators
 // ============================================================================
 
-func sizeOfDynamic(t types.Type, target *Target, isEscaped bool) int {
+func sizeOfDynamic(t types.Type, target *Target) int {
 	switch v := t.(type) {
-	case types.IntType:
-		return target.IntSize
+	case types.I8Type, types.U8Type:
+		return 1
+	case types.I16Type, types.U16Type:
+		return 2
+	case types.I32Type, types.U32Type, types.F32Type:
+		return 4
+	case types.I64Type, types.U64Type, types.F64Type:
+		return 8
+	case types.I128Type, types.U128Type:
+		return 16
 	case types.BoolType:
 		return 1
+	case types.CharType:
+		return 4
 	case types.UnitType, types.UnknownType:
 		return 0
 	case *types.StructType:
@@ -110,7 +96,7 @@ func sizeOfDynamic(t types.Type, target *Target, isEscaped bool) int {
 	case *types.SumType:
 		return sizeOfSumType(v, target)
 	case *types.ArrayType:
-		return SizeOf(v.Base, target, false) * v.Size
+		return SizeOf(v.Base, target) * v.Size
 	}
 	return 0
 }
@@ -141,7 +127,7 @@ func computeStructLayout(t *types.StructType, target *Target) ([]int, int) {
 		sortedFields[i] = indexedField{
 			originalIndex: i,
 			align:         AlignOf(f.Type, target),
-			size:          SizeOf(f.Type, target, false), // Fields are packed
+			size:          SizeOf(f.Type, target), // Fields are packed
 		}
 	}
 
@@ -164,23 +150,13 @@ func sizeOfSumType(t *types.SumType, target *Target) int {
 		payloadSize := 0
 		for _, f := range variant.Fields {
 			payloadSize = padToAlign(payloadSize, AlignOf(f.Type, target))
-			payloadSize += SizeOf(f.Type, target, false)
+			payloadSize += SizeOf(f.Type, target)
 		}
 		if payloadSize > maxPayloadSize {
 			maxPayloadSize = payloadSize
 		}
 	}
 	return padToAlign(4+maxPayloadSize, AlignOf(t, target))
-}
-
-func sizeOfReference(t types.Type, target *Target) int {
-	switch t.(type) {
-	case types.StringType:
-		// A string is a fat pointer: { ptr, i32 }
-		return target.PointerSize + target.IntSize + 4 // +4 for padding to 16 bytes
-	default:
-		return target.PointerSize
-	}
 }
 
 func padToAlign(offset int, align int) int {

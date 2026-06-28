@@ -165,24 +165,24 @@ func (e *Exporter) MapTempDeclInst(i *TempDeclInst) map[string]any {
 func (e *Exporter) MapAssignInst(i *AssignInst) map[string]any {
 	return map[string]any{"op": "assign", "dst": i.Dst, "value": buildValueDTO(i.RValue, e.target)}
 }
-func (e *Exporter) MapIndexAssignInst(i *IndexAssignInst) map[string]any {
-	return map[string]any{"op": "index_assign", "target": i.Target, "target_type": lowerType(i.TargetType, e.target), "index": buildValueDTO(i.Index, e.target), "value": buildValueDTO(i.Value, e.target)}
-}
 func (e *Exporter) MapBinaryOpInst(i *BinaryOpInst) map[string]any {
 	return map[string]any{"op": "binary_op", "dst": i.Dst, "operator": i.Operator, "left": buildValueDTO(i.Left, e.target), "right": buildValueDTO(i.Right, e.target), "type": lowerType(i.Type, e.target)}
 }
 func (e *Exporter) MapUnaryOpInst(i *UnaryOpInst) map[string]any {
 	return map[string]any{"op": "unary_op", "dst": i.Dst, "operator": i.Operator, "operand": buildValueDTO(i.Operand, e.target), "type": lowerType(i.Type, e.target)}
 }
-func (e *Exporter) MapIndexReadInst(i *IndexReadInst) map[string]any {
-	return map[string]any{"op": "index_read", "dst": i.Dst, "source": buildValueDTO(i.Source, e.target), "source_type": lowerType(i.SourceType, e.target), "index": buildValueDTO(i.Index, e.target), "type": lowerType(i.Type, e.target)}
-}
 func (e *Exporter) MapCallInst(i *CallInst) map[string]any {
 	args := []any{}
 	for _, arg := range i.Arguments {
-		args = append(args, map[string]any{"argument": buildValueDTO(arg.Argument, e.target), "mut": arg.Mut})
+		args = append(args, buildValueDTO(arg, e.target))
 	}
 	return map[string]any{"op": "call_inst", "dst": i.Dst, "function": buildValueDTO(i.Function, e.target), "arguments": args, "type": lowerType(i.Type, e.target)}
+}
+func (e *Exporter) MapDropInst(i *DropInst) map[string]any {
+	return map[string]any{
+		"op":  "drop",
+		"src": i.Src,
+	}
 }
 func (e *Exporter) MapSliceInst(i *SliceInst) map[string]any {
 	var lowDTO, highDTO any
@@ -205,26 +205,17 @@ func (e *Exporter) MapStructInitInst(i *StructInitInst) map[string]any {
 	}
 	return m
 }
-func (e *Exporter) MapFieldReadInst(i *FieldReadInst) map[string]any {
-	m := map[string]any{"op": "field_read", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "field_name": i.FieldName, "field_index": i.FieldIndex, "type": lowerType(i.Type, e.target)}
-	if len(i.VariantLayout) > 0 {
-		layoutList := make([]any, len(i.VariantLayout))
-		for idx, ty := range i.VariantLayout {
-			layoutList[idx] = lowerType(ty, e.target)
-		}
-		m["variant_layout"] = layoutList
-	}
-	return m
-}
-func (e *Exporter) MapFieldWriteInst(i *FieldWriteInst) map[string]any {
+func (e *Exporter) MapFieldAddrInst(i *FieldAddrInst) map[string]any {
 	m := map[string]any{
-		"op":          "field_write",
+		"op":          "field_addr",
+		"dst":         i.Dst,
 		"object":      buildValueDTO(i.Object, e.target),
 		"field_name":  i.FieldName,
 		"field_index": i.FieldIndex,
-		"value":       buildValueDTO(i.Value, e.target),
+		"type":        lowerType(i.Type, e.target),
 	}
-	// Pass along the variant layout if this is a sum-type payload mutation
+
+	// Pass along the variant layout if this address calculation involves a sum-type payload
 	if len(i.VariantLayout) > 0 {
 		layoutList := make([]any, len(i.VariantLayout))
 		for idx, ty := range i.VariantLayout {
@@ -232,7 +223,18 @@ func (e *Exporter) MapFieldWriteInst(i *FieldWriteInst) map[string]any {
 		}
 		m["variant_layout"] = layoutList
 	}
+
 	return m
+}
+func (e *Exporter) MapIndexAddrInst(i *IndexAddrInst) map[string]any {
+	return map[string]any{
+		"op":          "index_addr",
+		"dst":         i.Dst,
+		"source":      buildValueDTO(i.Source, e.target),
+		"source_type": lowerType(i.SourceType, e.target),
+		"index":       buildValueDTO(i.Index, e.target),
+		"type":        lowerType(i.Type, e.target),
+	}
 }
 func (e *Exporter) MapArrayInitInst(i *ArrayInitInst) map[string]any {
 	return map[string]any{"op": "array_init", "dst": i.Dst, "index": i.Index, "value": buildValueDTO(i.Value, e.target)}
@@ -265,17 +267,8 @@ func (e *Exporter) MapCopyInst(i *CopyInst) map[string]any {
 func (e *Exporter) MapMoveInst(i *MoveInst) map[string]any {
 	return map[string]any{"op": "move", "dst": i.Dst, "src": i.Src}
 }
-func (e *Exporter) MapRefAllocInst(i *RefAllocInst) map[string]any {
-	return map[string]any{"op": "ref_alloc", "dst": i.Dst, "type": lowerType(i.Type, e.target)}
-}
-func (e *Exporter) MapRefIncInst(i *RefIncInst) map[string]any {
-	return map[string]any{"op": "ref_inc", "src": i.Src}
-}
-func (e *Exporter) MapRefDecInst(i *RefDecInst) map[string]any {
-	return map[string]any{"op": "ref_dec", "src": i.Src}
-}
-func (e *Exporter) MapMutBorrowInst(i *MutBorrowInst) map[string]any {
-	return map[string]any{"op": "mut_borrow", "src": i.Src}
+func (e *Exporter) MapBorrowInst(i *BorrowInst) map[string]any {
+	return map[string]any{"op": "borrow", "dst": i.Dst, "src": i.Src, "mut": i.IsMut}
 }
 func (e *Exporter) MapKeepAliveInst(i *KeepAliveInst) map[string]any {
 	return map[string]any{"op": "keep_alive", "src": i.Src}
@@ -283,8 +276,6 @@ func (e *Exporter) MapKeepAliveInst(i *KeepAliveInst) map[string]any {
 func (e *Exporter) MapCoroPrologueInst(i *CoroPrologueInst) map[string]any {
 	return map[string]any{"op": "coro_prologue"}
 }
-func (e *Exporter) MapOwnInst(i *OwnInst) map[string]any       { return map[string]any{"op": "own"} }
-func (e *Exporter) MapFreezeInst(i *FreezeInst) map[string]any { return map[string]any{"op": "freeze"} }
 
 // -----------------------------------------------------------------------------
 // Terminator Mappers
@@ -317,8 +308,28 @@ func lowerType(t types.Type, target *layout.Target) any {
 		return "void"
 	}
 	switch v := t.(type) {
-	case types.IntType:
+	case types.I8Type:
+		return "i8"
+	case types.I16Type:
+		return "i16"
+	case types.I32Type:
 		return "i32"
+	case types.I64Type:
+		return "i64"
+	case types.U8Type:
+		return "u8"
+	case types.U16Type:
+		return "u16"
+	case types.U32Type:
+		return "u32"
+	case types.U64Type:
+		return "u64"
+	case types.U128Type:
+		return "u128"
+	case types.F32Type:
+		return "f32"
+	case types.F64Type:
+		return "f64"
 	case types.BoolType:
 		return "i1"
 	case types.UnitType:
@@ -327,6 +338,8 @@ func lowerType(t types.Type, target *layout.Target) any {
 		return "string"
 	case types.AnyType:
 		return "any"
+	case types.PtrType:
+		return "ptr"
 	case types.UnknownType:
 		return "unknown"
 	case *types.StructType:

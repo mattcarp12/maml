@@ -150,15 +150,11 @@ func (p *Parser) parseParam() *ast.Param {
 		Pos_: p.curPos(),
 	}
 
-	// Check for mut or own modifiers
+	// Check for capability modifiers (mut, own, ro, copy)
 	switch p.curToken.Type {
-	case token.MUT:
-		param.Mut = true
-		p.nextToken() // step off 'mut'
-	case token.OWN:
-		// Assuming your ast.Param struct has an 'Owned' boolean flag like 'Mut'!
-		param.Own = true
-		p.nextToken() // step off 'own'
+	case token.MUT, token.OWN, token.RO, token.COPY:
+		param.Cap = p.curToken.Literal
+		p.nextToken() // step off the capability keyword
 	}
 
 	// We expect the token to now sit on the parameter Name (e.g., 'x')

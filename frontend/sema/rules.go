@@ -136,7 +136,15 @@ func newRegistry() *Registry {
 		AssignLValueMustBeSymbol{},
 		AssignMutabilityCheck{},
 		AssignmentTypeCompatibility{},
-		CannotReassignBorrowedParameter{},
+		CannotReassignBorrow{},
+	)
+
+	// --------------------------------------------------------------------------
+	// AliadDecl rules
+	// --------------------------------------------------------------------------
+	Register(r,
+		AliasMutabilityValid{},
+		AliasPathValid{},
 	)
 
 	// -------------------------------------------------------------------------
@@ -226,21 +234,6 @@ func newRegistry() *Registry {
 	// -------------------------------------------------------------------------
 	Register(r,
 		MainCannotBeAsync{},
-	)
-
-	// --------------------------------------------------------------------------
-	// Freeze Expression rules
-	// --------------------------------------------------------------------------
-	Register(r,
-		FreezeRequiresOwn{},
-	)
-
-	// --------------------------------------------------------------------------
-	// Own Expression rules
-	// --------------------------------------------------------------------------
-	Register(r,
-		OwnOperandMustBePath{},
-		CannotMoveBorrowedValue{},
 	)
 
 	// --------------------------------------------------------------------------

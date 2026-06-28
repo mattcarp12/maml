@@ -68,7 +68,8 @@ const (
 	RETURN   // return
 	FOR      // for
 	OWN      // own
-	FREEZE   // freeze
+	RO       // ro
+	COPY     //copy
 	BREAK    // break
 	CONTINUE // continue
 	EXTERN   //extern
@@ -91,7 +92,8 @@ var keywords = map[string]TokenType{
 	"return":   RETURN,
 	"for":      FOR,
 	"own":      OWN,
-	"freeze":   FREEZE,
+	"ro":       RO,
+	"copy":     COPY,
 	"continue": CONTINUE,
 	"break":    BREAK,
 	"extern":   EXTERN,

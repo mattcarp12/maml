@@ -38,10 +38,20 @@
         "Expr"
       ],
       "fields": {
-        "Statements": "[]Stmt"
+        "Statements": "[]Stmt",
+        "Type": "types.Type"
       }
     },
     "DeclareStmt": {
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Symbol": "*types.Symbol",
+        "Value": "Expr"
+      }
+    },
+    "AliasDecl": {
       "interfaces": [
         "Stmt"
       ],
@@ -192,24 +202,6 @@
       "fields": {
         "Function": "Expr",
         "Arguments": "[]CallArg",
-        "Type": "types.Type"
-      }
-    },
-    "OwnExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr",
-        "Type": "types.Type"
-      }
-    },
-    "FreezeExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr",
         "Type": "types.Type"
       }
     },
@@ -369,14 +361,14 @@
       "fields": {
         "Name": "string",
         "Type": "types.Type",
+        "Cap": "types.Cap",
         "Symbol": "*types.Symbol"
       }
     },
     "CallArg": {
       "fields": {
         "Argument": "Expr",
-        "Mut": "bool",
-        "Own": "bool"
+        "Cap": "types.Cap"
       }
     },
     "StructField": {

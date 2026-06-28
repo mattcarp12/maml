@@ -34,13 +34,11 @@ type Primitive struct {
 	Name        string `yaml:"name"`
 	CppKind     string `yaml:"cpp_kind"`
 	IsReference bool   `yaml:"is_reference"`
-	IsNeedsArc  bool   `yaml:"is_needs_arc"`
 }
 
 type Complex struct {
 	Name       string     `yaml:"name"`
 	JsonKind   string     `yaml:"json_kind"`
-	IsNeedsArc bool       `yaml:"is_needs_arc"`
 	Properties []Property `yaml:"properties"`
 }
 

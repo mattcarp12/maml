@@ -2,28 +2,30 @@
 package types
 
 const (
+	SYM_RUNTIME_INIT        = "maml_runtime_init"
 	SYM_ALLOC               = "maml_alloc"
 	SYM_FREE                = "maml_free"
-	SYM_RETAIN              = "maml_retain"
-	SYM_RELEASE             = "maml_release"
 	SYM_VEC_CREATE          = "maml_vec_create"
 	SYM_VEC_PUSH            = "maml_vec_push"
 	SYM_VEC_SET             = "maml_vec_set"
 	SYM_VEC_GET             = "maml_vec_get"
 	SYM_VEC_LEN             = "maml_vec_len"
+	SYM_VEC_CLONE           = "maml_vec_clone"
 	SYM_MAP_CREATE          = "maml_map_create"
 	SYM_MAP_PUT             = "maml_map_put"
 	SYM_MAP_GET             = "maml_map_get"
 	SYM_MAP_DELETE          = "maml_map_delete"
 	SYM_MAP_LEN             = "maml_map_len"
+	SYM_MAP_CLONE           = "maml_map_clone"
+	SYM_MAP_NEXT_ACTIVE     = "maml_map_next_active"
 	SYM_STR_HASH            = "maml_str_hash"
 	SYM_STR_EQ              = "maml_str_eq"
+	SYM_STR_CLONE           = "maml_str_clone"
 	SYM_CORO_RESUME_HELPER  = "maml_coro_resume_helper"
 	SYM_CORO_DONE_HELPER    = "maml_coro_done_helper"
 	SYM_CORO_DESTROY_HELPER = "maml_coro_destroy_helper"
 	SYM_SPAWN_TASK          = "maml_spawn_task"
 	SYM_RUN_EXECUTOR        = "maml_run_executor"
-	SYM_RUNTIME_INIT        = "maml_runtime_init"
 	SYM_TASK_AWAIT          = "maml_task_await"
 	SYM_TASK_RELEASE        = "maml_task_release"
 	SYM_TASK_GET_RESULT     = "maml_task_get_result"
@@ -32,112 +34,120 @@ const (
 )
 
 var RuntimeABI = map[string]*FunctionType{
-	"maml_alloc": {
-		Params: []Type{IntType{}},
-		Return: AnyType{},
-	},
-	"maml_free": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_retain": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_release": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_vec_create": {
-		Params: []Type{IntType{}, AnyType{}, AnyType{}},
-		Return: AnyType{},
-	},
-	"maml_vec_push": {
-		Params: []Type{AnyType{}, AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_vec_set": {
-		Params: []Type{AnyType{}, IntType{}, AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_vec_get": {
-		Params: []Type{AnyType{}, IntType{}},
-		Return: AnyType{},
-	},
-	"maml_vec_len": {
-		Params: []Type{AnyType{}},
-		Return: IntType{},
-	},
-	"maml_map_create": {
-		Params: []Type{IntType{}, IntType{}, AnyType{}, AnyType{}, AnyType{}, AnyType{}},
-		Return: AnyType{},
-	},
-	"maml_map_put": {
-		Params: []Type{AnyType{}, IntType{}, AnyType{}, IntType{}, IntType{}, AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_map_get": {
-		Params: []Type{AnyType{}, IntType{}, AnyType{}, IntType{}},
-		Return: AnyType{},
-	},
-	"maml_map_delete": {
-		Params: []Type{AnyType{}, IntType{}, AnyType{}, IntType{}, IntType{}},
-		Return: UnitType{},
-	},
-	"maml_map_len": {
-		Params: []Type{AnyType{}},
-		Return: IntType{},
-	},
-	"maml_str_hash": {
-		Params: []Type{AnyType{}, IntType{}},
-		Return: IntType{},
-	},
-	"maml_str_eq": {
-		Params: []Type{AnyType{}, IntType{}, AnyType{}, IntType{}},
-		Return: IntType{},
-	},
-	"maml_coro_resume_helper": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_coro_done_helper": {
-		Params: []Type{AnyType{}},
-		Return: BoolType{},
-	},
-	"maml_coro_destroy_helper": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_spawn_task": {
-		Params: []Type{AnyType{}},
-		Return: UnitType{},
-	},
-	"maml_run_executor": {
-		Params: []Type{AnyType{}},
-		Return: AnyType{},
-	},
 	"maml_runtime_init": {
 		Params: []Type{},
 		Return: UnitType{},
 	},
+	"maml_alloc": {
+		Params: []Type{I64Type{}},
+		Return: PtrType{},
+	},
+	"maml_free": {
+		Params: []Type{PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_vec_create": {
+		Params: []Type{U32Type{}},
+		Return: PtrType{},
+	},
+	"maml_vec_push": {
+		Params: []Type{PtrType{}, PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_vec_set": {
+		Params: []Type{PtrType{}, U32Type{}, PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_vec_get": {
+		Params: []Type{PtrType{}, U32Type{}},
+		Return: PtrType{},
+	},
+	"maml_vec_len": {
+		Params: []Type{PtrType{}},
+		Return: U32Type{},
+	},
+	"maml_vec_clone": {
+		Params: []Type{PtrType{}, I64Type{}},
+		Return: PtrType{},
+	},
+	"maml_map_create": {
+		Params: []Type{U32Type{}, BoolType{}},
+		Return: PtrType{},
+	},
+	"maml_map_put": {
+		Params: []Type{PtrType{}, U32Type{}, PtrType{}, U32Type{}, I32Type{}, PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_map_get": {
+		Params: []Type{PtrType{}, U32Type{}, PtrType{}, U32Type{}},
+		Return: PtrType{},
+	},
+	"maml_map_delete": {
+		Params: []Type{PtrType{}, U32Type{}, PtrType{}, U32Type{}, I32Type{}},
+		Return: UnitType{},
+	},
+	"maml_map_len": {
+		Params: []Type{PtrType{}},
+		Return: U32Type{},
+	},
+	"maml_map_clone": {
+		Params: []Type{PtrType{}},
+		Return: PtrType{},
+	},
+	"maml_map_next_active": {
+		Params: []Type{PtrType{}, PtrType{}, PtrType{}},
+		Return: PtrType{},
+	},
+	"maml_str_hash": {
+		Params: []Type{PtrType{}, U32Type{}},
+		Return: U32Type{},
+	},
+	"maml_str_eq": {
+		Params: []Type{PtrType{}, U32Type{}, PtrType{}, U32Type{}},
+		Return: I32Type{},
+	},
+	"maml_str_clone": {
+		Params: []Type{PtrType{}, U32Type{}},
+		Return: PtrType{},
+	},
+	"maml_coro_resume_helper": {
+		Params: []Type{PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_coro_done_helper": {
+		Params: []Type{PtrType{}},
+		Return: BoolType{},
+	},
+	"maml_coro_destroy_helper": {
+		Params: []Type{PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_spawn_task": {
+		Params: []Type{PtrType{}},
+		Return: UnitType{},
+	},
+	"maml_run_executor": {
+		Params: []Type{PtrType{}},
+		Return: PtrType{},
+	},
 	"maml_task_await": {
-		Params: []Type{AnyType{}, AnyType{}},
+		Params: []Type{PtrType{}, PtrType{}},
 		Return: UnitType{},
 	},
 	"maml_task_release": {
-		Params: []Type{AnyType{}},
+		Params: []Type{PtrType{}},
 		Return: UnitType{},
 	},
 	"maml_task_get_result": {
-		Params: []Type{AnyType{}},
+		Params: []Type{PtrType{}},
 		Return: UnitType{},
 	},
 	"maml_yield_now": {
-		Params: []Type{AnyType{}},
+		Params: []Type{PtrType{}},
 		Return: UnitType{},
 	},
 	"maml_print": {
-		Params: []Type{AnyType{}, IntType{}},
+		Params: []Type{PtrType{}, I32Type{}},
 		Return: UnitType{},
 	},
 }

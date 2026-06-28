@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
-
-	"github.com/mattcarp12/maml/frontend/types"
 )
 
 func (p *Program) String() string {
@@ -18,15 +16,7 @@ func (p *Program) String() string {
 }
 
 func (p *Param) String() string {
-	// Relying strictly on the Symbol's ParamMode (0=Borrow, 1=MutBorrow, 2=Owned)
-	prefix := ""
-	if p.Symbol != nil {
-		switch p.Symbol.ParamMode {
-		case types.ParamMutBorrow:
-			prefix = "mut "
-		}
-	}
-	return fmt.Sprintf("%s%s %s", prefix, p.Name, p.Type.String())
+	return fmt.Sprintf("%s %s %s", p.Cap, p.Name, p.Type.String())
 }
 func (f *FnDecl) String() string {
 	var out bytes.Buffer
@@ -102,13 +92,12 @@ func (n *VariantLiteral) String() string { return n.Variant.Name + "(...)" }
 func (ce *CallExpr) String() string {
 	var args []string
 	for _, a := range ce.Arguments {
-		prefix := ""
-		if a.Mut {
-			prefix = "mut "
-		}
-		args = append(args, prefix+a.Argument.String())
+		args = append(args, a.String())
 	}
 	return fmt.Sprintf("%s(%s)", ce.Function.String(), strings.Join(args, ", "))
+}
+func (ca *CallArg) String() string {
+	return fmt.Sprintf("%s %s", ca.Cap, ca.Argument.String())
 }
 func (fa *FieldAccess) String() string {
 	return fmt.Sprintf("(%s).%s", fa.Object.String(), fa.Field.String())
@@ -197,6 +186,9 @@ func (d *DeclareStmt) String() string {
 	}
 	return fmt.Sprintf("%s%s := %s", modifier, d.Symbol.Name, d.Value.String())
 }
+func (ad *AliasDecl) String() string {
+	return fmt.Sprintf("%s := %s %s", ad.Symbol.Name, ad.Symbol.Cap, ad.Value.String())
+}
 func (a *AssignStmt) String() string {
 	return fmt.Sprintf("%s = %s", a.LValue.String(), a.RValue.String())
 }
@@ -232,6 +224,4 @@ func (f *ForStmt) String() string {
 }
 func (s *BreakStmt) String() string    { return "break" }
 func (s *ContinueStmt) String() string { return "continue" }
-func (f *OwnExpr) String() string      { return "own " + f.Value.String() }
-func (f *FreezeExpr) String() string   { return "freeze " + f.Value.String() }
 func (f *SpawnExpr) String() string    { return "spawn " + f.Value.String() }

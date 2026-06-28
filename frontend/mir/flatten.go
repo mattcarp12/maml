@@ -69,42 +69,23 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		return &Register{Name: tmp, Type: e.Type}, current
 
 	case *hir.IndexExpr:
-		flatLeft, current := b.flattenExpr(e.Left, current)
-		flatIndex, current := b.flattenExpr(e.Index, current)
-		tmp := b.emitTemp(current, e.Type)
-		current.Statements = append(current.Statements, &IndexReadInst{
-			Dst:        tmp,
-			Source:     flatLeft,
-			SourceType: hir.TypeOf(e.Left),
-			Index:      flatIndex,
-			Type:       e.Type,
+		// 1. Calculate the exact memory address of the index
+		ptrVal, nextBlock := b.flattenPlace(e, current)
+		current = nextBlock
+
+		// 2. Load the actual value from that memory address
+		valTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: e.Type})
+		current.Statements = append(current.Statements, &LoadPtrInst{
+			Dst:  valTmp,
+			Ptr:  ptrVal,
+			Type: e.Type,
 		})
-		return &Register{Name: tmp, Type: e.Type}, current
+
+		return &Register{Name: valTmp, Type: e.Type}, current
 
 	case *hir.CallExpr:
 		return b.flattenCall(e, current)
-
-	case *hir.OwnExpr:
-		root, path, current := b.flattenPlace(e.Value, current)
-		tmp := b.emitTemp(current, e.Type)
-		current.Statements = append(current.Statements, &OwnInst{
-			Dst:  tmp,
-			Root: root,
-			Path: path,
-			Type: e.Type,
-		})
-		return &Register{Name: tmp, Type: e.Type}, current
-
-	case *hir.FreezeExpr:
-		root, path, current := b.flattenPlace(e.Value, current)
-		tmp := b.emitTemp(current, e.Type)
-		current.Statements = append(current.Statements, &FreezeInst{
-			Dst:  tmp,
-			Root: root,
-			Path: path,
-			Type: e.Type,
-		})
-		return &Register{Name: tmp, Type: e.Type}, current
 
 	case *hir.AwaitExpr:
 		flatTask, current := b.flattenExpr(e.Value, current)
@@ -114,12 +95,10 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		regTmp := b.newTemp()
 		current.Statements = append(current.Statements, &TempDeclInst{Name: regTmp, Type: types.UnitType{}})
 		current.Statements = append(current.Statements, &CallInst{
-			Dst:      regTmp,
-			Function: &Register{Name: "maml_task_await", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatTask, Mut: false},
-			},
-			Type: types.UnitType{},
+			Dst:       regTmp,
+			Function:  &Register{Name: "maml_task_await", Type: types.UnknownType{}},
+			Arguments: []Value{flatTask},
+			Type:      types.UnitType{},
 		})
 
 		current.Terminator = &CoroSuspendTerminator{
@@ -133,12 +112,10 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		tmp := b.newTemp()
 		resumeBlock.Statements = append(resumeBlock.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
 		resumeBlock.Statements = append(resumeBlock.Statements, &CallInst{
-			Dst:      tmp,
-			Function: &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
-			Arguments: []MIRCallArg{
-				{Argument: flatTask, Mut: true},
-			},
-			Type: e.Type,
+			Dst:       tmp,
+			Function:  &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
+			Arguments: []Value{flatTask},
+			Type:      e.Type,
 		})
 		return &Register{Name: tmp, Type: e.Type}, resumeBlock
 
@@ -151,7 +128,17 @@ func (b *Builder) flattenExpr(expr hir.Expr, current *BasicBlock) (Value, *Basic
 		return b.flattenStructLiteral(e, current)
 
 	case *hir.FieldAccess:
-		return b.flattenFieldAccess(e, current)
+		// 1. Calculate the memory address of the field
+		ptrVal, current := b.flattenPlace(e, current)
+		// 2. Load the actual value from that address
+		valTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: e.Type})
+		current.Statements = append(current.Statements, &LoadPtrInst{
+			Dst:  valTmp,
+			Ptr:  ptrVal,
+			Type: e.Type,
+		})
+		return &Register{Name: valTmp, Type: e.Type}, current
 
 	case *hir.ArrayLiteral:
 		return b.flattenArrayLiteral(e, current)
@@ -325,29 +312,6 @@ func (b *Builder) flattenStructLiteral(e *hir.StructLiteral, current *BasicBlock
 	return &Register{Name: tmp, Type: t}, current
 }
 
-func (b *Builder) flattenFieldAccess(e *hir.FieldAccess, current *BasicBlock) (Value, *BasicBlock) {
-	flatObj, current := b.flattenExpr(e.Object, current)
-
-	fieldIndex := -1
-	if reg, ok := flatObj.(*Register); ok {
-		if st, ok := reg.Type.(*types.StructType); ok {
-			fieldIndex = st.GetFieldIndex(e.Field.Value)
-		}
-	}
-
-	tmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
-	current.Statements = append(current.Statements, &FieldReadInst{
-		Dst:        tmp,
-		Object:     flatObj,
-		FieldName:  e.Field.Value,
-		FieldIndex: fieldIndex,
-		Type:       e.Type,
-	})
-
-	return &Register{Name: tmp, Type: e.Type}, current
-}
-
 func (b *Builder) flattenIfExpr(expr *hir.IfExpr, current *BasicBlock) (Value, *BasicBlock) {
 	flatCond, current := b.flattenExpr(expr.Condition, current)
 
@@ -450,7 +414,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			current.Statements = append(current.Statements, &CallInst{
 				Dst:       tmp,
 				Function:  &Register{Name: "maml_yield_now", Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{},
+				Arguments: []Value{},
 				Type:      types.UnitType{},
 			})
 
@@ -476,7 +440,7 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 			current.Statements = append(current.Statements, &CallInst{
 				Dst:       resTmp,
 				Function:  &Register{Name: "maml_task_get_result", Type: types.UnknownType{}},
-				Arguments: []MIRCallArg{{Argument: flatArg, Mut: true}},
+				Arguments: []Value{flatArg},
 				Type:      e.Type,
 			})
 
@@ -504,53 +468,59 @@ func (b *Builder) flattenCall(e *hir.CallExpr, current *BasicBlock) (Value, *Bas
 		case "print":
 			flatArg, nextBlock := b.flattenExpr(e.Arguments[0].Argument, current)
 			current = nextBlock
-
-			strPtrTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: strPtrTmp, Type: types.AnyType{}})
-			current.Statements = append(current.Statements, &FieldReadInst{
-				Dst:        strPtrTmp,
-				Object:     flatArg,
-				FieldName:  "ptr",
-				FieldIndex: 0,
-				Type:       types.AnyType{},
-			})
-
-			strLenTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: strLenTmp, Type: types.IntType{}})
-			current.Statements = append(current.Statements, &FieldReadInst{
-				Dst:        strLenTmp,
-				Object:     flatArg,
-				FieldName:  "len",
-				FieldIndex: 1,
-				Type:       types.IntType{},
-			})
-
-			_, current = b.EmitMamlPrint(current, &Register{Name: strPtrTmp, Type: types.AnyType{}}, &Register{Name: strLenTmp, Type: types.IntType{}})
+			strPtrReg, current := b.emitStructFieldLoad(current, flatArg, "ptr", 0, types.PtrType{})
+			strLenReg, current := b.emitStructFieldLoad(current, flatArg, "len", 1, types.I64Type{})
+			_, current = b.EmitMamlPrint(current, strPtrReg, strLenReg)
 			return &Register{Name: "_unit", Type: types.UnitType{}}, current
 		}
 	}
 
 	flatFunc, current := b.flattenExpr(e.Function, current)
-
-	var flatArgs []MIRCallArg
+	var flatArgs []Value
 	for _, arg := range e.Arguments {
-		flatArgExpr, currentBlock := b.flattenExpr(arg.Argument, current)
-		current = currentBlock
-		flatArgs = append(flatArgs, MIRCallArg{
-			Argument: flatArgExpr,
-			Mut:      arg.Mut,
-		})
+		flatArg, nextBlock := b.flattenExpr(arg.Argument, current)
+		current = nextBlock
+
+		// 1. If it's a primitive implicit pass (CapNone), pass it directly.
+		if arg.Cap == types.CapNone || arg.Cap == "" {
+			flatArgs = append(flatArgs, flatArg)
+			continue
+		}
+
+		// 2. Otherwise, we must emit a MIR instruction so the Borrow Checker sees the boundary crossing!
+		argTmp := b.newTemp()
+		argType := hir.TypeOf(arg.Argument)
+		current.Statements = append(current.Statements, &TempDeclInst{Name: argTmp, Type: argType})
+
+		// Safely extract the source register name (Sema's isValidMemoryPath guarantees this is a Register)
+		srcReg, ok := flatArg.(*Register)
+		if !ok {
+			panic("compiler error: capability applied to non-register value at call site")
+		}
+
+		// 3. Emit the explicit memory transfer instruction
+		switch arg.Cap {
+		case types.CapMut:
+			current.Statements = append(current.Statements, &BorrowInst{Dst: argTmp, Src: srcReg.Name, IsMut: true})
+		case types.CapRo:
+			current.Statements = append(current.Statements, &BorrowInst{Dst: argTmp, Src: srcReg.Name, IsMut: false})
+		case types.CapOwn:
+			current.Statements = append(current.Statements, &MoveInst{Dst: argTmp, Src: srcReg.Name})
+		case types.CapCopy:
+			current.Statements = append(current.Statements, &CopyInst{Dst: argTmp, Src: srcReg.Name})
+		}
+
+		// 4. Pass the new, cleanly borrowed/moved temporary register to the function
+		flatArgs = append(flatArgs, &Register{Name: argTmp, Type: argType})
 	}
 
-	tmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: e.Type})
+	tmp := b.emitTemp(current, e.Type)
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:       tmp,
 		Function:  flatFunc,
 		Arguments: flatArgs,
 		Type:      e.Type,
 	})
-
 	return &Register{Name: tmp, Type: e.Type}, current
 }
 
@@ -619,23 +589,12 @@ func (b *Builder) flattenVecLiteral(e *hir.VecLiteral, current *BasicBlock) (Val
 	tmp := b.newTemp()
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
-
-	getHooks := func(t types.Type) (string, string) {
-		if t != nil && t.IsNeedsARC() {
-			return "maml_retain", "maml_release"
-		}
-		return "null", "null"
-	}
-	elemRetain, elemRelease := getHooks(t.Base)
-
 	createFn := &Register{Name: "maml_vec_create", Type: types.UnknownType{}}
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      tmp,
 		Function: createFn,
-		Arguments: []MIRCallArg{
-			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Base, b.Target, false)), Type: types.IntType{}}},
-			{Argument: &Register{Name: elemRetain, Type: types.UnknownType{}}},
-			{Argument: &Register{Name: elemRelease, Type: types.UnknownType{}}},
+		Arguments: []Value{
+			&IntConstant{Value: int64(layout.SizeOf(t.Base, b.Target)), Type: types.I64Type{}},
 		},
 		Type: t,
 	})
@@ -653,17 +612,6 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 	tmp := b.newTemp()
 	t := e.Type
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
-
-	getHooks := func(t types.Type) (string, string) {
-		if t != nil && t.IsNeedsARC() {
-			return "maml_retain", "maml_release"
-		}
-		return "null", "null"
-	}
-
-	keyRetain, keyRelease := getHooks(t.Key)
-	valRetain, valRelease := getHooks(t.Value)
-
 	isStrKey := int64(0)
 	if _, isStr := t.Key.(types.StringType); isStr {
 		isStrKey = 1
@@ -673,13 +621,9 @@ func (b *Builder) flattenMapLiteral(e *hir.MapLiteral, current *BasicBlock) (Val
 	current.Statements = append(current.Statements, &CallInst{
 		Dst:      tmp,
 		Function: createFn,
-		Arguments: []MIRCallArg{
-			{Argument: &IntConstant{Value: int64(layout.SizeOf(t.Value, b.Target, false)), Type: types.IntType{}}},
-			{Argument: &IntConstant{Value: isStrKey, Type: types.IntType{}}},
-			{Argument: &Register{Name: keyRetain, Type: types.UnknownType{}}},
-			{Argument: &Register{Name: keyRelease, Type: types.UnknownType{}}},
-			{Argument: &Register{Name: valRetain, Type: types.UnknownType{}}},
-			{Argument: &Register{Name: valRelease, Type: types.UnknownType{}}},
+		Arguments: []Value{
+			&IntConstant{Value: int64(layout.SizeOf(t.Value, b.Target)), Type: types.I64Type{}},
+			&IntConstant{Value: isStrKey, Type: types.I64Type{}},
 		},
 		Type: t,
 	})
@@ -701,14 +645,14 @@ func (b *Builder) lowerMapKey(keyExpr hir.Expr, current *BasicBlock) (hash, ptr,
 	keyType := hir.TypeOf(keyExpr)
 
 	switch keyType.(type) {
-	case types.IntType, *types.IntType:
+	case types.I64Type, *types.I64Type:
 		hashTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: hashTmp, Type: types.IntType{}})
-		current.Statements = append(current.Statements, &CastInst{Dst: hashTmp, Src: flatKey, Type: types.IntType{}})
+		current.Statements = append(current.Statements, &TempDeclInst{Name: hashTmp, Type: types.I64Type{}})
+		current.Statements = append(current.Statements, &CastInst{Dst: hashTmp, Src: flatKey, Type: types.I64Type{}})
 
-		hashVal := &Register{Name: hashTmp, Type: types.IntType{}}
+		hashVal := &Register{Name: hashTmp, Type: types.I64Type{}}
 		ptrVal := &IntConstant{Value: 0, Type: types.AnyType{}}
-		lenVal := &IntConstant{Value: 0, Type: types.IntType{}}
+		lenVal := &IntConstant{Value: 0, Type: types.I64Type{}}
 
 		return hashVal, ptrVal, lenVal, flatKey, current
 
@@ -717,24 +661,15 @@ func (b *Builder) lowerMapKey(keyExpr hir.Expr, current *BasicBlock) (hash, ptr,
 		current.Statements = append(current.Statements, &TempDeclInst{Name: keyTmp, Type: keyType})
 		current.Statements = append(current.Statements, &AssignInst{Dst: keyTmp, RValue: flatKey})
 		safeKey := &Register{Name: keyTmp, Type: keyType}
-
-		ptrTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: ptrTmp, Type: types.AnyType{}})
-		current.Statements = append(current.Statements, &FieldReadInst{Dst: ptrTmp, Object: safeKey, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{}})
-		ptrVal := &Register{Name: ptrTmp, Type: types.AnyType{}}
-
-		lenTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: lenTmp, Type: types.IntType{}})
-		current.Statements = append(current.Statements, &FieldReadInst{Dst: lenTmp, Object: safeKey, FieldName: "len", FieldIndex: 1, Type: types.IntType{}})
-		lenVal := &Register{Name: lenTmp, Type: types.IntType{}}
-
+		ptrVal, current := b.emitStructFieldLoad(current, safeKey, "ptr", 0, types.PtrType{})
+		lenVal, current := b.emitStructFieldLoad(current, safeKey, "len", 1, types.I64Type{})
 		hashVal, current := b.EmitMamlStrHash(current, ptrVal, lenVal)
 
-		intKeyVal := &IntConstant{Value: 0, Type: types.IntType{}}
+		intKeyVal := &IntConstant{Value: 0, Type: types.I64Type{}}
 		return hashVal, ptrVal, lenVal, intKeyVal, current
 
 	default:
-		return &IntConstant{Value: 0, Type: types.IntType{}}, &IntConstant{Value: 0, Type: types.AnyType{}}, &IntConstant{Value: 0, Type: types.IntType{}}, &IntConstant{Value: 0, Type: types.IntType{}}, current
+		return &IntConstant{Value: 0, Type: types.I64Type{}}, &IntConstant{Value: 0, Type: types.AnyType{}}, &IntConstant{Value: 0, Type: types.I64Type{}}, &IntConstant{Value: 0, Type: types.I64Type{}}, current
 	}
 }
 
@@ -749,36 +684,12 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value, c
 	current.Statements = append(current.Statements, &AssignInst{Dst: rightTmp, RValue: flatRight})
 	safeRight := &Register{Name: rightTmp, Type: types.StringType{}}
 
-	leftPtrTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: leftPtrTmp, Type: types.AnyType{}})
-	current.Statements = append(current.Statements, &FieldReadInst{
-		Dst: leftPtrTmp, Object: safeLeft, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{},
-	})
+	leftPtr, current := b.emitStructFieldLoad(current, safeLeft, "ptr", 0, types.PtrType{})
+	leftLen, current := b.emitStructFieldLoad(current, safeLeft, "len", 1, types.I64Type{})
+	rightPtr, current := b.emitStructFieldLoad(current, safeRight, "ptr", 0, types.PtrType{})
+	rightLen, current := b.emitStructFieldLoad(current, safeRight, "len", 1, types.I64Type{})
 
-	leftLenTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: leftLenTmp, Type: types.IntType{}})
-	current.Statements = append(current.Statements, &FieldReadInst{
-		Dst: leftLenTmp, Object: safeLeft, FieldName: "len", FieldIndex: 1, Type: types.IntType{},
-	})
-
-	rightPtrTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: rightPtrTmp, Type: types.AnyType{}})
-	current.Statements = append(current.Statements, &FieldReadInst{
-		Dst: rightPtrTmp, Object: safeRight, FieldName: "ptr", FieldIndex: 0, Type: types.AnyType{},
-	})
-
-	rightLenTmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: rightLenTmp, Type: types.IntType{}})
-	current.Statements = append(current.Statements, &FieldReadInst{
-		Dst: rightLenTmp, Object: safeRight, FieldName: "len", FieldIndex: 1, Type: types.IntType{},
-	})
-
-	callVal, current := b.EmitMamlStrEq(current,
-		&Register{Name: leftPtrTmp, Type: types.AnyType{}},
-		&Register{Name: leftLenTmp, Type: types.IntType{}},
-		&Register{Name: rightPtrTmp, Type: types.AnyType{}},
-		&Register{Name: rightLenTmp, Type: types.IntType{}},
-	)
+	callVal, current := b.EmitMamlStrEq(current, leftPtr, leftLen, rightPtr, rightLen)
 
 	boolTmp := b.newTemp()
 	current.Statements = append(current.Statements, &TempDeclInst{Name: boolTmp, Type: types.BoolType{}})
@@ -786,7 +697,7 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value, c
 		Dst:      boolTmp,
 		Operator: "!=",
 		Left:     callVal,
-		Right:    &IntConstant{Value: 0, Type: types.IntType{}},
+		Right:    &IntConstant{Value: 0, Type: types.I64Type{}},
 		Type:     types.BoolType{},
 	})
 
@@ -805,17 +716,88 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value, c
 	return &Register{Name: boolTmp, Type: types.BoolType{}}, current
 }
 
-// flattenPlace unwinds a field access chain to extract the root variable and the projection path.
-// If the expression is not a FieldAccess, it returns the flattened expression and an empty path.
-func (b *Builder) flattenPlace(expr hir.Expr, current *BasicBlock) (Value, []string, *BasicBlock) {
-	if fa, ok := expr.(*hir.FieldAccess); ok {
-		root, path, nextBlock := b.flattenPlace(fa.Object, current)
-		path = append(path, fa.Field.Value)
-		return root, path, nextBlock
-	}
+func (b *Builder) flattenPlace(expr hir.Expr, current *BasicBlock) (Value, *BasicBlock) {
+	switch e := expr.(type) {
+	case *hir.Identifier:
+		// The base of the address chain.
+		regName := e.Value
+		if e.Symbol != nil {
+			regName = b.getSymbolName(e.Symbol)
+		}
+		// This represents the pointer to the local variable.
+		return &Register{Name: regName, Type: e.Type}, current
 
-	// Base case: we've reached the root of the path.
-	// Flatten it normally to yield the root Value (e.g., a Register).
-	flatRoot, nextBlock := b.flattenExpr(expr, current)
-	return flatRoot, []string{}, nextBlock
+	case *hir.FieldAccess:
+		// 1. Get the pointer to the parent object recursively
+		basePtr, current := b.flattenPlace(e.Object, current)
+
+		// 2. Determine the field index
+		fieldIndex := -1
+		objType := hir.TypeOf(e.Object)
+		if st, ok := objType.(*types.StructType); ok {
+			fieldIndex = st.GetFieldIndex(e.Field.Value)
+		}
+
+		// 3. Emit the FieldAddrInst to calculate the new offset pointer
+		ptrTmp := b.newTemp()
+		// Note: You might want to wrap e.Type in a types.PointerType{} depending on your type system.
+		current.Statements = append(current.Statements, &TempDeclInst{Name: ptrTmp, Type: e.Type})
+		current.Statements = append(current.Statements, &FieldAddrInst{
+			Dst:        ptrTmp,
+			Object:     basePtr,
+			FieldName:  e.Field.Value,
+			FieldIndex: fieldIndex,
+			Type:       e.Type,
+		})
+		return &Register{Name: ptrTmp, Type: e.Type}, current
+
+	case *hir.IndexExpr:
+		// 1. Get the pointer to the base array/slice
+		basePtr, current := b.flattenPlace(e.Left, current)
+
+		// 2. Evaluate the index value (this is an R-Value, so use flattenExpr)
+		idxVal, current := b.flattenExpr(e.Index, current)
+
+		// 3. Emit the IndexAddrInst to calculate the offset pointer
+		ptrTmp := b.newTemp()
+		current.Statements = append(current.Statements, &TempDeclInst{Name: ptrTmp, Type: e.Type})
+		current.Statements = append(current.Statements, &IndexAddrInst{
+			Dst:        ptrTmp,
+			Source:     basePtr,
+			SourceType: hir.TypeOf(e.Left),
+			Index:      idxVal,
+			Type:       e.Type,
+		})
+
+		return &Register{Name: ptrTmp, Type: e.Type}, current
+
+	// Eventually, you can add *hir.IndexExpr here so arr[0] = 5 uses the exact same logic!
+	default:
+		panic(fmt.Sprintf("MIR Builder Error: Expression cannot be used as an L-Value: %T", expr))
+	}
+}
+
+// emitStructFieldLoad manually generates the Address + Load chain for builtin compiler ops.
+func (b *Builder) emitStructFieldLoad(current *BasicBlock, obj Value, fieldName string, fieldIndex int, fieldType types.Type) (Value, *BasicBlock) {
+	// 1. Get the exact memory address of the field
+	addrTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: addrTmp, Type: fieldType})
+	current.Statements = append(current.Statements, &FieldAddrInst{
+		Dst:        addrTmp,
+		Object:     obj,
+		FieldName:  fieldName,
+		FieldIndex: fieldIndex,
+		Type:       fieldType,
+	})
+
+	// 2. Load the value from that address
+	valTmp := b.newTemp()
+	current.Statements = append(current.Statements, &TempDeclInst{Name: valTmp, Type: fieldType})
+	current.Statements = append(current.Statements, &LoadPtrInst{
+		Dst:  valTmp,
+		Ptr:  &Register{Name: addrTmp, Type: fieldType},
+		Type: fieldType,
+	})
+
+	return &Register{Name: valTmp, Type: fieldType}, current
 }

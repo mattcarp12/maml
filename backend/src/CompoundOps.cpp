@@ -39,51 +39,12 @@ void handle(CodegenContext &ctx, const mir::VariantInitInst &inst) {
   }
 }
 
-void handle(CodegenContext &ctx, const mir::FieldReadInst &inst) {
-  llvm::Value *objVal = evaluateValue(ctx, inst.object);
-  if (!objVal) {
-    ctx.Error.fatal("field_read: Failed to evaluate object expression");
-    return;
-  }
-
-  llvm::Value *objPtr = nullptr;
-  llvm::Type *structTy = nullptr;
-
-  if (objVal->getType()->isPointerTy()) {
-    objPtr = objVal;
-    if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(objVal)) {
-      structTy = alloca->getAllocatedType();
-    } else if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
-      // FIX: Extract the true parent struct layout from the object's register type,
-      // instead of using the instruction's type (which belongs to the extracted field).
-      structTy = llvmTypeFor(ctx, reg->type);
-    } else {
-      ctx.Error.fatal("field_read: Unable to deduce parent struct layout for opaque pointer.");
-      return;
-    }
-  } else if (objVal->getType()->isStructTy()) {
-    llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
-    llvm::IRBuilder<> TmpBuilder(&F->getEntryBlock(), F->getEntryBlock().begin());
-    llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objVal->getType(), nullptr, "field_read_spill");
-    ctx.Builder->CreateStore(objVal, spillAlloca);
-    objPtr = spillAlloca;
-    structTy = objVal->getType();
-  } else {
-    ctx.Error.fatal("field_read: Invalid object pointer");
-    return;
-  }
-
-  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, inst.field_index, inst.dst + "_gep");
-  llvm::Type *fieldTy = llvmTypeFor(ctx, inst.type);
-  ctx.SymbolEnv.back()[inst.dst] = ctx.Builder->CreateLoad(fieldTy, fieldGep, inst.dst + "_val");
-}
-
-void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst) {
+void handle(CodegenContext &ctx, const mir::FieldAddrInst &inst) {
   llvm::Value *objPtr = nullptr;
   llvm::Type *structTy = nullptr;
 
   // 1. Try to fetch the underlying memory pointer directly from the symbol table
-  // This bypasses the auto-load mechanism, giving us the raw L-Value pointer for mutation!
+  // This bypasses the auto-load mechanism, giving us the raw L-Value pointer.
   if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
     if (llvm::Value *sym = ctx.resolveSymbol(reg->name)) {
       if (auto *alloca = llvm::dyn_cast<llvm::AllocaInst>(sym)) {
@@ -93,11 +54,11 @@ void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst) {
     }
   }
 
-  // 2. If it's not a local stack variable, evaluate it normally (handles heap pointers & views)
+  // 2. If it wasn't a local stack variable, evaluate it (handles nested places or pointers)
   if (!objPtr) {
     llvm::Value *objVal = evaluateValue(ctx, inst.object);
     if (!objVal) {
-      ctx.Error.fatal("field_write: Failed to evaluate object expression");
+      ctx.Error.fatal("field_addr: Failed to evaluate object expression");
       return;
     }
 
@@ -108,21 +69,29 @@ void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst) {
       } else if (auto *reg = std::get_if<mir::Register>(&inst.object.inner)) {
         structTy = llvmTypeFor(ctx, reg->type);
       } else {
-        ctx.Error.fatal("field_write: Unable to deduce parent struct layout for opaque pointer.");
+        ctx.Error.fatal("field_addr: Unable to deduce parent struct layout for opaque pointer.");
         return;
       }
+    } else if (objVal->getType()->isStructTy()) {
+      // If the base object is an SSA value, we MUST spill it to memory so we can GEP into it.
+      llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+      llvm::IRBuilder<> TmpBuilder(&F->getEntryBlock(), F->getEntryBlock().begin());
+      llvm::AllocaInst *spillAlloca = TmpBuilder.CreateAlloca(objVal->getType(), nullptr, inst.dst + "_spill");
+      ctx.Builder->CreateStore(objVal, spillAlloca);
+      objPtr = spillAlloca;
+      structTy = objVal->getType();
     } else {
-      ctx.Error.fatal("field_write: Cannot mutate a by-value struct. It must be stored in memory.");
+      ctx.Error.fatal("field_addr: Invalid object base for address calculation");
       return;
     }
   }
 
-  // Generate the GEP (GetElementPtr) to find the exact byte offset of the field
-  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, inst.field_index, "field_write_gep");
+  // 3. Generate the GEP (GetElementPtr) to find the exact memory address of the field
+  llvm::Value *fieldGep = ctx.Builder->CreateStructGEP(structTy, objPtr, inst.field_index, inst.dst + "_gep");
 
-  // Evaluate the right-hand side and store it directly into the memory location
-  llvm::Value *writeVal = evaluateValue(ctx, inst.value);
-  ctx.Builder->CreateStore(writeVal, fieldGep);
+  // 4. Bind the resulting pointer to the destination register!
+  // Subsequent LoadPtrInst or StoreInst will look up this register and find the raw pointer.
+  ctx.SymbolEnv.back()[inst.dst] = fieldGep;
 }
 
 void handle(CodegenContext &ctx, const mir::VariantDiscriminantInst &inst) {

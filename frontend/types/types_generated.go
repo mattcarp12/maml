@@ -4,22 +4,152 @@ package types
 type Type interface {
 	isType()
 	IsReferenceType() bool
-	IsNeedsARC() bool
 	String() string
 	Equals(Type) bool
 }
 
 // --- Primitives ---
-type IntType struct{}
+type I8Type struct{}
 
-func (t IntType) isType()               {}
-func (t IntType) IsReferenceType() bool { return false }
-func (t IntType) IsNeedsARC() bool      { return false }
-func (t IntType) Equals(other Type) bool {
+func (t I8Type) isType()               {}
+func (t I8Type) IsReferenceType() bool { return false }
+func (t I8Type) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
 	}
-	_, ok := other.(IntType)
+	_, ok := other.(I8Type)
+	return ok
+}
+
+type I16Type struct{}
+
+func (t I16Type) isType()               {}
+func (t I16Type) IsReferenceType() bool { return false }
+func (t I16Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(I16Type)
+	return ok
+}
+
+type I32Type struct{}
+
+func (t I32Type) isType()               {}
+func (t I32Type) IsReferenceType() bool { return false }
+func (t I32Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(I32Type)
+	return ok
+}
+
+type I64Type struct{}
+
+func (t I64Type) isType()               {}
+func (t I64Type) IsReferenceType() bool { return false }
+func (t I64Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(I64Type)
+	return ok
+}
+
+type I128Type struct{}
+
+func (t I128Type) isType()               {}
+func (t I128Type) IsReferenceType() bool { return false }
+func (t I128Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(I128Type)
+	return ok
+}
+
+type U8Type struct{}
+
+func (t U8Type) isType()               {}
+func (t U8Type) IsReferenceType() bool { return false }
+func (t U8Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(U8Type)
+	return ok
+}
+
+type U16Type struct{}
+
+func (t U16Type) isType()               {}
+func (t U16Type) IsReferenceType() bool { return false }
+func (t U16Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(U16Type)
+	return ok
+}
+
+type U32Type struct{}
+
+func (t U32Type) isType()               {}
+func (t U32Type) IsReferenceType() bool { return false }
+func (t U32Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(U32Type)
+	return ok
+}
+
+type U64Type struct{}
+
+func (t U64Type) isType()               {}
+func (t U64Type) IsReferenceType() bool { return false }
+func (t U64Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(U64Type)
+	return ok
+}
+
+type U128Type struct{}
+
+func (t U128Type) isType()               {}
+func (t U128Type) IsReferenceType() bool { return false }
+func (t U128Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(U128Type)
+	return ok
+}
+
+type F32Type struct{}
+
+func (t F32Type) isType()               {}
+func (t F32Type) IsReferenceType() bool { return false }
+func (t F32Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(F32Type)
+	return ok
+}
+
+type F64Type struct{}
+
+func (t F64Type) isType()               {}
+func (t F64Type) IsReferenceType() bool { return false }
+func (t F64Type) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(F64Type)
 	return ok
 }
 
@@ -27,7 +157,6 @@ type BoolType struct{}
 
 func (t BoolType) isType()               {}
 func (t BoolType) IsReferenceType() bool { return false }
-func (t BoolType) IsNeedsARC() bool      { return false }
 func (t BoolType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -36,11 +165,22 @@ func (t BoolType) Equals(other Type) bool {
 	return ok
 }
 
+type CharType struct{}
+
+func (t CharType) isType()               {}
+func (t CharType) IsReferenceType() bool { return false }
+func (t CharType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(CharType)
+	return ok
+}
+
 type UnitType struct{}
 
 func (t UnitType) isType()               {}
 func (t UnitType) IsReferenceType() bool { return false }
-func (t UnitType) IsNeedsARC() bool      { return false }
 func (t UnitType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -52,8 +192,7 @@ func (t UnitType) Equals(other Type) bool {
 type StringType struct{}
 
 func (t StringType) isType()               {}
-func (t StringType) IsReferenceType() bool { return true }
-func (t StringType) IsNeedsARC() bool      { return true }
+func (t StringType) IsReferenceType() bool { return false }
 func (t StringType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -65,8 +204,7 @@ func (t StringType) Equals(other Type) bool {
 type AnyType struct{}
 
 func (t AnyType) isType()               {}
-func (t AnyType) IsReferenceType() bool { return true }
-func (t AnyType) IsNeedsARC() bool      { return false }
+func (t AnyType) IsReferenceType() bool { return false }
 func (t AnyType) Equals(other Type) bool {
 	return true
 }
@@ -75,7 +213,6 @@ type UnknownType struct{}
 
 func (t UnknownType) isType()               {}
 func (t UnknownType) IsReferenceType() bool { return false }
-func (t UnknownType) IsNeedsARC() bool      { return false }
 func (t UnknownType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -87,8 +224,7 @@ func (t UnknownType) Equals(other Type) bool {
 type PtrType struct{}
 
 func (t PtrType) isType()               {}
-func (t PtrType) IsReferenceType() bool { return true }
-func (t PtrType) IsNeedsARC() bool      { return false }
+func (t PtrType) IsReferenceType() bool { return false }
 func (t PtrType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -106,15 +242,6 @@ type StructType struct {
 
 func (t *StructType) isType()               {}
 func (t *StructType) IsReferenceType() bool { return false }
-func (t *StructType) IsNeedsARC() bool {
-	for _, f := range t.Fields {
-		if f.Type != nil && f.Type.IsNeedsARC() {
-			return true
-		}
-	}
-	return false
-
-}
 func (t *StructType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -137,9 +264,6 @@ type SumType struct {
 
 func (t *SumType) isType()               {}
 func (t *SumType) IsReferenceType() bool { return false }
-func (t *SumType) IsNeedsARC() bool {
-	return false
-}
 func (t *SumType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -162,9 +286,6 @@ type ArrayType struct {
 
 func (t *ArrayType) isType()               {}
 func (t *ArrayType) IsReferenceType() bool { return true }
-func (t *ArrayType) IsNeedsARC() bool {
-	return t.Base != nil && t.Base.IsNeedsARC()
-}
 func (t *ArrayType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -187,14 +308,12 @@ func (t *ArrayType) Equals(other Type) bool {
 }
 
 type ViewType struct {
-	Base Type
+	Base  Type
+	IsMut bool
 }
 
 func (t *ViewType) isType()               {}
 func (t *ViewType) IsReferenceType() bool { return true }
-func (t *ViewType) IsNeedsARC() bool {
-	return false
-}
 func (t *ViewType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -219,9 +338,6 @@ type VectorType struct {
 
 func (t *VectorType) isType()               {}
 func (t *VectorType) IsReferenceType() bool { return true }
-func (t *VectorType) IsNeedsARC() bool {
-	return true
-}
 func (t *VectorType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -247,9 +363,6 @@ type MapType struct {
 
 func (t *MapType) isType()               {}
 func (t *MapType) IsReferenceType() bool { return true }
-func (t *MapType) IsNeedsARC() bool {
-	return true
-}
 func (t *MapType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
@@ -281,14 +394,107 @@ type FutureType struct {
 
 func (t *FutureType) isType()               {}
 func (t *FutureType) IsReferenceType() bool { return true }
-func (t *FutureType) IsNeedsARC() bool {
-	return true
-}
 func (t *FutureType) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok {
 		return true
 	}
 	o, ok := other.(*FutureType)
+	if !ok {
+		return false
+	}
+	if t.Base != nil && o.Base != nil {
+		if !t.Base.Equals(o.Base) {
+			return false
+		}
+	} else if t.Base != o.Base {
+		return false
+	}
+	return true
+}
+
+type RefType struct {
+	Base Type
+}
+
+func (t *RefType) isType()               {}
+func (t *RefType) IsReferenceType() bool { return true }
+func (t *RefType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	o, ok := other.(*RefType)
+	if !ok {
+		return false
+	}
+	if t.Base != nil && o.Base != nil {
+		if !t.Base.Equals(o.Base) {
+			return false
+		}
+	} else if t.Base != o.Base {
+		return false
+	}
+	return true
+}
+
+type WeakRefType struct {
+	Base Type
+}
+
+func (t *WeakRefType) isType()               {}
+func (t *WeakRefType) IsReferenceType() bool { return true }
+func (t *WeakRefType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	o, ok := other.(*WeakRefType)
+	if !ok {
+		return false
+	}
+	if t.Base != nil && o.Base != nil {
+		if !t.Base.Equals(o.Base) {
+			return false
+		}
+	} else if t.Base != o.Base {
+		return false
+	}
+	return true
+}
+
+type SenderType struct {
+	Base Type
+}
+
+func (t *SenderType) isType()               {}
+func (t *SenderType) IsReferenceType() bool { return true }
+func (t *SenderType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	o, ok := other.(*SenderType)
+	if !ok {
+		return false
+	}
+	if t.Base != nil && o.Base != nil {
+		if !t.Base.Equals(o.Base) {
+			return false
+		}
+	} else if t.Base != o.Base {
+		return false
+	}
+	return true
+}
+
+type ReceiverType struct {
+	Base Type
+}
+
+func (t *ReceiverType) isType()               {}
+func (t *ReceiverType) IsReferenceType() bool { return true }
+func (t *ReceiverType) Equals(other Type) bool {
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	o, ok := other.(*ReceiverType)
 	if !ok {
 		return false
 	}

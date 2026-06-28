@@ -81,7 +81,7 @@ void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
 }
 
 static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
-  llvm::Value *hdl = evaluateValue(ctx, inst.arguments[0].argument);
+  llvm::Value *hdl = evaluateValue(ctx, inst.arguments[0]);
 
   llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
   llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
@@ -112,7 +112,7 @@ static std::vector<llvm::Value *> prepareCallArguments(CodegenContext &ctx, cons
   size_t i = 0;
 
   for (const auto &argWrapper : inst.arguments) {
-    llvm::Value *argVal = evaluateValue(ctx, argWrapper.argument);
+    llvm::Value *argVal = evaluateValue(ctx, argWrapper);
 
     if (FT && i < FT->getNumParams()) {
       llvm::Type *expectedTy = FT->getParamType(i);
@@ -181,7 +181,7 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
     llvm::Type *expectedRetTy = llvmTypeFor(ctx, inst.type);
     std::vector<llvm::Type *> expectedArgTys;
     for (const auto &argWrapper : inst.arguments) {
-      expectedArgTys.push_back(evaluateValue(ctx, argWrapper.argument)->getType());
+      expectedArgTys.push_back(evaluateValue(ctx, argWrapper)->getType());
     }
     FT = llvm::FunctionType::get(expectedRetTy, expectedArgTys, false);
   }

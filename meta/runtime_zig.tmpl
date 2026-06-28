@@ -4,8 +4,8 @@ const rt = @import("runtime.zig");
 
 comptime {
 {{- range .Functions }}
-    if (@TypeOf(rt.{{ .Symbol }}) != fn ({{ join .ArgsZig ", " }}) callconv(.c) {{ .ReturnZig }}) {
-        @compileError("ABI Mismatch: rt.{{ .Symbol }} must have signature fn ({{ join .ArgsZig ", " }}) callconv(.c) {{ .ReturnZig }}");
+    if (@TypeOf(rt.{{ if .ZigModule }}{{ .ZigModule }}.{{ end }}{{ .Symbol }}) != fn ({{ join .ArgsZig ", " }}) callconv(.c) {{ .ReturnZig }}) {
+        @compileError("ABI Mismatch: rt.{{ if .ZigModule }}{{ .ZigModule }}.{{ end }}{{ .Symbol }} must have signature fn ({{ join .ArgsZig ", " }}) callconv(.c) {{ .ReturnZig }}");
     }
 {{- end }}
 }

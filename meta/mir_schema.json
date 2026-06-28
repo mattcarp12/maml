@@ -40,47 +40,11 @@
         "Type": "types.Type"
       }
     },
-    "AssignInst": {
+    "FieldAddrInst": {
       "interfaces": [
         "Instruction"
       ],
-      "opcode": "assign",
-      "fields": {
-        "Dst": "string",
-        "RValue": "Value"
-      }
-    },
-    "IndexAssignInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "index_assign",
-      "fields": {
-        "Target": "string",
-        "TargetType": "types.Type",
-        "Index": "Value",
-        "Value": "Value"
-      }
-    },
-    "StructInitInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "struct_init",
-      "fields": {
-        "Dst": "string",
-        "FieldName": "string",
-        "FieldIndex": "int",
-        "FieldOffset": "int",
-        "Value": "Value",
-        "VariantLayout": "[]types.Type"
-      }
-    },
-    "FieldReadInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "field_read",
+      "opcode": "field_addr",
       "fields": {
         "Dst": "string",
         "Object": "Value",
@@ -91,13 +55,36 @@
         "VariantLayout": "[]types.Type"
       }
     },
-    "FieldWriteInst": {
+    "IndexAddrInst": {
       "interfaces": [
         "Instruction"
       ],
-      "opcode": "field_write",
+      "opcode": "index_addr",
       "fields": {
-        "Object": "Value",
+        "Dst": "string",
+        "Source": "Value",
+        "SourceType": "types.Type",
+        "Index": "Value",
+        "Type": "types.Type"
+      }
+    },
+    "AssignInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "assign",
+      "fields": {
+        "Dst": "string",
+        "RValue": "Value"
+      }
+    },
+    "StructInitInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "struct_init",
+      "fields": {
+        "Dst": "string",
         "FieldName": "string",
         "FieldIndex": "int",
         "FieldOffset": "int",
@@ -155,19 +142,6 @@
         "Type": "types.Type"
       }
     },
-    "IndexReadInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "index_read",
-      "fields": {
-        "Dst": "string",
-        "Source": "Value",
-        "SourceType": "types.Type",
-        "Index": "Value",
-        "Type": "types.Type"
-      }
-    },
     "CallInst": {
       "interfaces": [
         "Instruction"
@@ -176,35 +150,9 @@
       "fields": {
         "Dst": "string",
         "Function": "Value",
-        "Arguments": "[]MIRCallArg",
+        "Arguments": "[]Value",
         "Type": "types.Type"
       }
-    },
-    "OwnInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "own",
-      "fields": {
-        "Dst": "string",
-        "Root": "Value",
-        "Path": "[]string",
-        "Type": "types.Type"
-      },
-      "emitCpp": false
-    },
-    "FreezeInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "freeze",
-      "fields": {
-        "Dst": "string",
-        "Root": "Value",
-        "Path": "[]string",
-        "Type": "types.Type"
-      },
-      "emitCpp": false
     },
     "VariantInitInst": {
       "interfaces": [
@@ -306,44 +254,26 @@
         "Src": "string"
       }
     },
-    "RefAllocInst": {
+    "BorrowInst": {
       "interfaces": [
         "Instruction"
       ],
-      "opcode": "ref_alloc",
+      "opcode": "borrow",
       "fields": {
         "Dst": "string",
-        "Type": "types.Type"
-      }
-    },
-    "RefIncInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "ref_inc",
-      "fields": {
-        "Src": "string"
-      }
-    },
-    "RefDecInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "ref_dec",
-      "fields": {
-        "Src": "string"
-      }
-    },
-    "MutBorrowInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "mut_borrow",
-      "fields": {
         "Src": "string",
-        "Dst": "string"
+        "IsMut": "bool"
       },
       "emitCpp": false
+    },
+    "DropInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "drop",
+      "fields": {
+        "Src": "string"
+      }
     },
     "CoroPrologueInst": {
       "interfaces": [
@@ -416,12 +346,5 @@
       "opcode": "coro_yield"
     }
   },
-  "helpers": {
-    "MIRCallArg": {
-      "fields": {
-        "Argument": "Value",
-        "Mut": "bool"
-      }
-    }
-  }
+  "helpers": {}
 }

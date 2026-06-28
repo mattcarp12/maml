@@ -39,10 +39,6 @@ using ValueVariant = std::variant<BoolConstant, IntConstant, Register, StringCon
 struct Value {
     ValueVariant inner;
 };
-struct MIRCallArg {
-    Value argument;
-    bool mut;
-};
 struct ArrayInitInst {
     std::string dst;
     int32_t index;
@@ -60,7 +56,7 @@ struct BinaryOpInst {
     std::shared_ptr<maml::Type> type;
 };
 struct CallInst {
-    std::vector<MIRCallArg> arguments;
+    std::vector<Value> arguments;
     std::string dst;
     Value function;
     std::shared_ptr<maml::Type> type;
@@ -76,7 +72,10 @@ struct CopyInst {
 };
 struct CoroPrologueInst {
 };
-struct FieldReadInst {
+struct DropInst {
+    std::string src;
+};
+struct FieldAddrInst {
     std::string dst;
     int32_t field_index;
     std::string field_name;
@@ -85,21 +84,7 @@ struct FieldReadInst {
     std::shared_ptr<maml::Type> type;
     std::vector<std::shared_ptr<maml::Type>> variant_layout;
 };
-struct FieldWriteInst {
-    int32_t field_index;
-    std::string field_name;
-    int32_t field_offset;
-    Value object;
-    Value value;
-    std::vector<std::shared_ptr<maml::Type>> variant_layout;
-};
-struct IndexAssignInst {
-    Value index;
-    std::string target;
-    std::shared_ptr<maml::Type> target_type;
-    Value value;
-};
-struct IndexReadInst {
+struct IndexAddrInst {
     std::string dst;
     Value index;
     Value source;
@@ -113,16 +98,6 @@ struct LoadPtrInst {
 };
 struct MoveInst {
     std::string dst;
-    std::string src;
-};
-struct RefAllocInst {
-    std::string dst;
-    std::shared_ptr<maml::Type> type;
-};
-struct RefDecInst {
-    std::string src;
-};
-struct RefIncInst {
     std::string src;
 };
 struct SliceInst {
@@ -176,7 +151,7 @@ struct VariantReadInst {
     std::string variant_name;
 };
 
-using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldReadInst, FieldWriteInst, IndexAssignInst, IndexReadInst, LoadPtrInst, MoveInst, RefAllocInst, RefDecInst, RefIncInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
+using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, DropInst, FieldAddrInst, IndexAddrInst, LoadPtrInst, MoveInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
 >;
 
 struct Instruction {
@@ -243,7 +218,6 @@ void from_json(const nlohmann::json& j, BoolConstant& t);
 void from_json(const nlohmann::json& j, IntConstant& t);
 void from_json(const nlohmann::json& j, Register& t);
 void from_json(const nlohmann::json& j, StringConstant& t);
-void from_json(const nlohmann::json& j, MIRCallArg& t);
 void from_json(const nlohmann::json& j, ArrayInitInst& t);
 void from_json(const nlohmann::json& j, AssignInst& t);
 void from_json(const nlohmann::json& j, BinaryOpInst& t);
@@ -251,15 +225,11 @@ void from_json(const nlohmann::json& j, CallInst& t);
 void from_json(const nlohmann::json& j, CastInst& t);
 void from_json(const nlohmann::json& j, CopyInst& t);
 void from_json(const nlohmann::json& j, CoroPrologueInst& t);
-void from_json(const nlohmann::json& j, FieldReadInst& t);
-void from_json(const nlohmann::json& j, FieldWriteInst& t);
-void from_json(const nlohmann::json& j, IndexAssignInst& t);
-void from_json(const nlohmann::json& j, IndexReadInst& t);
+void from_json(const nlohmann::json& j, DropInst& t);
+void from_json(const nlohmann::json& j, FieldAddrInst& t);
+void from_json(const nlohmann::json& j, IndexAddrInst& t);
 void from_json(const nlohmann::json& j, LoadPtrInst& t);
 void from_json(const nlohmann::json& j, MoveInst& t);
-void from_json(const nlohmann::json& j, RefAllocInst& t);
-void from_json(const nlohmann::json& j, RefDecInst& t);
-void from_json(const nlohmann::json& j, RefIncInst& t);
 void from_json(const nlohmann::json& j, SliceInst& t);
 void from_json(const nlohmann::json& j, StoreInst& t);
 void from_json(const nlohmann::json& j, StructInitInst& t);
@@ -316,14 +286,6 @@ inline void from_json(const nlohmann::json& j, StringConstant& t) {
     }
     if (j.contains("value") && !j.at("value").is_null()) {
         j.at("value").get_to(t.value);
-    }
-}
-inline void from_json(const nlohmann::json& j, MIRCallArg& t) {
-    if (j.contains("argument") && !j.at("argument").is_null()) {
-        j.at("argument").get_to(t.argument);
-    }
-    if (j.contains("mut") && !j.at("mut").is_null()) {
-        j.at("mut").get_to(t.mut);
     }
 }
 inline void from_json(const nlohmann::json& j, ArrayInitInst& t) {
@@ -397,7 +359,12 @@ inline void from_json(const nlohmann::json& j, CopyInst& t) {
 }
 inline void from_json(const nlohmann::json& j, CoroPrologueInst& t) {
 }
-inline void from_json(const nlohmann::json& j, FieldReadInst& t) {
+inline void from_json(const nlohmann::json& j, DropInst& t) {
+    if (j.contains("src") && !j.at("src").is_null()) {
+        j.at("src").get_to(t.src);
+    }
+}
+inline void from_json(const nlohmann::json& j, FieldAddrInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
     }
@@ -420,41 +387,7 @@ inline void from_json(const nlohmann::json& j, FieldReadInst& t) {
         j.at("variant_layout").get_to(t.variant_layout);
     }
 }
-inline void from_json(const nlohmann::json& j, FieldWriteInst& t) {
-    if (j.contains("field_index") && !j.at("field_index").is_null()) {
-        j.at("field_index").get_to(t.field_index);
-    }
-    if (j.contains("field_name") && !j.at("field_name").is_null()) {
-        j.at("field_name").get_to(t.field_name);
-    }
-    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
-        j.at("field_offset").get_to(t.field_offset);
-    }
-    if (j.contains("object") && !j.at("object").is_null()) {
-        j.at("object").get_to(t.object);
-    }
-    if (j.contains("value") && !j.at("value").is_null()) {
-        j.at("value").get_to(t.value);
-    }
-    if (j.contains("variant_layout") && !j.at("variant_layout").is_null()) {
-        j.at("variant_layout").get_to(t.variant_layout);
-    }
-}
-inline void from_json(const nlohmann::json& j, IndexAssignInst& t) {
-    if (j.contains("index") && !j.at("index").is_null()) {
-        j.at("index").get_to(t.index);
-    }
-    if (j.contains("target") && !j.at("target").is_null()) {
-        j.at("target").get_to(t.target);
-    }
-    if (j.contains("target_type") && !j.at("target_type").is_null()) {
-        j.at("target_type").get_to(t.target_type);
-    }
-    if (j.contains("value") && !j.at("value").is_null()) {
-        j.at("value").get_to(t.value);
-    }
-}
-inline void from_json(const nlohmann::json& j, IndexReadInst& t) {
+inline void from_json(const nlohmann::json& j, IndexAddrInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
     }
@@ -486,24 +419,6 @@ inline void from_json(const nlohmann::json& j, MoveInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
     }
-    if (j.contains("src") && !j.at("src").is_null()) {
-        j.at("src").get_to(t.src);
-    }
-}
-inline void from_json(const nlohmann::json& j, RefAllocInst& t) {
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
-    }
-}
-inline void from_json(const nlohmann::json& j, RefDecInst& t) {
-    if (j.contains("src") && !j.at("src").is_null()) {
-        j.at("src").get_to(t.src);
-    }
-}
-inline void from_json(const nlohmann::json& j, RefIncInst& t) {
     if (j.contains("src") && !j.at("src").is_null()) {
         j.at("src").get_to(t.src);
     }
@@ -709,15 +624,11 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "cast") { inst.inner = j.get<CastInst>(); return; }
     if (op == "copy") { inst.inner = j.get<CopyInst>(); return; }
     if (op == "coro_prologue") { inst.inner = j.get<CoroPrologueInst>(); return; }
-    if (op == "field_read") { inst.inner = j.get<FieldReadInst>(); return; }
-    if (op == "field_write") { inst.inner = j.get<FieldWriteInst>(); return; }
-    if (op == "index_assign") { inst.inner = j.get<IndexAssignInst>(); return; }
-    if (op == "index_read") { inst.inner = j.get<IndexReadInst>(); return; }
+    if (op == "drop") { inst.inner = j.get<DropInst>(); return; }
+    if (op == "field_addr") { inst.inner = j.get<FieldAddrInst>(); return; }
+    if (op == "index_addr") { inst.inner = j.get<IndexAddrInst>(); return; }
     if (op == "load_ptr") { inst.inner = j.get<LoadPtrInst>(); return; }
     if (op == "move") { inst.inner = j.get<MoveInst>(); return; }
-    if (op == "ref_alloc") { inst.inner = j.get<RefAllocInst>(); return; }
-    if (op == "ref_dec") { inst.inner = j.get<RefDecInst>(); return; }
-    if (op == "ref_inc") { inst.inner = j.get<RefIncInst>(); return; }
     if (op == "slice_read") { inst.inner = j.get<SliceInst>(); return; }
     if (op == "store") { inst.inner = j.get<StoreInst>(); return; }
     if (op == "struct_init") { inst.inner = j.get<StructInitInst>(); return; }

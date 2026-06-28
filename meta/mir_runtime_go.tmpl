@@ -21,9 +21,9 @@ func (b *Builder) Emit{{ .CamelName }}(current *BasicBlock{{ range $i, $arg := .
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: types.{{ .ConstName }}, Type: types.UnknownType{}},
-		Arguments: []MIRCallArg{
+		Arguments: []Value{
 			{{- range $i, $arg := .Args }}
-			{Argument: arg{{ $i }}{{ if .IsMut }}, Mut: true{{ end }}},
+			arg{{ $i }},
 			{{- end }}
 		},
 		Type: types.{{ .ReturnGo }},

@@ -1,7 +1,6 @@
 #include <llvm/IR/Intrinsics.h>
 
 #include "ExprGenerator.hpp"
-#include "RuntimeConstants.h"
 #include "TypeLowering.hpp"
 
 namespace maml {
@@ -43,7 +42,8 @@ void handle(CodegenContext &ctx, const mir::CopyInst &inst) {
   if (!dstPtr || !srcVal) return;
 
   // Check if the symbol is a true memory allocation, or an overwritten SSA value
-  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
+  llvm::Value *rawSym = ctx.resolveSymbol(inst.src);
+  bool srcIsMemory = rawSym->getType()->isPointerTy();
 
   if (srcIsMemory) {
     llvm::Type *ty = ctx.SymbolTypes[inst.src];
@@ -59,70 +59,14 @@ void handle(CodegenContext &ctx, const mir::MoveInst &inst) {
   llvm::Value *dstPtr = ctx.getMemoryBase(inst.dst);
   llvm::Value *srcVal = ctx.getMemoryBase(inst.src);
   if (!dstPtr || !srcVal) return;
-
-  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
-
+  llvm::Value *rawSym = ctx.resolveSymbol(inst.src);
+  bool srcIsMemory = rawSym->getType()->isPointerTy();
   if (srcIsMemory) {
     llvm::Type *ty = ctx.SymbolTypes[inst.src];
     llvm::Value *loaded = ctx.Builder->CreateLoad(ty, srcVal, inst.src + "_move_load");
     ctx.Builder->CreateStore(loaded, dstPtr);
-
-    // Null out source memory to prevent Use-After-Free during frontend cleanup
-    llvm::Value *nullVal = llvm::Constant::getNullValue(ty);
-    ctx.Builder->CreateStore(nullVal, srcVal);
   } else {
-    // SSA values don't hold backing allocations locally, so just store the value
     ctx.Builder->CreateStore(srcVal, dstPtr);
-  }
-}
-
-void handle(CodegenContext &ctx, const mir::RefDecInst &inst) {
-  llvm::Value *basePtr = ctx.getMemoryBase(inst.src);
-  if (!basePtr) return;
-
-  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
-  llvm::Type *ty = ctx.SymbolTypes[inst.src];
-
-  llvm::Value *valToManage = basePtr;
-  if (srcIsMemory) {
-    valToManage = ctx.Builder->CreateLoad(ty, basePtr, inst.src + "_release_load");
-  }
-
-  llvm::Value *rawPtr = nullptr;
-  if (ty->isStructTy()) {
-    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0}, inst.src + "_raw_ptr");
-  } else if (ty->isPointerTy()) {
-    rawPtr = valToManage;
-  }
-
-  if (rawPtr) {
-    llvm::Function *releaseFn = ctx.Module->getFunction("maml_release");
-    ctx.Builder->CreateCall(releaseFn, rawPtr);
-  }
-}
-
-void handle(CodegenContext &ctx, const mir::RefIncInst &inst) {
-  llvm::Value *basePtr = ctx.getMemoryBase(inst.src);
-  if (!basePtr) return;
-
-  bool srcIsMemory = llvm::isa<llvm::AllocaInst>(ctx.resolveSymbol(inst.src));
-  llvm::Type *ty = ctx.SymbolTypes[inst.src];
-
-  llvm::Value *valToManage = basePtr;
-  if (srcIsMemory) {
-    valToManage = ctx.Builder->CreateLoad(ty, basePtr, inst.src + "_retain_load");
-  }
-
-  llvm::Value *rawPtr = nullptr;
-  if (ty->isStructTy()) {
-    rawPtr = ctx.Builder->CreateExtractValue(valToManage, {0});
-  } else if (ty->isPointerTy()) {
-    rawPtr = valToManage;
-  }
-
-  if (rawPtr) {
-    llvm::Function *retainFn = ctx.Module->getFunction("maml_retain");
-    ctx.Builder->CreateCall(retainFn, rawPtr);
   }
 }
 
@@ -143,15 +87,6 @@ void handle(CodegenContext &ctx, const mir::StoreInst &inst) {
   ctx.Builder->CreateStore(val, dstPtr);
 }
 
-void handle(CodegenContext &ctx, const mir::RefAllocInst &inst) {
-  llvm::Type *ty = llvmTypeFor(ctx, inst.type);
-  llvm::Function *allocFn = ctx.Module->getFunction(rt::ALLOC);
-  llvm::DataLayout DL(ctx.Module.get());
-  llvm::Value *sizeVal = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx.Context), DL.getTypeAllocSize(ty));
-  llvm::Value *heapPtr = ctx.Builder->CreateCall(allocFn, {sizeVal}, inst.dst + "_heap");
-  ctx.Builder->CreateStore(heapPtr, ctx.resolveSymbol(inst.dst));
-}
-
 void handle(CodegenContext &ctx, const mir::CastInst &inst) {
   llvm::Value *srcVal = evaluateValue(ctx, inst.src);
   llvm::Type *targetTy = llvmTypeFor(ctx, inst.type);
@@ -170,6 +105,57 @@ void handle(CodegenContext &ctx, const mir::CastInst &inst) {
     return;
   }
   ctx.SymbolEnv.back()[inst.dst] = castVal;
+}
+
+void handle(CodegenContext &ctx, const mir::DropInst &inst) {
+  llvm::Value *target = ctx.getMemoryBase(inst.src);
+  if (!target) return;
+
+  llvm::Type *ty = ctx.SymbolTypes[inst.src];
+  llvm::Value *ptrToFree = nullptr;
+  llvm::Function *freeFn = ctx.Module->getFunction("maml_free");
+  if (!freeFn) return;
+
+  if (ty->isStructTy()) {
+    // Check if this is a String layout: { ptr, len, is_owned (i1) }
+    if (ty->getStructNumElements() == 3 && ty->getStructElementType(2)->isIntegerTy(1)) {
+      // 1. Get the is_owned flag at index 2
+      llvm::Value *ownedGep = ctx.Builder->CreateStructGEP(ty, target, 2, inst.src + "_owned_gep");
+      llvm::Value *isOwned =
+          ctx.Builder->CreateLoad(llvm::Type::getInt1Ty(ctx.Context), ownedGep, inst.src + "_is_owned");
+
+      // 2. Create basic blocks for the conditional free
+      llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
+      llvm::BasicBlock *freeBB = llvm::BasicBlock::Create(ctx.Context, inst.src + "_do_free", F);
+      llvm::BasicBlock *mergeBB = llvm::BasicBlock::Create(ctx.Context, inst.src + "_skip_free", F);
+
+      // 3. Branch based on the flag
+      ctx.Builder->CreateCondBr(isOwned, freeBB, mergeBB);
+
+      // 4. Populate the Free block
+      ctx.Builder->SetInsertPoint(freeBB);
+      llvm::Value *ptrGep = ctx.Builder->CreateStructGEP(ty, target, 0, inst.src + "_ptr_gep");
+      ptrToFree = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), ptrGep);
+      ctx.Builder->CreateCall(freeFn, {ptrToFree});
+      ctx.Builder->CreateBr(mergeBB);
+
+      // 5. Resume compilation in the merge block
+      ctx.Builder->SetInsertPoint(mergeBB);
+      return;  // Early return because we already handled the call!
+    } else {
+      // Standard fat pointer (like Vec {ptr, len, cap}) without an is_owned flag
+      llvm::Value *gep = ctx.Builder->CreateStructGEP(ty, target, 0, inst.src + "_drop_gep");
+      ptrToFree = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), gep, inst.src + "_drop_load");
+    }
+  } else {
+    // Opaque pointers (like from maml_vec_create)
+    ptrToFree = ctx.Builder->CreateLoad(ty, target, inst.src + "_drop_load");
+  }
+
+  // Fallback for standard fat pointers and opaque pointers
+  if (ptrToFree) {
+    ctx.Builder->CreateCall(freeFn, {ptrToFree});
+  }
 }
 
 void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {

@@ -3,85 +3,91 @@ const std = @import("std");
 const rt = @import("runtime.zig");
 
 comptime {
-    if (@TypeOf(rt.maml_alloc) != fn (usize) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_alloc must have signature fn (usize) callconv(.c) ?*anyopaque");
-    }
-    if (@TypeOf(rt.maml_free) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_free must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_retain) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_retain must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_release) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_release must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_vec_create) != fn (u32, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_vec_create must have signature fn (u32, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) ?*anyopaque");
-    }
-    if (@TypeOf(rt.maml_vec_push) != fn (?*anyopaque, ?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_vec_push must have signature fn (?*anyopaque, ?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_vec_set) != fn (?*anyopaque, u32, ?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_vec_set must have signature fn (?*anyopaque, u32, ?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_vec_get) != fn (?*anyopaque, u32) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_vec_get must have signature fn (?*anyopaque, u32) callconv(.c) ?*anyopaque");
-    }
-    if (@TypeOf(rt.maml_vec_len) != fn (?*anyopaque) callconv(.c) u32) {
-        @compileError("ABI Mismatch: rt.maml_vec_len must have signature fn (?*anyopaque) callconv(.c) u32");
-    }
-    if (@TypeOf(rt.maml_map_create) != fn (u32, u8, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_map_create must have signature fn (u32, u8, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void, ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) ?*anyopaque");
-    }
-    if (@TypeOf(rt.maml_map_put) != fn (?*anyopaque, u32, ?*anyopaque, u32, i32, ?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_map_put must have signature fn (?*anyopaque, u32, ?*anyopaque, u32, i32, ?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_map_get) != fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_map_get must have signature fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) ?*anyopaque");
-    }
-    if (@TypeOf(rt.maml_map_delete) != fn (?*anyopaque, u32, ?*anyopaque, u32, i32) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_map_delete must have signature fn (?*anyopaque, u32, ?*anyopaque, u32, i32) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_map_len) != fn (?*anyopaque) callconv(.c) u32) {
-        @compileError("ABI Mismatch: rt.maml_map_len must have signature fn (?*anyopaque) callconv(.c) u32");
-    }
-    if (@TypeOf(rt.maml_str_hash) != fn (?*anyopaque, u32) callconv(.c) u32) {
-        @compileError("ABI Mismatch: rt.maml_str_hash must have signature fn (?*anyopaque, u32) callconv(.c) u32");
-    }
-    if (@TypeOf(rt.maml_str_eq) != fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) i32) {
-        @compileError("ABI Mismatch: rt.maml_str_eq must have signature fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) i32");
-    }
-    if (@TypeOf(rt.maml_coro_resume_helper) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_coro_resume_helper must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_coro_done_helper) != fn (?*anyopaque) callconv(.c) bool) {
-        @compileError("ABI Mismatch: rt.maml_coro_done_helper must have signature fn (?*anyopaque) callconv(.c) bool");
-    }
-    if (@TypeOf(rt.maml_coro_destroy_helper) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_coro_destroy_helper must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_spawn_task) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_spawn_task must have signature fn (?*anyopaque) callconv(.c) void");
-    }
-    if (@TypeOf(rt.maml_run_executor) != fn (?*anyopaque) callconv(.c) ?*anyopaque) {
-        @compileError("ABI Mismatch: rt.maml_run_executor must have signature fn (?*anyopaque) callconv(.c) ?*anyopaque");
-    }
     if (@TypeOf(rt.maml_runtime_init) != fn () callconv(.c) void) {
         @compileError("ABI Mismatch: rt.maml_runtime_init must have signature fn () callconv(.c) void");
     }
-    if (@TypeOf(rt.maml_task_await) != fn (?*anyopaque, ?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_task_await must have signature fn (?*anyopaque, ?*anyopaque) callconv(.c) void");
+    if (@TypeOf(rt.alloc.maml_alloc) != fn (usize) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.alloc.maml_alloc must have signature fn (usize) callconv(.c) ?*anyopaque");
     }
-    if (@TypeOf(rt.maml_task_release) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_task_release must have signature fn (?*anyopaque) callconv(.c) void");
+    if (@TypeOf(rt.alloc.maml_free) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.alloc.maml_free must have signature fn (?*anyopaque) callconv(.c) void");
     }
-    if (@TypeOf(rt.maml_task_get_result) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_task_get_result must have signature fn (?*anyopaque) callconv(.c) void");
+    if (@TypeOf(rt.vec.maml_vec_create) != fn (u32) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_create must have signature fn (u32) callconv(.c) ?*anyopaque");
     }
-    if (@TypeOf(rt.maml_yield_now) != fn (?*anyopaque) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_yield_now must have signature fn (?*anyopaque) callconv(.c) void");
+    if (@TypeOf(rt.vec.maml_vec_push) != fn (?*anyopaque, ?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_push must have signature fn (?*anyopaque, ?*anyopaque) callconv(.c) void");
     }
-    if (@TypeOf(rt.maml_print) != fn (?*anyopaque, i32) callconv(.c) void) {
-        @compileError("ABI Mismatch: rt.maml_print must have signature fn (?*anyopaque, i32) callconv(.c) void");
+    if (@TypeOf(rt.vec.maml_vec_set) != fn (?*anyopaque, u32, ?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_set must have signature fn (?*anyopaque, u32, ?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.vec.maml_vec_get) != fn (?*anyopaque, u32) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_get must have signature fn (?*anyopaque, u32) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.vec.maml_vec_len) != fn (?*anyopaque) callconv(.c) u32) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_len must have signature fn (?*anyopaque) callconv(.c) u32");
+    }
+    if (@TypeOf(rt.vec.maml_vec_clone) != fn (?*anyopaque, usize) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.vec.maml_vec_clone must have signature fn (?*anyopaque, usize) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.map.maml_map_create) != fn (u32, bool) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.map.maml_map_create must have signature fn (u32, bool) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.map.maml_map_put) != fn (?*anyopaque, u32, ?*anyopaque, u32, i32, ?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.map.maml_map_put must have signature fn (?*anyopaque, u32, ?*anyopaque, u32, i32, ?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.map.maml_map_get) != fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.map.maml_map_get must have signature fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.map.maml_map_delete) != fn (?*anyopaque, u32, ?*anyopaque, u32, i32) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.map.maml_map_delete must have signature fn (?*anyopaque, u32, ?*anyopaque, u32, i32) callconv(.c) void");
+    }
+    if (@TypeOf(rt.map.maml_map_len) != fn (?*anyopaque) callconv(.c) u32) {
+        @compileError("ABI Mismatch: rt.map.maml_map_len must have signature fn (?*anyopaque) callconv(.c) u32");
+    }
+    if (@TypeOf(rt.map.maml_map_clone) != fn (?*anyopaque) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.map.maml_map_clone must have signature fn (?*anyopaque) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.map.maml_map_next_active) != fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.map.maml_map_next_active must have signature fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.string.maml_str_hash) != fn (?*anyopaque, u32) callconv(.c) u32) {
+        @compileError("ABI Mismatch: rt.string.maml_str_hash must have signature fn (?*anyopaque, u32) callconv(.c) u32");
+    }
+    if (@TypeOf(rt.string.maml_str_eq) != fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) i32) {
+        @compileError("ABI Mismatch: rt.string.maml_str_eq must have signature fn (?*anyopaque, u32, ?*anyopaque, u32) callconv(.c) i32");
+    }
+    if (@TypeOf(rt.string.maml_str_clone) != fn (?*anyopaque, u32) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.string.maml_str_clone must have signature fn (?*anyopaque, u32) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.coro.maml_coro_resume_helper) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_coro_resume_helper must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_coro_done_helper) != fn (?*anyopaque) callconv(.c) bool) {
+        @compileError("ABI Mismatch: rt.coro.maml_coro_done_helper must have signature fn (?*anyopaque) callconv(.c) bool");
+    }
+    if (@TypeOf(rt.coro.maml_coro_destroy_helper) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_coro_destroy_helper must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_spawn_task) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_spawn_task must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_run_executor) != fn (?*anyopaque) callconv(.c) ?*anyopaque) {
+        @compileError("ABI Mismatch: rt.coro.maml_run_executor must have signature fn (?*anyopaque) callconv(.c) ?*anyopaque");
+    }
+    if (@TypeOf(rt.coro.maml_task_await) != fn (?*anyopaque, ?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_task_await must have signature fn (?*anyopaque, ?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_task_release) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_task_release must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_task_get_result) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_task_get_result must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.coro.maml_yield_now) != fn (?*anyopaque) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.coro.maml_yield_now must have signature fn (?*anyopaque) callconv(.c) void");
+    }
+    if (@TypeOf(rt.io.maml_print) != fn (?*anyopaque, i32) callconv(.c) void) {
+        @compileError("ABI Mismatch: rt.io.maml_print must have signature fn (?*anyopaque, i32) callconv(.c) void");
     }
 }

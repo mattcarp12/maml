@@ -43,9 +43,9 @@ func (r InfixTypeCompatibility) Check(node *tast.InfixExpr, ctx *RuleContext) []
 	// Operands are the same type — now check operator compatibility.
 	switch node.Operator {
 	case "+", "-", "*", "/", "%":
-		if !left.Equals(types.IntType{}) {
+		if !isIntegerType(left) {
 			return []Violation{violation(node.Pos_,
-				"type mismatch: operator '%s' requires 'int' operands, got '%s'",
+				"type mismatch: operator '%s' requires integer operands, got '%s'",
 				node.Operator, left.String(),
 			)}
 		}
@@ -88,9 +88,9 @@ func (r PrefixTypeCompatibility) Check(node *tast.PrefixExpr, ctx *RuleContext) 
 			)}
 		}
 	case "-":
-		if !right.Equals(types.IntType{}) {
+		if !isIntegerType(right) {
 			return []Violation{violation(node.Pos_,
-				"operator '-' expects 'int', got '%s'", right.String(),
+				"operator '-' expects integer, got '%s'", right.String(),
 			)}
 		}
 	}
@@ -192,14 +192,7 @@ func (r CallArgumentCount) Check(node *tast.CallExpr, ctx *RuleContext) []Violat
 	return nil
 }
 
-// CallArgumentTypeCompatibility checks each argument's type and ownership
-// modifier against the corresponding parameter declaration.
-//
-// For each argument i (within bounds):
-//   - The argument's type must match the parameter's declared type.
-//   - If the parameter is ParamMutBorrow, the call site must pass `mut`.
-//   - If the parameter is ParamOwn, the call site must pass `own`.
-//   - If the parameter is ParamBorrow, the call site must not use any modifier.
+// CallArgumentTypeCompatibility checks type and capability matching.
 type CallArgumentTypeCompatibility struct{}
 
 func (r CallArgumentTypeCompatibility) Name() string { return "call-argument-type-compatibility" }
@@ -214,57 +207,60 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 
 	for i, arg := range node.Arguments {
 		if i >= len(ft.Params) {
-			break // Arity mismatch already reported by CallArgumentCount
+			break
 		}
 
-		expected := ft.Params[i]
-		got := tast.TypeOf(arg.Argument)
+		expectedType := ft.Params[i]
+		expectedCap := ft.Caps[i]
 
-		// Type check
-		if !got.Equals(expected) && !types.IsUnknown(got) && !types.IsUnknown(expected) {
-			violations = append(violations, violation(arg.Pos_,
-				"argument %d type mismatch: expected '%s', got '%s'",
-				i+1, expected.String(), got.String(),
-			))
+		actualCap := arg.Cap
+		actualExpr := arg.Argument
+		gotType := tast.TypeOf(actualExpr)
+
+		// --- Literal Auto-Coercion ---
+		// Identify if the expression is a string literal (or array/struct literal)
+		_, isLiteral := actualExpr.(*tast.StringLiteral)
+
+		// If the user didn't write an annotation (CapNone) AND it's a literal,
+		// we allow it to implicitly adopt the expected capability (ro or own).
+		// (We don't allow 'mut' because mutating a literal is invalid).
+		if isLiteral && actualCap == types.CapNone && (expectedCap == types.CapRo || expectedCap == types.CapOwn) {
+			actualCap = expectedCap // Pretend the user typed it, so it passes the checks below!
 		}
 
-		// Ownership/mutability mode check
-		_, isOwnExpr := arg.Argument.(*tast.OwnExpr)
+		// 1. Type Check
+		if !gotType.Equals(expectedType) && !types.IsUnknown(gotType) && !types.IsUnknown(expectedType) {
+			violations = append(violations, violation(actualExpr.Pos(),
+				"argument %d type mismatch: expected '%s', got '%s'", i+1, expectedType.String(), gotType.String()))
+		}
 
-		switch ft.ParamModes[i] {
-		case types.ParamOwn:
-			if !isOwnExpr {
-				violations = append(violations, violation(arg.Pos_,
-					"argument %d requires 'own' modifier to transfer ownership", i+1,
-				))
-			}
-			if arg.Mut {
-				violations = append(violations, violation(arg.Pos_,
-					"argument %d cannot be 'mut' because it requires 'own'", i+1,
-				))
-			}
+		// 2. Capability matching check
+		// (This now PASSES for literals because we synced actualCap with expectedCap above)
+		if expectedCap != actualCap {
+			violations = append(violations, violation(actualExpr.Pos(),
+				"capability mismatch on argument %d: function expects '%s', but call site passed '%s'",
+				i+1, expectedCap, actualCap))
+		}
 
-		case types.ParamMutBorrow:
-			if !arg.Mut {
-				violations = append(violations, violation(arg.Pos_,
-					"argument %d requires 'mut' modifier", i+1,
-				))
+		// 3. Memory Path Check
+		if actualCap == types.CapMut || actualCap == types.CapOwn || actualCap == types.CapRo {
+			if !isValidMemoryPath(actualExpr) {
+				// We still need the exception here! Even though we coerced the cap to 'ro',
+				// a literal is still not a valid memory path.
+				if !isLiteral {
+					violations = append(violations, violation(actualExpr.Pos(),
+						"the '%s' capability can only be applied to variables and their fields", actualCap))
+				}
 			}
-			if isOwnExpr {
-				violations = append(violations, violation(arg.Pos_,
-					"argument %d cannot be 'own' because it expects a mutable borrow", i+1,
-				))
-			}
+		}
 
-		case types.ParamBorrow:
-			if arg.Mut || isOwnExpr {
-				violations = append(violations, violation(arg.Pos_,
-					"argument %d does not take ownership modifiers", i+1,
-				))
-			}
+		// 4. Implicit Copy Check for non-annotated values
+		// (This now PASSES for literals because actualCap is no longer CapNone)
+		if actualCap == types.CapNone && !IsCopyable(gotType) {
+			violations = append(violations, violation(actualExpr.Pos(),
+				"type '%s' is not implicitly copyable. You must pass it with an explicit capability (own, mut, ro, copy)", gotType.String()))
 		}
 	}
-
 	return violations
 }
 
@@ -328,7 +324,7 @@ func (r IndexExprTypeCompatibility) Check(node *tast.IndexExpr, ctx *RuleContext
 
 	switch ty := leftType.(type) {
 	case *types.ArrayType, *types.ViewType, *types.VectorType, types.StringType:
-		if !idxType.Equals(types.IntType{}) && !types.IsUnknown(idxType) {
+		if !idxType.Equals(types.I64Type{}) && !types.IsUnknown(idxType) {
 			violations = append(violations, violation(node.Index.Pos(),
 				"index must be an integer, got '%s'", idxType.String(),
 			))
@@ -507,87 +503,64 @@ func (r VecLiteralTypeCompatibility) Check(node *tast.VecLiteral, ctx *RuleConte
 }
 
 // =============================================================================
-// FreezeExpr Rules
+// Capability & Memory Rules
 // =============================================================================
 
-// FreezeRequiresOwn ensures that the operand provided to a freeze expression
-// is strictly an ownership transfer (an 'own' expression).
-type FreezeRequiresOwn struct{}
-
-func (r FreezeRequiresOwn) Name() string { return "freeze-requires-own" }
-
-func (r FreezeRequiresOwn) Check(node *tast.FreezeExpr, ctx *RuleContext) []Violation {
-	if _, ok := node.Value.(*tast.OwnExpr); !ok {
-		return []Violation{violation(node.Value.Pos(),
-			"the 'freeze' operator requires an explicit ownership transfer (e.g., 'freeze(own x)')",
-		)}
-	}
-	return nil
-}
-
-// =============================================================================
-// OwnExpr Rules
-// =============================================================================
-
-// OwnOperandMustBePath enforces the grammar rule that 'own' can only be
-// applied to memory paths (identifiers or field access chains).
-type OwnOperandMustBePath struct{}
-
-func (r OwnOperandMustBePath) Name() string { return "own-operand-must-be-path" }
-
-func (r OwnOperandMustBePath) Check(node *tast.OwnExpr, ctx *RuleContext) []Violation {
-	var current tast.Expr = node.Value
+// Helper to ensure capabilities are only applied to valid memory paths
+func isValidMemoryPath(expr tast.Expr) bool {
+	var current tast.Expr = expr
 	for {
 		switch e := current.(type) {
 		case *tast.FieldAccess:
-			current = e.Object // Traverse down the path
+			current = e.Object
 		case *tast.Identifier:
-			return nil // Valid path root
+			return true
+		case *tast.IndexExpr:
+			return isValidMemoryPath(e.Left)
 		default:
+			return false
+		}
+	}
+}
+
+type CannotReassignBorrow struct{}
+
+func (r CannotReassignBorrow) Name() string { return "cannot-reassign-borrow" }
+func (r CannotReassignBorrow) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
+	// Only check if the left side is a direct identifier (e.g. `y = ...`)
+	// We still allow mutating fields of a borrow (e.g. `y.field = ...`)
+	if ident, ok := node.LValue.(*tast.Identifier); ok {
+		sym := ident.Symbol
+		// If the symbol is a borrow (ro or mut), it cannot be re-bound.
+		if sym != nil && (sym.Cap == types.CapRo || sym.Cap == types.CapMut) {
 			return []Violation{violation(node.Pos_,
-				"the 'own' operator can only be applied to variables and their fields (e.g., 'own data' or 'own msg.payload')",
+				"cannot reassign borrow '%s'; borrows only permit in-place mutation of fields", sym.Name,
 			)}
 		}
 	}
-}
-
-// CannotMoveBorrowedValue ensures that a function cannot take ownership
-// of a variable that was passed to it as a borrow.
-type CannotMoveBorrowedValue struct{}
-
-func (r CannotMoveBorrowedValue) Name() string { return "cannot-move-borrowed-value" }
-
-func (r CannotMoveBorrowedValue) Check(node *tast.OwnExpr, ctx *RuleContext) []Violation {
-	sym := ctx.getRootSymbol(node.Value)
-	if sym != nil && (sym.ParamMode == types.ParamBorrow || sym.ParamMode == types.ParamMutBorrow) {
-		return []Violation{violation(node.Pos_,
-			"cannot take ownership ('own') of a borrowed parameter '%s'", sym.Name,
-		)}
-	}
 	return nil
 }
 
-// CannotReassignBorrowedParameter enforces Section 4.3: Mutable borrows
-// permit in-place mutation (e.g., data.field = x) but forbid full reallocation
-// or reassignment of the root binding.
-type CannotReassignBorrowedParameter struct{}
-
-func (r CannotReassignBorrowedParameter) Name() string { return "cannot-reassign-borrowed-parameter" }
-
-func (r CannotReassignBorrowedParameter) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
-	// We only trigger if the LHS is exactly an identifier (root binding).
-	// If it is a FieldAccess or IndexExpr, it is a legal in-place mutation.
-	if ident, ok := node.LValue.(*tast.Identifier); ok {
-		sym := ident.Symbol
-		if sym != nil && sym.Kind == types.ParamSymbol {
-			if sym.ParamMode == types.ParamBorrow || sym.ParamMode == types.ParamMutBorrow {
-				return []Violation{violation(node.Pos_,
-					"cannot reassign borrowed parameter '%s'; mutable borrows only permit in-place mutation", sym.Name,
-				)}
+// IsCopyable recursively checks if a type contains only primitives.
+func IsCopyable(t types.Type) bool {
+	switch ty := t.(type) {
+	case types.I8Type, types.I16Type, types.I32Type, types.I64Type, types.I128Type,
+		types.U8Type, types.U16Type, types.U32Type, types.U64Type, types.U128Type,
+		types.F32Type, types.F64Type, types.BoolType, types.CharType, types.UnitType:
+		return true
+	case *types.StructType:
+		for _, f := range ty.Fields {
+			if !IsCopyable(f.Type) {
+				return false
 			}
 		}
+		return true
+	case *types.ArrayType:
+		return IsCopyable(ty.Base)
+	// Vec, Map, String, Views, Refs, Futures, etc., are all non-copyable heap structures!
+	default:
+		return false
 	}
-	return nil
 }
 
 // ==========================================================================

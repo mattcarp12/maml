@@ -50,9 +50,14 @@ type FunctionDef struct {
 	Return string   `yaml:"return"`
 }
 
+type ModuleGroup struct {
+	Module      string        `yaml:"module"`
+	Definitions []FunctionDef `yaml:"definitions"`
+}
+
 type Schema struct {
 	Types     []TypeAlias   `yaml:"types"`
-	Functions []FunctionDef `yaml:"functions"`
+	Functions []ModuleGroup `yaml:"functions"`
 }
 
 type TemplateContext struct {
@@ -69,14 +74,15 @@ type ArgContext struct {
 
 type FunctionContext struct {
 	Symbol    string
+	ZigModule string
 	ConstName string
 	CamelName string
 	ReturnGo  string
 	ReturnCpp string
 	ReturnZig string
-	ArgsGo    []string // Retained for backwards compatibility
-	ArgsCpp   []string // Retained for backwards compatibility
-	ArgsZig   []string // Retained for backwards compatibility
+	ArgsGo    []string
+	ArgsCpp   []string
+	ArgsZig   []string
 	Args      []ArgContext
 }
 
@@ -94,7 +100,7 @@ func toCamelCase(s string) string {
 
 func main() {
 	goOut := flag.String("goOut", "frontend/types/", "output directory for runtime_generated.go")
-	cppOut := flag.String("cppOut", "backend/include/", "output directory for autogen_runtime.inc")
+	cppOut := flag.String("cppOut", "backend/include/", "output directory for autogen_runtime.hpp")
 	zigOut := flag.String("zigOut", "runtime/src/", "output directory for abi_assertions.zig")
 	mirOut := flag.String("mirOut", "frontend/mir/", "output directory for MIR runtime calls")
 	flag.Parse()
@@ -116,7 +122,7 @@ func main() {
 	executeTemplate("Go Frontend", goTemplateStr, path.Join(*goOut, "runtime_generated.go"), ctx, true)
 
 	// 2. Generate C++
-	executeTemplate("C++ Backend (.inc)", cppTemplateStr, path.Join(*cppOut, "autogen_runtime.inc"), ctx, false)
+	executeTemplate("C++ Backend (.inc)", cppTemplateStr, path.Join(*cppOut, "autogen_runtime.hpp"), ctx, false)
 	generateCppConstants(ctx, path.Join(*cppOut, "RuntimeConstants.h"))
 
 	// 3. Generate Zig
@@ -130,28 +136,34 @@ func main() {
 
 func buildContext(schema Schema, tm map[string]TypeAlias) TemplateContext {
 	var ctx TemplateContext
-	for _, fn := range schema.Functions {
-		fCtx := FunctionContext{
-			Symbol:    fn.Symbol,
-			ConstName: "SYM_" + strings.ToUpper(strings.ReplaceAll(fn.Symbol, "maml_", "")),
-			CamelName: toCamelCase(fn.Symbol),
-			ReturnGo:  tm[fn.Return].GoType,
-			ReturnCpp: tm[fn.Return].CppType,
-			ReturnZig: tm[fn.Return].ZigType,
+
+	// Loop through each module group block
+	for _, group := range schema.Functions {
+		// Loop through individual function definitions inside the module group
+		for _, fn := range group.Definitions {
+			fCtx := FunctionContext{
+				Symbol:    fn.Symbol,
+				ZigModule: group.Module, // 👈 Capture the group's module name ("alloc", "vec", "", etc.)
+				ConstName: "SYM_" + strings.ToUpper(strings.ReplaceAll(fn.Symbol, "maml_", "")),
+				CamelName: toCamelCase(fn.Symbol),
+				ReturnGo:  tm[fn.Return].GoType,
+				ReturnCpp: tm[fn.Return].CppType,
+				ReturnZig: tm[fn.Return].ZigType,
+			}
+			for _, arg := range fn.Args {
+				fCtx.ArgsGo = append(fCtx.ArgsGo, tm[arg.Type].GoType)
+				fCtx.ArgsCpp = append(fCtx.ArgsCpp, tm[arg.Type].CppType)
+				fCtx.ArgsZig = append(fCtx.ArgsZig, tm[arg.Type].ZigType)
+				fCtx.Args = append(fCtx.Args, ArgContext{
+					Alias:   arg.Type,
+					GoType:  tm[arg.Type].GoType,
+					CppType: tm[arg.Type].CppType,
+					ZigType: tm[arg.Type].ZigType,
+					IsMut:   arg.Mut,
+				})
+			}
+			ctx.Functions = append(ctx.Functions, fCtx)
 		}
-		for _, arg := range fn.Args {
-			fCtx.ArgsGo = append(fCtx.ArgsGo, tm[arg.Type].GoType)
-			fCtx.ArgsCpp = append(fCtx.ArgsCpp, tm[arg.Type].CppType)
-			fCtx.ArgsZig = append(fCtx.ArgsZig, tm[arg.Type].ZigType)
-			fCtx.Args = append(fCtx.Args, ArgContext{
-				Alias:   arg.Type,
-				GoType:  tm[arg.Type].GoType,
-				CppType: tm[arg.Type].CppType,
-				ZigType: tm[arg.Type].ZigType,
-				IsMut:   arg.Mut,
-			})
-		}
-		ctx.Functions = append(ctx.Functions, fCtx)
 	}
 	return ctx
 }

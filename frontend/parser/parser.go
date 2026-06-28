@@ -65,8 +65,6 @@ func (p *Parser) setParseFns() {
 	p.prefixParseFns[token.AWAIT] = p.parseAwaitExpression
 	p.prefixParseFns[token.SPAWN] = p.parseSpawnExpression
 	p.prefixParseFns[token.LBRACKET] = p.parseArrayTypePrefix
-	p.prefixParseFns[token.OWN] = p.parseOwnExpression
-	p.prefixParseFns[token.FREEZE] = p.parseFreezeExpression
 
 	p.infixParseFns = make(map[token.TokenType]infixParseFn)
 	p.infixParseFns[token.PLUS] = p.parseInfixExpression

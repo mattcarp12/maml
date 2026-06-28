@@ -38,36 +38,36 @@ func newGlobalScope() *Scope {
 		Name:    "print",
 		Mutable: false,
 		Type: &types.FunctionType{
-			Params:     []types.Type{types.StringType{}},
-			ParamModes: []types.ParamMode{types.ParamBorrow},
-			Return:     types.UnitType{},
+			Params: []types.Type{types.StringType{}},
+			Caps:   []types.Cap{types.CapRo},
+			Return: types.UnitType{},
 		},
 	}
 	global.symbols["spawn"] = &types.Symbol{
 		Kind: types.FuncSymbol,
 		Name: "spawn",
 		Type: &types.FunctionType{
-			Params:     []types.Type{&types.FutureType{Base: types.AnyType{}}},
-			ParamModes: []types.ParamMode{types.ParamBorrow},
-			Return:     types.UnitType{},
+			Params: []types.Type{&types.FutureType{Base: types.AnyType{}}},
+			Caps:   []types.Cap{types.CapOwn},
+			Return: types.UnitType{},
 		},
 	}
 	global.symbols["run_executor"] = &types.Symbol{
 		Kind: types.FuncSymbol,
 		Name: "run_executor",
 		Type: &types.FunctionType{
-			Params:     []types.Type{&types.FutureType{Base: types.AnyType{}}},
-			ParamModes: []types.ParamMode{types.ParamBorrow},
-			Return:     types.AnyType{},
+			Params: []types.Type{&types.FutureType{Base: types.AnyType{}}},
+			Caps:   []types.Cap{types.CapOwn},
+			Return: types.AnyType{},
 		},
 	}
 	global.symbols["yield_now"] = &types.Symbol{
 		Kind: types.FuncSymbol,
 		Name: "yield_now",
 		Type: &types.FunctionType{
-			Params:     []types.Type{},
-			ParamModes: []types.ParamMode{},
-			Return:     types.AnyType{},
+			Params: []types.Type{},
+			Caps:   []types.Cap{},
+			Return: types.AnyType{},
 		},
 	}
 	// Builtin: len(collection)
@@ -75,9 +75,9 @@ func newGlobalScope() *Scope {
 		Kind: types.FuncSymbol,
 		Name: "len",
 		Type: &types.FunctionType{
-			Params:     []types.Type{types.AnyType{}},
-			ParamModes: []types.ParamMode{types.ParamBorrow},
-			Return:     types.IntType{},
+			Params: []types.Type{types.AnyType{}},
+			Caps:   []types.Cap{types.CapRo},
+			Return: types.I64Type{},
 		},
 	}
 
@@ -86,9 +86,9 @@ func newGlobalScope() *Scope {
 		Kind: types.FuncSymbol,
 		Name: "delete",
 		Type: &types.FunctionType{
-			Params:     []types.Type{types.AnyType{}, types.AnyType{}},
-			ParamModes: []types.ParamMode{types.ParamMutBorrow, types.ParamBorrow},
-			Return:     types.UnitType{},
+			Params: []types.Type{types.AnyType{}, types.AnyType{}},
+			Caps:   []types.Cap{types.CapMut, types.CapRo},
+			Return: types.UnitType{},
 		},
 	}
 

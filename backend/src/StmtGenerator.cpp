@@ -8,15 +8,13 @@ namespace maml {
 // Forward declare the handler overloads (implemented in the Ops cpp files)
 void handle(CodegenContext &ctx, const mir::TempDeclInst &inst);
 void handle(CodegenContext &ctx, const mir::AssignInst &inst);
-void handle(CodegenContext &ctx, const mir::IndexAssignInst &inst);
+void handle(CodegenContext &ctx, const mir::IndexAddrInst &inst);
 void handle(CodegenContext &ctx, const mir::StructInitInst &inst);
-void handle(CodegenContext &ctx, const mir::FieldReadInst &inst);
-void handle(CodegenContext &ctx, const mir::FieldWriteInst &inst);
+void handle(CodegenContext &ctx, const mir::FieldAddrInst &inst);
 void handle(CodegenContext &ctx, const mir::ArrayInitInst &inst);
 void handle(CodegenContext &ctx, const mir::SliceInst &inst);
 void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst);
 void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst);
-void handle(CodegenContext &ctx, const mir::IndexReadInst &inst);
 void handle(CodegenContext &ctx, const mir::CallInst &inst);
 void handle(CodegenContext &ctx, const mir::VariantInitInst &inst);
 void handle(CodegenContext &ctx, const mir::VariantReadInst &inst);
@@ -26,9 +24,7 @@ void handle(CodegenContext &ctx, const mir::LoadPtrInst &inst);
 void handle(CodegenContext &ctx, const mir::StoreInst &inst);
 void handle(CodegenContext &ctx, const mir::CopyInst &inst);
 void handle(CodegenContext &ctx, const mir::MoveInst &inst);
-void handle(CodegenContext &ctx, const mir::RefAllocInst &inst);
-void handle(CodegenContext &ctx, const mir::RefIncInst &inst);
-void handle(CodegenContext &ctx, const mir::RefDecInst &inst);
+void handle(CodegenContext &ctx, const mir::DropInst &inst);
 void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst);
 
 void compileInstruction(CodegenContext &ctx, const mir::Instruction &inst) {
@@ -71,6 +67,12 @@ void compileTerminator(CodegenContext &ctx, const mir::Terminator &term) {
                 ctx.Builder->CreateRetVoid();
               } else {
                 llvm::Value *retVal = evaluateValue(ctx, arg.value);
+                // If we are in 'main', the OS requires an i32 exit code,
+                // but MAML's internal 'int' is i64. We must truncate it.
+                llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
+                if (parentFn->getName() == "main" && retVal->getType()->isIntegerTy(64)) {
+                  retVal = ctx.Builder->CreateTrunc(retVal, llvm::Type::getInt32Ty(ctx.Context), "exit_code_trunc");
+                }
                 ctx.Builder->CreateRet(retVal);
               }
             }

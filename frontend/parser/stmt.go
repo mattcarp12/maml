@@ -59,6 +59,14 @@ func (p *Parser) parseStmt() ast.Stmt {
 	switch p.curToken.Type {
 	case token.MUT:
 		return p.parseDeclareStmt()
+	case token.OWN, token.RO, token.COPY:
+		// Intercept invalid left-side capabilities for declarations!
+		if p.peekToken.Type == token.IDENT && p.peek2Token.Type == token.DECLARE {
+			p.addError(fmt.Sprintf("invalid annotation '%s' on left side of declaration. You always own what you declare.", p.curToken.Literal))
+			return nil
+		}
+		// Otherwise, it's just an expression statement (e.g. dropping an owned value)
+		return p.parseExpressionStmt()
 	case token.IDENT:
 		// Look ahead: if we see ':=', it's a declaration. Otherwise, it's an expression.
 		if p.peekToken.Type == token.DECLARE {
@@ -81,11 +89,11 @@ func (p *Parser) parseStmt() ast.Stmt {
 	}
 }
 
-func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
+// Note: Changed return type to ast.Stmt so it can return either DeclareStmt or AliasDecl
+func (p *Parser) parseDeclareStmt() ast.Stmt {
 	pos := p.curPos()
 	mutable := false
 
-	// Check if this is a mutable declaration (starts with 'mut')
 	if p.curToken.Type == token.MUT {
 		mutable = true
 		if !p.expectPeek(token.IDENT) {
@@ -95,21 +103,43 @@ func (p *Parser) parseDeclareStmt() *ast.DeclareStmt {
 
 	name := p.curToken.Literal
 
-	// We expect := for declarations.
 	if !p.expectPeek(token.DECLARE) {
 		return nil
 	}
 
 	p.nextToken() // skip ':='
 
+	// Check if this is an Alias (right side starts with a capability)
+	capStr := ""
+	switch p.curToken.Type {
+	case token.MUT, token.OWN, token.RO, token.COPY:
+		capStr = p.curToken.Literal
+		p.nextToken() // step off the capability keyword
+	}
+
 	value := p.parseExpression(LOWEST)
 	if value == nil {
 		return nil
 	}
 
-	// Consume the newline terminating this statement
 	p.expectStatementEnd()
 
+	// If we found a capability, return an AliasDecl
+	if capStr != "" {
+		if mutable {
+			p.addError("Alias Declarations not allowed to be mutable. Remove `mut` from alias declaration")
+			return nil
+		}
+		return &ast.AliasDecl{
+			Name:  name,
+			Cap:   capStr,
+			Value: value,
+			Pos_:  pos,
+			End_:  p.curEndPos(),
+		}
+	}
+
+	// Otherwise, it's a standard declaration
 	return &ast.DeclareStmt{
 		Name:    name,
 		Mutable: mutable,
@@ -181,9 +211,8 @@ func (p *Parser) parseExpressionStmt() ast.Stmt {
 	switch p.peekToken.Type {
 	case token.ASSIGN, token.PLUS_EQ, token.MINUS_EQ, token.MUL_EQ, token.DIV_EQ:
 		opToken := p.peekToken // Capture the exact token type
-
-		p.nextToken() // get onto the assignment operator
-		p.nextToken() // move to the expression on the right side
+		p.nextToken()          // get onto the assignment operator
+		p.nextToken()          // move to the expression on the right side
 
 		value := p.parseExpression(LOWEST)
 		if value == nil {

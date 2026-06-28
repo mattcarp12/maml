@@ -155,15 +155,14 @@ func (a *Analyzer) MapFnDecl(v *ast.FnDecl) tast.Node {
 	tastParams := make([]*tast.Param, len(v.Params))
 	for i, p := range v.Params {
 		paramSym := &types.Symbol{
-			Kind:      types.VarSymbol,
-			Name:      p.Name,
-			Type:      fnType.Params[i],
-			Mutable:   p.Mut,
-			ParamMode: fnType.ParamModes[i],
+			Kind: types.ParamSymbol,
+			Name: p.Name,
+			Type: fnType.Params[i],
+			Cap:  types.Cap(p.Cap),
 		}
 		a.scope.symbols[p.Name] = paramSym
 		tastParams[i] = &tast.Param{
-			Pos_: p.Pos_, End_: p.End_, Name: p.Name, Type: fnType.Params[i], Symbol: paramSym,
+			Pos_: p.Pos_, End_: p.End_, Name: p.Name, Type: fnType.Params[i], Symbol: paramSym, Cap: types.Cap(p.Cap),
 		}
 	}
 
@@ -211,6 +210,19 @@ func (a *Analyzer) MapDeclareStmt(s *ast.DeclareStmt) tast.Node {
 	exprType := tast.TypeOf(value)
 
 	sym := &types.Symbol{Kind: types.VarSymbol, Name: s.Name, Type: exprType, Mutable: s.Mutable}
+	node := &tast.DeclareStmt{Pos_: s.Pos_, Symbol: sym, Value: value}
+
+	a.drainViolations(a.registry.Check(node, a.ctx()))
+	a.scope.symbols[s.Name] = sym
+
+	return node
+}
+
+func (a *Analyzer) MapAliasDecl(s *ast.AliasDecl) tast.Node {
+	value := a.mapExpr(s.Value)
+	exprType := tast.TypeOf(value)
+
+	sym := &types.Symbol{Kind: types.VarSymbol, Name: s.Name, Type: exprType, Mutable: false, Cap: types.Cap(s.Cap)}
 	node := &tast.DeclareStmt{Pos_: s.Pos_, Symbol: sym, Value: value}
 
 	a.drainViolations(a.registry.Check(node, a.ctx()))
@@ -294,7 +306,7 @@ func (a *Analyzer) MapForStmt(s *ast.ForStmt) tast.Node {
 // =============================================================================
 
 func (a *Analyzer) MapIntLiteral(e *ast.IntLiteral) tast.Node {
-	return &tast.IntLiteral{Pos_: e.Pos_, End_: e.End_, Value: e.Value, Type: types.IntType{}}
+	return &tast.IntLiteral{Pos_: e.Pos_, End_: e.End_, Value: e.Value, Type: types.I64Type{}}
 }
 
 func (a *Analyzer) MapBoolLiteral(e *ast.BoolLiteral) tast.Node {
@@ -366,21 +378,19 @@ func (a *Analyzer) MapIfExpr(e *ast.IfExpr) tast.Node {
 }
 
 func (a *Analyzer) MapCallExpr(e *ast.CallExpr) tast.Node {
-	// 1. Variant literal intercept
 	if funcIdent, ok := e.Function.(*ast.Identifier); ok {
 		if sym := a.resolve(funcIdent.Value); sym != nil && sym.Kind == types.VariantSymbol {
 			return a.mapTupleVariantLiteral(e, sym)
 		}
 	}
-
-	// 2. Map Function and Arguments
 	fnNode := a.mapExpr(e.Function)
 	var tastArgs []tast.CallArg
 	for _, arg := range e.Arguments {
 		tastArgs = append(tastArgs, tast.CallArg{
-			Pos_:     arg.Pos_,
+			Cap:      types.Cap(arg.Cap),
 			Argument: a.mapExpr(arg.Argument),
-			Mut:      arg.Mut,
+			Pos_:     arg.Pos_,
+			End_:     arg.End_,
 		})
 	}
 
@@ -532,13 +542,13 @@ func (a *Analyzer) MapSliceExpr(e *ast.SliceExpr) tast.Node {
 	var low, high tast.Expr
 	if e.Low != nil {
 		low = a.mapExpr(e.Low)
-		if t := tast.TypeOf(low); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+		if t := tast.TypeOf(low); !t.Equals(types.I64Type{}) && !types.IsUnknown(t) {
 			a.errorf(e.Low.Pos(), "slice low index must be an integer")
 		}
 	}
 	if e.High != nil {
 		high = a.mapExpr(e.High)
-		if t := tast.TypeOf(high); !t.Equals(types.IntType{}) && !types.IsUnknown(t) {
+		if t := tast.TypeOf(high); !t.Equals(types.I64Type{}) && !types.IsUnknown(t) {
 			a.errorf(e.High.Pos(), "slice high index must be an integer")
 		}
 	}
@@ -590,32 +600,6 @@ func (a *Analyzer) MapMatchExpr(e *ast.MatchExpr) tast.Node {
 	}
 
 	node := &tast.MatchExpr{Pos_: e.Pos_, End_: e.End_, Subject: subject, Arms: arms, Type: resultType}
-	a.drainViolations(a.registry.Check(node, a.ctx()))
-	return node
-}
-
-func (a *Analyzer) MapOwnExpr(e *ast.OwnExpr) tast.Node {
-	valNode := a.mapExpr(e.Value)
-
-	node := &tast.OwnExpr{
-		Pos_:  e.Pos_,
-		Value: valNode,
-		Type:  tast.TypeOf(valNode),
-	}
-
-	a.drainViolations(a.registry.Check(node, a.ctx()))
-	return node
-}
-
-func (a *Analyzer) MapFreezeExpr(e *ast.FreezeExpr) tast.Node {
-	valNode := a.mapExpr(e.Value)
-
-	node := &tast.FreezeExpr{
-		Pos_:  e.Pos_,
-		Value: valNode,
-		Type:  tast.TypeOf(valNode),
-	}
-
 	a.drainViolations(a.registry.Check(node, a.ctx()))
 	return node
 }
@@ -826,7 +810,7 @@ func (a *Analyzer) mapTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) *t
 		valNode := a.mapExpr(arg.Argument)
 		if i < len(variant.TupleTypes) {
 			if !tast.TypeOf(valNode).Equals(variant.TupleTypes[i]) && !types.IsUnknown(tast.TypeOf(valNode)) {
-				a.errorf(arg.Pos_, "type mismatch for variant argument %d", i+1)
+				a.errorf(arg.Pos(), "type mismatch for variant argument %d", i+1)
 			}
 		}
 		tastArgs = append(tastArgs, valNode)
@@ -971,8 +955,8 @@ func inferInfixType(op string, left, right types.Type) types.Type {
 	}
 	switch op {
 	case "+", "-", "*", "/", "%":
-		if left.Equals(types.IntType{}) {
-			return types.IntType{}
+		if left.Equals(types.I64Type{}) {
+			return types.I64Type{}
 		}
 	case "==", "!=", "<", "<=", ">", ">=":
 		return types.BoolType{}
@@ -994,8 +978,8 @@ func inferPrefixType(op string, right types.Type) types.Type {
 			return types.BoolType{}
 		}
 	case "-":
-		if right.Equals(types.IntType{}) {
-			return types.IntType{}
+		if right.Equals(types.I64Type{}) {
+			return types.I64Type{}
 		}
 	}
 	return types.UnknownType{}
@@ -1012,7 +996,7 @@ func inferIndexType(leftType types.Type) types.Type {
 	case *types.MapType:
 		return types.NewOptionType(ty.Value) // map reads return Option<V>
 	case types.StringType:
-		return types.IntType{} // characters are returned as int
+		return types.I64Type{} // characters are returned as int
 	}
 	return types.UnknownType{}
 }

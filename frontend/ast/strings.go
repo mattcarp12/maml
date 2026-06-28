@@ -19,20 +19,9 @@ func (p *Program) String() string {
 	return out.String()
 }
 func (p *Param) String() string {
-	var prefixes []string
-	if p.Mut {
-		prefixes = append(prefixes, "mut")
-	}
-	prefix := ""
-	if len(prefixes) > 0 {
-		prefix = strings.Join(prefixes, " ") + " "
-	}
-	if p.Type == nil {
-		return prefix + p.Name
-	}
 	return fmt.Sprintf(
-		"%s%s: %s",
-		prefix,
+		"%s %s: %s",
+		p.Cap,
 		p.Name,
 		p.Type.String(),
 	)
@@ -105,17 +94,8 @@ func (ce *CallExpr) String() string {
 	)
 }
 func (ca *CallArg) String() string {
-	prefix := ""
-	if ca.Mut {
-		prefix = "mut "
-	} else if ca.Own {
-		prefix = "own "
-	}
-	return prefix + ca.Argument.String()
+	return ca.Cap + " " + ca.Argument.String()
 }
-
-func (f *OwnExpr) String() string    { return "own " + f.Value.String() }
-func (f *FreezeExpr) String() string { return "freeze " + f.Value.String() }
 
 func (ie *InfixExpr) String() string {
 	return fmt.Sprintf(
@@ -220,6 +200,9 @@ func (d *DeclareStmt) String() string {
 		format = "mut " + format
 	}
 	return fmt.Sprintf(format, d.Name, op, d.Value.String())
+}
+func (ad *AliasDecl) String() string {
+	return fmt.Sprintf("%s := %s %s", ad.Name, ad.Cap, ad.Value.String())
 }
 func (a *AssignStmt) String() string {
 	return fmt.Sprintf(

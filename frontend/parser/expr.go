@@ -239,43 +239,25 @@ func (p *Parser) parseCallExpression(function ast.Expr) ast.Expr {
 		Function: function,
 		Pos_:     p.curPos(),
 	}
-
-	// Parse the arguments safely
-	callExpr.Arguments = p.parseCallArguments(token.RPAREN)
-
+	args := []ast.CallArg{}
+	p.parseCommaSeparatedList(token.RPAREN, func() {
+		capStr := ""
+		switch p.curToken.Type {
+		case token.MUT, token.OWN, token.RO, token.COPY:
+			capStr = p.curToken.Literal
+			p.nextToken() // step off the capability keyword
+		}
+		argExpr := p.parseExpression(LOWEST)
+		if argExpr != nil {
+			args = append(args, ast.CallArg{
+				Cap:      capStr,
+				Argument: argExpr,
+			})
+		}
+	})
+	callExpr.Arguments = args
 	callExpr.End_ = p.curEndPos()
 	return callExpr
-}
-
-// parseCallArguments reads a comma-separated list of function arguments,
-// preserving 'mut' and 'own' modifiers.
-func (p *Parser) parseCallArguments(end token.TokenType) []ast.CallArg {
-	args := []ast.CallArg{}
-
-	p.parseCommaSeparatedList(end, func() {
-		args = append(args, p.parseCallArg())
-	})
-
-	return args
-}
-
-// Add this function to parse individual arguments with mut/own logic
-func (p *Parser) parseCallArg() ast.CallArg {
-	arg := ast.CallArg{
-		Pos_: p.curPos(),
-	}
-
-	// We only intercept 'mut'. We leave 'own' alone so that
-	// parseExpression properly builds an ast.OwnExpr!
-	if p.curToken.Type == token.MUT {
-		arg.Mut = true
-		p.nextToken()
-	}
-
-	// Parse the actual expression
-	arg.Argument = p.parseExpression(LOWEST)
-	arg.End_ = p.curEndPos()
-	return arg
 }
 
 func (p *Parser) parseArrayTypePrefix() ast.Expr {
@@ -486,44 +468,4 @@ func (p *Parser) parseSpawnExpression() ast.Expr {
 		Pos_:  pos,
 		End_:  p.curEndPos(),
 	}
-}
-
-func (p *Parser) parseOwnExpression() ast.Expr {
-	pos := p.curPos()
-	p.nextToken() // step off 'own'
-
-	// Use PREFIX precedence so `own x.y` binds tightly
-	value := p.parseExpression(PREFIX)
-	if value == nil {
-		return nil
-	}
-
-	expr := &ast.OwnExpr{
-		Value: value,
-		Pos_:  pos,
-	}
-	expr.End_ = p.curEndPos()
-	return expr
-}
-
-func (p *Parser) parseFreezeExpression() ast.Expr {
-	pos := p.curPos()
-	// p.nextToken() // step off 'freeze'
-	if !p.expectPeek(token.LPAREN) {
-		return nil
-	}
-	p.nextToken() // step off '('
-	value := p.parseExpression(LOWEST)
-	if value == nil {
-		return nil
-	}
-	if !p.expectPeek(token.RPAREN) {
-		return nil
-	}
-	expr := &ast.FreezeExpr{
-		Value: value,
-		Pos_:  pos,
-	}
-	expr.End_ = p.curEndPos()
-	return expr
 }

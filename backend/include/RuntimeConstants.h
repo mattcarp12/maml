@@ -4,28 +4,30 @@
 namespace maml {
 namespace rt {
 
+constexpr const char* RUNTIME_INIT = "maml_runtime_init";
 constexpr const char* ALLOC = "maml_alloc";
 constexpr const char* FREE = "maml_free";
-constexpr const char* RETAIN = "maml_retain";
-constexpr const char* RELEASE = "maml_release";
 constexpr const char* VEC_CREATE = "maml_vec_create";
 constexpr const char* VEC_PUSH = "maml_vec_push";
 constexpr const char* VEC_SET = "maml_vec_set";
 constexpr const char* VEC_GET = "maml_vec_get";
 constexpr const char* VEC_LEN = "maml_vec_len";
+constexpr const char* VEC_CLONE = "maml_vec_clone";
 constexpr const char* MAP_CREATE = "maml_map_create";
 constexpr const char* MAP_PUT = "maml_map_put";
 constexpr const char* MAP_GET = "maml_map_get";
 constexpr const char* MAP_DELETE = "maml_map_delete";
 constexpr const char* MAP_LEN = "maml_map_len";
+constexpr const char* MAP_CLONE = "maml_map_clone";
+constexpr const char* MAP_NEXT_ACTIVE = "maml_map_next_active";
 constexpr const char* STR_HASH = "maml_str_hash";
 constexpr const char* STR_EQ = "maml_str_eq";
+constexpr const char* STR_CLONE = "maml_str_clone";
 constexpr const char* CORO_RESUME_HELPER = "maml_coro_resume_helper";
 constexpr const char* CORO_DONE_HELPER = "maml_coro_done_helper";
 constexpr const char* CORO_DESTROY_HELPER = "maml_coro_destroy_helper";
 constexpr const char* SPAWN_TASK = "maml_spawn_task";
 constexpr const char* RUN_EXECUTOR = "maml_run_executor";
-constexpr const char* RUNTIME_INIT = "maml_runtime_init";
 constexpr const char* TASK_AWAIT = "maml_task_await";
 constexpr const char* TASK_RELEASE = "maml_task_release";
 constexpr const char* TASK_GET_RESULT = "maml_task_get_result";

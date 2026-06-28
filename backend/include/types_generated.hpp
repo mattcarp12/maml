@@ -21,8 +21,20 @@ struct SumVariant {
     std::vector<std::shared_ptr<maml::Type>> tuple_types;
     std::vector<maml::StructField> fields;
 };
-struct IntType {};
+struct I8Type {};
+struct I16Type {};
+struct I32Type {};
+struct I64Type {};
+struct I128Type {};
+struct U8Type {};
+struct U16Type {};
+struct U32Type {};
+struct U64Type {};
+struct U128Type {};
+struct F32Type {};
+struct F64Type {};
 struct BoolType {};
+struct CharType {};
 struct UnitType {};
 struct StringType {};
 struct AnyType {};
@@ -44,6 +56,7 @@ struct ArrayType {
 };
 struct ViewType {
     std::shared_ptr<maml::Type> base;
+    bool is_mut;
 };
 struct VectorType {
     std::shared_ptr<maml::Type> base;
@@ -55,8 +68,20 @@ struct MapType {
 struct FutureType {
     std::shared_ptr<maml::Type> base;
 };
+struct RefType {
+    std::shared_ptr<maml::Type> base;
+};
+struct WeakRefType {
+    std::shared_ptr<maml::Type> base;
+};
+struct SenderType {
+    std::shared_ptr<maml::Type> base;
+};
+struct ReceiverType {
+    std::shared_ptr<maml::Type> base;
+};
 
-using TypeVariant = std::variant<IntType, BoolType, UnitType, StringType, AnyType, UnknownType, PtrType, StructType, SumType, ArrayType, ViewType, VectorType, MapType, FutureType
+using TypeVariant = std::variant<I8Type, I16Type, I32Type, I64Type, I128Type, U8Type, U16Type, U32Type, U64Type, U128Type, F32Type, F64Type, BoolType, CharType, UnitType, StringType, AnyType, UnknownType, PtrType, StructType, SumType, ArrayType, ViewType, VectorType, MapType, FutureType, RefType, WeakRefType, SenderType, ReceiverType
 >;
 
 struct Type {
@@ -86,6 +111,10 @@ inline void from_json(const nlohmann::json& j, ViewType& t);
 inline void from_json(const nlohmann::json& j, VectorType& t);
 inline void from_json(const nlohmann::json& j, MapType& t);
 inline void from_json(const nlohmann::json& j, FutureType& t);
+inline void from_json(const nlohmann::json& j, RefType& t);
+inline void from_json(const nlohmann::json& j, WeakRefType& t);
+inline void from_json(const nlohmann::json& j, SenderType& t);
+inline void from_json(const nlohmann::json& j, ReceiverType& t);
 
 // ============================================================================
 // Implementations
@@ -146,6 +175,9 @@ inline void from_json(const nlohmann::json& j, ViewType& t) {
     if (j.contains("base") && !j.at("base").is_null()) {
         j.at("base").get_to(t.base);
     }
+    if (j.contains("is_mut") && !j.at("is_mut").is_null()) {
+        j.at("is_mut").get_to(t.is_mut);
+    }
 }
 inline void from_json(const nlohmann::json& j, VectorType& t) {
     if (j.contains("base") && !j.at("base").is_null()) {
@@ -165,12 +197,44 @@ inline void from_json(const nlohmann::json& j, FutureType& t) {
         j.at("base").get_to(t.base);
     }
 }
+inline void from_json(const nlohmann::json& j, RefType& t) {
+    if (j.contains("base") && !j.at("base").is_null()) {
+        j.at("base").get_to(t.base);
+    }
+}
+inline void from_json(const nlohmann::json& j, WeakRefType& t) {
+    if (j.contains("base") && !j.at("base").is_null()) {
+        j.at("base").get_to(t.base);
+    }
+}
+inline void from_json(const nlohmann::json& j, SenderType& t) {
+    if (j.contains("base") && !j.at("base").is_null()) {
+        j.at("base").get_to(t.base);
+    }
+}
+inline void from_json(const nlohmann::json& j, ReceiverType& t) {
+    if (j.contains("base") && !j.at("base").is_null()) {
+        j.at("base").get_to(t.base);
+    }
+}
 
 inline void from_json(const nlohmann::json& j, Type& v) {
     if (j.is_string()) {
         auto kind = j.get<std::string>();
-        if (kind == "i32") { v.inner = IntType{}; return; }
+        if (kind == "i8") { v.inner = I8Type{}; return; }
+        if (kind == "i16") { v.inner = I16Type{}; return; }
+        if (kind == "i32") { v.inner = I32Type{}; return; }
+        if (kind == "i64") { v.inner = I64Type{}; return; }
+        if (kind == "i128") { v.inner = I128Type{}; return; }
+        if (kind == "u8") { v.inner = U8Type{}; return; }
+        if (kind == "u16") { v.inner = U16Type{}; return; }
+        if (kind == "u32") { v.inner = U32Type{}; return; }
+        if (kind == "u64") { v.inner = U64Type{}; return; }
+        if (kind == "u128") { v.inner = U128Type{}; return; }
+        if (kind == "f32") { v.inner = F32Type{}; return; }
+        if (kind == "f64") { v.inner = F64Type{}; return; }
         if (kind == "i1") { v.inner = BoolType{}; return; }
+        if (kind == "char") { v.inner = CharType{}; return; }
         if (kind == "void") { v.inner = UnitType{}; return; }
         if (kind == "string") { v.inner = StringType{}; return; }
         if (kind == "any") { v.inner = AnyType{}; return; }
@@ -188,6 +252,10 @@ inline void from_json(const nlohmann::json& j, Type& v) {
         if (kind == "vector") { v.inner = j.get<VectorType>(); return; }
         if (kind == "map") { v.inner = j.get<MapType>(); return; }
         if (kind == "future") { v.inner = j.get<FutureType>(); return; }
+        if (kind == "ref") { v.inner = j.get<RefType>(); return; }
+        if (kind == "weak_ref") { v.inner = j.get<WeakRefType>(); return; }
+        if (kind == "sender") { v.inner = j.get<SenderType>(); return; }
+        if (kind == "receiver") { v.inner = j.get<ReceiverType>(); return; }
         throw std::runtime_error("Unknown composite type kind: " + kind);
     }
     

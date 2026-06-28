@@ -9,6 +9,17 @@ var _ tast.Mapper[Node] = (*Lowerer)(nil)
 // =============================================================================
 // Generated node lowering methods (Implementing tast.Mapper[hir.Node])
 // =============================================================================
+func (l *Lowerer) MapAliasDecl(s *tast.AliasDecl) Node {
+	if s == nil {
+		return nil
+	}
+	return &AliasDecl{
+		Pos_:   s.Pos_,
+		End_:   s.End_,
+		Symbol: s.Symbol,
+		Value:  l.lowerExpr(s.Value),
+	}
+}
 func (l *Lowerer) MapArrayLiteral(s *tast.ArrayLiteral) Node {
 	if s == nil {
 		return nil
@@ -75,17 +86,6 @@ func (l *Lowerer) MapDeclareStmt(s *tast.DeclareStmt) Node {
 		Value:  l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapFreezeExpr(s *tast.FreezeExpr) Node {
-	if s == nil {
-		return nil
-	}
-	return &FreezeExpr{
-		Pos_:  s.Pos_,
-		End_:  s.End_,
-		Type:  s.Type,
-		Value: l.lowerExpr(s.Value),
-	}
-}
 func (l *Lowerer) MapIdentifier(s *tast.Identifier) Node {
 	if s == nil {
 		return nil
@@ -120,17 +120,6 @@ func (l *Lowerer) MapIntLiteral(s *tast.IntLiteral) Node {
 		End_:  s.End_,
 		Type:  s.Type,
 		Value: s.Value,
-	}
-}
-func (l *Lowerer) MapOwnExpr(s *tast.OwnExpr) Node {
-	if s == nil {
-		return nil
-	}
-	return &OwnExpr{
-		Pos_:  s.Pos_,
-		End_:  s.End_,
-		Type:  s.Type,
-		Value: l.lowerExpr(s.Value),
 	}
 }
 func (l *Lowerer) MapPrefixExpr(s *tast.PrefixExpr) Node {
@@ -224,7 +213,7 @@ func lowerTASTCallArg(l *Lowerer, h tast.CallArg) CallArg {
 		Pos_:     h.Pos_,
 		End_:     h.End_,
 		Argument: l.lowerExpr(h.Argument),
-		Mut:      h.Mut,
+		Cap:      h.Cap,
 	}
 }
 func lowerTASTMapElement(l *Lowerer, h tast.MapElement) MapElement {

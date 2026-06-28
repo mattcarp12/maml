@@ -1,32 +1,42 @@
 primitives:
-  - name: IntType
+  - name: I8Type
+    cpp_kind: "i8"
+  - name: I16Type
+    cpp_kind: "i16"
+  - name: I32Type
     cpp_kind: "i32"
-    is_reference: false
-    is_needs_arc: false
+  - name: I64Type
+    cpp_kind: "i64"
+  - name: I128Type
+    cpp_kind: "i128"
+  - name: U8Type
+    cpp_kind: "u8"
+  - name: U16Type
+    cpp_kind: "u16"
+  - name: U32Type
+    cpp_kind: "u32"
+  - name: U64Type
+    cpp_kind: "u64"
+  - name: U128Type
+    cpp_kind: "u128"
+  - name: F32Type
+    cpp_kind: "f32"
+  - name: F64Type
+    cpp_kind: "f64"
   - name: BoolType
     cpp_kind: "i1"
-    is_reference: false
-    is_needs_arc: false
+  - name: CharType
+    cpp_kind: "char"
   - name: UnitType
     cpp_kind: "void"
-    is_reference: false
-    is_needs_arc: false
   - name: StringType
     cpp_kind: "string"
-    is_reference: true
-    is_needs_arc: true
   - name: AnyType
     cpp_kind: "any"
-    is_reference: true
-    is_needs_arc: false
   - name: UnknownType
     cpp_kind: "unknown"
-    is_reference: false
-    is_needs_arc: false
   - name: PtrType
     cpp_kind: "ptr"
-    is_reference: true
-    is_needs_arc: false
 
 composites:
   - name: StructType
@@ -52,7 +62,6 @@ composites:
 containers:
   - name: ArrayType
     json_kind: "array"
-    is_needs_arc: false
     properties:
       - name: Base
         type: Type
@@ -60,19 +69,18 @@ containers:
         type: int
   - name: ViewType
     json_kind: "view"
-    is_needs_arc: false
     properties:
       - name: Base
         type: Type
+      - name: IsMut
+        type: bool
   - name: VectorType
     json_kind: "vector"
-    is_needs_arc: true
     properties:
       - name: Base
         type: Type
   - name: MapType
     json_kind: "map"
-    is_needs_arc: true
     properties:
       - name: Key
         type: Type
@@ -80,7 +88,26 @@ containers:
         type: Type
   - name: FutureType
     json_kind: "future"
-    is_needs_arc: true
+    properties:
+      - name: Base
+        type: Type
+  - name: RefType
+    json_kind: "ref"
+    properties:
+      - name: Base
+        type: Type
+  - name: WeakRefType
+    json_kind: "weak_ref"
+    properties:
+      - name: Base
+        type: Type
+  - name: SenderType
+    json_kind: "sender"
+    properties:
+      - name: Base
+        type: Type
+  - name: ReceiverType
+    json_kind: "receiver"
     properties:
       - name: Base
         type: Type

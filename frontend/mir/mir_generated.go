@@ -56,6 +56,14 @@ type BoolConstant struct {
 
 func (*BoolConstant) isValue() {}
 
+type BorrowInst struct {
+	Dst   string
+	IsMut bool
+	Src   string
+}
+
+func (*BorrowInst) isInstruction() {}
+
 type BranchTerminator struct {
 	Condition   Value
 	FalseTarget BlockID
@@ -65,7 +73,7 @@ type BranchTerminator struct {
 func (*BranchTerminator) isTerminator() {}
 
 type CallInst struct {
-	Arguments []MIRCallArg
+	Arguments []Value
 	Dst       string
 	Function  Value
 	Type      types.Type
@@ -106,7 +114,13 @@ type CoroYieldTerminator struct {
 
 func (*CoroYieldTerminator) isTerminator() {}
 
-type FieldReadInst struct {
+type DropInst struct {
+	Src string
+}
+
+func (*DropInst) isInstruction() {}
+
+type FieldAddrInst struct {
 	Dst           string
 	FieldIndex    int
 	FieldName     string
@@ -116,38 +130,9 @@ type FieldReadInst struct {
 	VariantLayout []types.Type
 }
 
-func (*FieldReadInst) isInstruction() {}
+func (*FieldAddrInst) isInstruction() {}
 
-type FieldWriteInst struct {
-	FieldIndex    int
-	FieldName     string
-	FieldOffset   int
-	Object        Value
-	Value         Value
-	VariantLayout []types.Type
-}
-
-func (*FieldWriteInst) isInstruction() {}
-
-type FreezeInst struct {
-	Dst  string
-	Path []string
-	Root Value
-	Type types.Type
-}
-
-func (*FreezeInst) isInstruction() {}
-
-type IndexAssignInst struct {
-	Index      Value
-	Target     string
-	TargetType types.Type
-	Value      Value
-}
-
-func (*IndexAssignInst) isInstruction() {}
-
-type IndexReadInst struct {
+type IndexAddrInst struct {
 	Dst        string
 	Index      Value
 	Source     Value
@@ -155,7 +140,7 @@ type IndexReadInst struct {
 	Type       types.Type
 }
 
-func (*IndexReadInst) isInstruction() {}
+func (*IndexAddrInst) isInstruction() {}
 
 type IntConstant struct {
 	Type  types.Type
@@ -190,41 +175,6 @@ type MoveInst struct {
 }
 
 func (*MoveInst) isInstruction() {}
-
-type MutBorrowInst struct {
-	Dst string
-	Src string
-}
-
-func (*MutBorrowInst) isInstruction() {}
-
-type OwnInst struct {
-	Dst  string
-	Path []string
-	Root Value
-	Type types.Type
-}
-
-func (*OwnInst) isInstruction() {}
-
-type RefAllocInst struct {
-	Dst  string
-	Type types.Type
-}
-
-func (*RefAllocInst) isInstruction() {}
-
-type RefDecInst struct {
-	Src string
-}
-
-func (*RefDecInst) isInstruction() {}
-
-type RefIncInst struct {
-	Src string
-}
-
-func (*RefIncInst) isInstruction() {}
 
 type Register struct {
 	Name string
@@ -334,6 +284,7 @@ type Mapper[R any] interface {
 	MapAssignInst(n *AssignInst) R
 	MapBinaryOpInst(n *BinaryOpInst) R
 	MapBoolConstant(n *BoolConstant) R
+	MapBorrowInst(n *BorrowInst) R
 	MapBranchTerminator(n *BranchTerminator) R
 	MapCallInst(n *CallInst) R
 	MapCastInst(n *CastInst) R
@@ -341,21 +292,14 @@ type Mapper[R any] interface {
 	MapCoroPrologueInst(n *CoroPrologueInst) R
 	MapCoroSuspendTerminator(n *CoroSuspendTerminator) R
 	MapCoroYieldTerminator(n *CoroYieldTerminator) R
-	MapFieldReadInst(n *FieldReadInst) R
-	MapFieldWriteInst(n *FieldWriteInst) R
-	MapFreezeInst(n *FreezeInst) R
-	MapIndexAssignInst(n *IndexAssignInst) R
-	MapIndexReadInst(n *IndexReadInst) R
+	MapDropInst(n *DropInst) R
+	MapFieldAddrInst(n *FieldAddrInst) R
+	MapIndexAddrInst(n *IndexAddrInst) R
 	MapIntConstant(n *IntConstant) R
 	MapJumpTerminator(n *JumpTerminator) R
 	MapKeepAliveInst(n *KeepAliveInst) R
 	MapLoadPtrInst(n *LoadPtrInst) R
 	MapMoveInst(n *MoveInst) R
-	MapMutBorrowInst(n *MutBorrowInst) R
-	MapOwnInst(n *OwnInst) R
-	MapRefAllocInst(n *RefAllocInst) R
-	MapRefDecInst(n *RefDecInst) R
-	MapRefIncInst(n *RefIncInst) R
 	MapRegister(n *Register) R
 	MapReturnTerminator(n *ReturnTerminator) R
 	MapSliceInst(n *SliceInst) R
@@ -384,6 +328,8 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapBinaryOpInst(n)
 	case *BoolConstant:
 		return m.MapBoolConstant(n)
+	case *BorrowInst:
+		return m.MapBorrowInst(n)
 	case *BranchTerminator:
 		return m.MapBranchTerminator(n)
 	case *CallInst:
@@ -398,16 +344,12 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapCoroSuspendTerminator(n)
 	case *CoroYieldTerminator:
 		return m.MapCoroYieldTerminator(n)
-	case *FieldReadInst:
-		return m.MapFieldReadInst(n)
-	case *FieldWriteInst:
-		return m.MapFieldWriteInst(n)
-	case *FreezeInst:
-		return m.MapFreezeInst(n)
-	case *IndexAssignInst:
-		return m.MapIndexAssignInst(n)
-	case *IndexReadInst:
-		return m.MapIndexReadInst(n)
+	case *DropInst:
+		return m.MapDropInst(n)
+	case *FieldAddrInst:
+		return m.MapFieldAddrInst(n)
+	case *IndexAddrInst:
+		return m.MapIndexAddrInst(n)
 	case *IntConstant:
 		return m.MapIntConstant(n)
 	case *JumpTerminator:
@@ -418,16 +360,6 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapLoadPtrInst(n)
 	case *MoveInst:
 		return m.MapMoveInst(n)
-	case *MutBorrowInst:
-		return m.MapMutBorrowInst(n)
-	case *OwnInst:
-		return m.MapOwnInst(n)
-	case *RefAllocInst:
-		return m.MapRefAllocInst(n)
-	case *RefDecInst:
-		return m.MapRefDecInst(n)
-	case *RefIncInst:
-		return m.MapRefIncInst(n)
 	case *Register:
 		return m.MapRegister(n)
 	case *ReturnTerminator:
@@ -460,7 +392,3 @@ func MapNode[R any](node any, m Mapper[R]) R {
 // ============================================================================
 // Helpers
 // ============================================================================
-type MIRCallArg struct {
-	Argument Value
-	Mut      bool
-}

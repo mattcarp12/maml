@@ -40,6 +40,18 @@ type Operand interface {
 // =============================================================================
 // HIR Node Structs
 // =============================================================================
+type AliasDecl struct {
+	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
+	Symbol *types.Symbol
+	Value  Expr
+}
+
+func (n *AliasDecl) Pos() Position    { return n.Pos_ }
+func (n *AliasDecl) End() Position    { return n.End_ }
+func (n *AliasDecl) Accept(v Visitor) { v.VisitAliasDecl(n) }
+func (n *AliasDecl) stmtNode()        {}
+
 type ArrayLiteral struct {
 	Pos_     Position `json:"-"`
 	End_     Position `json:"-"`
@@ -188,18 +200,6 @@ func (n *FnDecl) End() Position    { return n.End_ }
 func (n *FnDecl) Accept(v Visitor) { v.VisitFnDecl(n) }
 func (n *FnDecl) declNode()        {}
 
-type FreezeExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Type  types.Type
-	Value Expr
-}
-
-func (n *FreezeExpr) Pos() Position    { return n.Pos_ }
-func (n *FreezeExpr) End() Position    { return n.End_ }
-func (n *FreezeExpr) Accept(v Visitor) { v.VisitFreezeExpr(n) }
-func (n *FreezeExpr) exprNode()        {}
-
 type Identifier struct {
 	Pos_   Position `json:"-"`
 	End_   Position `json:"-"`
@@ -319,18 +319,6 @@ func (n *MapReadExpr) Pos() Position    { return n.Pos_ }
 func (n *MapReadExpr) End() Position    { return n.End_ }
 func (n *MapReadExpr) Accept(v Visitor) { v.VisitMapReadExpr(n) }
 func (n *MapReadExpr) exprNode()        {}
-
-type OwnExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Type  types.Type
-	Value Expr
-}
-
-func (n *OwnExpr) Pos() Position    { return n.Pos_ }
-func (n *OwnExpr) End() Position    { return n.End_ }
-func (n *OwnExpr) Accept(v Visitor) { v.VisitOwnExpr(n) }
-func (n *OwnExpr) exprNode()        {}
 
 type PrefixExpr struct {
 	Pos_     Position `json:"-"`
@@ -541,7 +529,7 @@ type CallArg struct {
 	Pos_     Position `json:"-"`
 	End_     Position `json:"-"`
 	Argument Expr
-	Mut      bool
+	Cap      types.Cap
 }
 
 func (h *CallArg) Pos() Position { return h.Pos_ }
@@ -593,6 +581,7 @@ func (h *VariantField) End() Position { return h.End_ }
 // =============================================================================
 
 type Visitor interface {
+	VisitAliasDecl(n *AliasDecl)
 	VisitArrayLiteral(n *ArrayLiteral)
 	VisitAssignStmt(n *AssignStmt)
 	VisitAwaitExpr(n *AwaitExpr)
@@ -605,7 +594,6 @@ type Visitor interface {
 	VisitExprStmt(n *ExprStmt)
 	VisitFieldAccess(n *FieldAccess)
 	VisitFnDecl(n *FnDecl)
-	VisitFreezeExpr(n *FreezeExpr)
 	VisitIdentifier(n *Identifier)
 	VisitIfExpr(n *IfExpr)
 	VisitIndexExpr(n *IndexExpr)
@@ -615,7 +603,6 @@ type Visitor interface {
 	VisitMapInsertStmt(n *MapInsertStmt)
 	VisitMapLiteral(n *MapLiteral)
 	VisitMapReadExpr(n *MapReadExpr)
-	VisitOwnExpr(n *OwnExpr)
 	VisitPrefixExpr(n *PrefixExpr)
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
@@ -655,8 +642,6 @@ func TypeOf(expr Expr) types.Type {
 		return e.Type
 	case *FieldAccess:
 		return e.Type
-	case *FreezeExpr:
-		return e.Type
 	case *Identifier:
 		return e.Type
 	case *IfExpr:
@@ -670,8 +655,6 @@ func TypeOf(expr Expr) types.Type {
 	case *MapLiteral:
 		return e.Type
 	case *MapReadExpr:
-		return e.Type
-	case *OwnExpr:
 		return e.Type
 	case *PrefixExpr:
 		return e.Type

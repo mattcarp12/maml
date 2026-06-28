@@ -51,6 +51,16 @@
       },
       "lower": true
     },
+    "AliasDecl": {
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Symbol": "*types.Symbol",
+        "Value": "Expr"
+      },
+      "lower": true
+    },
     "AssignStmt": {
       "interfaces": [
         "Stmt"
@@ -231,26 +241,6 @@
         "Type": "types.Type"
       }
     },
-    "OwnExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr",
-        "Type": "types.Type"
-      },
-      "lower": true
-    },
-    "FreezeExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr",
-        "Type": "types.Type"
-      },
-      "lower": true
-    },
     "FieldAccess": {
       "interfaces": [
         "Expr"
@@ -406,7 +396,7 @@
     "CallArg": {
       "fields": {
         "Argument": "Expr",
-        "Mut": "bool"
+        "Cap": "types.Cap"
       },
       "lower": true
     },

@@ -43,8 +43,7 @@ func BuildProgram(hirProg *hir.Program) *Program {
 			mirProg.TypeDecls = append(mirProg.TypeDecls, d)
 
 		case *hir.FnDecl:
-			// Generate the CFG for the function body
-			graph := buildFn(d)
+			var graph *Graph = nil
 			if !d.IsExtern {
 				graph = buildFn(d)
 			}
@@ -158,6 +157,8 @@ func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
 	case *hir.DeclareStmt:
 		current = b.buildDeclareStmt(s, current)
 		return current
+	case *hir.AliasDecl:
+		return b.buildAliasDecl(s, current)
 	case *hir.AssignStmt:
 		return b.buildAssignStmt(s, current)
 	case *hir.BlockStmt:
@@ -260,11 +261,46 @@ func (b *Builder) buildLoopStmt(stmt *hir.LoopStmt, current *BasicBlock) *BasicB
 
 func (b *Builder) buildDeclareStmt(stmt *hir.DeclareStmt, current *BasicBlock) *BasicBlock {
 	flatRHS, current := b.flattenExpr(stmt.Value, current)
-
-	// Get the collision-free unique name for this specific variable instance
 	uniqueName := b.getSymbolName(stmt.Symbol)
-
 	b.emitMemoryTransfer(uniqueName, flatRHS, stmt.Symbol, current)
+	return current
+}
+
+func (b *Builder) buildAliasDecl(stmt *hir.AliasDecl, current *BasicBlock) *BasicBlock {
+	flatSrc, current := b.flattenExpr(stmt.Value, current)
+	aliasName := b.getSymbolName(stmt.Symbol)
+	current.Statements = append(current.Statements, &TempDeclInst{
+		Name: aliasName,
+		Type: stmt.Symbol.Type,
+	})
+	srcReg, ok := flatSrc.(*Register)
+	if !ok {
+		panic("compiler error: cannot take alias of non-register value")
+	}
+	switch stmt.Symbol.Cap {
+	case types.CapMut:
+		current.Statements = append(current.Statements, &BorrowInst{
+			Dst:   aliasName,
+			Src:   srcReg.Name,
+			IsMut: true,
+		})
+	case types.CapRo:
+		current.Statements = append(current.Statements, &BorrowInst{
+			Dst:   aliasName,
+			Src:   srcReg.Name,
+			IsMut: false,
+		})
+	case types.CapOwn:
+		current.Statements = append(current.Statements, &MoveInst{
+			Dst: aliasName,
+			Src: srcReg.Name,
+		})
+	case types.CapCopy:
+		current.Statements = append(current.Statements, &CopyInst{
+			Dst: aliasName,
+			Src: srcReg.Name,
+		})
+	}
 	return current
 }
 
@@ -276,35 +312,22 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 
 	// 1. FIELD ASSIGNMENT (e.g., player.health = 80 OR player.health -= 20)
 	if fa, ok := stmt.LValue.(*hir.FieldAccess); ok {
-		// Evaluate the object pointer exactly ONCE
-		flatObj, nextBlock := b.flattenExpr(fa.Object, current)
-		current = nextBlock
-
-		fieldIndex := -1
-		if reg, isReg := flatObj.(*Register); isReg {
-			if st, isSt := reg.Type.(*types.StructType); isSt {
-				fieldIndex = st.GetFieldIndex(fa.Field.Value)
-			}
-		}
+		// Evaluate the exact memory address of the field exactly ONCE
+		ptrVal, current := b.flattenPlace(fa, current)
 
 		var writeVal Value
 		if stmt.Operator != "" {
-			// Read the current value using the evaluated pointer
+			// Compound assignment: Read from the pointer, do math
 			readTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: fa.Type})
-			current.Statements = append(current.Statements, &FieldReadInst{
-				Dst:        readTmp,
-				Object:     flatObj,
-				FieldName:  fa.Field.Value,
-				FieldIndex: fieldIndex,
-				Type:       fa.Type,
+			current.Statements = append(current.Statements, &LoadPtrInst{
+				Dst:  readTmp,
+				Ptr:  ptrVal,
+				Type: fa.Type,
 			})
 
-			// Evaluate RHS
-			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
-			current = nextBlock
+			flatRHS, current := b.flattenExpr(stmt.RValue, current)
 
-			// Apply Compound Operator
 			opTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: fa.Type})
 			current.Statements = append(current.Statements, &BinaryOpInst{
@@ -316,48 +339,37 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 			})
 			writeVal = &Register{Name: opTmp, Type: fa.Type}
 		} else {
+			// Simple assignment
 			writeVal, current = b.flattenExpr(stmt.RValue, current)
 		}
 
-		// Write back using our new MIR instruction!
-		current.Statements = append(current.Statements, &FieldWriteInst{
-			Object:     flatObj,
-			FieldName:  fa.Field.Value,
-			FieldIndex: fieldIndex,
-			Value:      writeVal,
+		// Write the final value directly to the memory address!
+		ptrReg := ptrVal.(*Register)
+		current.Statements = append(current.Statements, &StoreInst{
+			DstPtr: ptrReg.Name,
+			Value:  writeVal,
+			Type:   fa.Type,
 		})
 		return current
 	}
 
 	// 2. ARRAY / VIEW INDEX ASSIGNMENT (e.g., arr[0] = 5 OR arr[0] += 5)
 	if idx, ok := stmt.LValue.(*hir.IndexExpr); ok {
-		// Evaluate target and index exactly ONCE
-		flatTarget, nextBlock := b.flattenExpr(idx.Left, current)
+		// Evaluate the exact memory address of the array/slice index exactly ONCE!
+		ptrVal, nextBlock := b.flattenPlace(idx, current)
 		current = nextBlock
 
-		flatIdx, nextBlock := b.flattenExpr(idx.Index, current)
-		current = nextBlock
-
-		targetName := ""
-		var targetType types.Type
-		if reg, isReg := flatTarget.(*Register); isReg {
-			targetName = reg.Name
-			targetType = reg.Type
-		} else {
-			panic(fmt.Sprintf("Unsupported target for IndexExpr: %T\n", flatTarget))
-		}
-
+		elemType := hir.TypeOf(stmt.LValue)
 		var writeVal Value
+
 		if stmt.Operator != "" {
-			elemType := hir.TypeOf(stmt.LValue)
+			// Compound assignment: Read from the pointer, do math
 			readTmp := b.newTemp()
 			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
-			current.Statements = append(current.Statements, &IndexReadInst{
-				Dst:        readTmp,
-				Source:     flatTarget,
-				SourceType: targetType,
-				Index:      flatIdx,
-				Type:       elemType,
+			current.Statements = append(current.Statements, &LoadPtrInst{
+				Dst:  readTmp,
+				Ptr:  ptrVal,
+				Type: elemType,
 			})
 
 			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
@@ -377,11 +389,12 @@ func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *Ba
 			writeVal, current = b.flattenExpr(stmt.RValue, current)
 		}
 
-		current.Statements = append(current.Statements, &IndexAssignInst{
-			Target:     targetName,
-			TargetType: targetType,
-			Index:      flatIdx,
-			Value:      writeVal,
+		// Write the final value directly to the memory address using standard StoreInst
+		ptrReg := ptrVal.(*Register)
+		current.Statements = append(current.Statements, &StoreInst{
+			DstPtr: ptrReg.Name,
+			Value:  writeVal,
+			Type:   elemType,
 		})
 		return current
 	}
@@ -586,12 +599,4 @@ func (b *Builder) emitTemp(current *BasicBlock, t types.Type) string {
 	tmp := b.newTemp()
 	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
 	return tmp
-}
-
-// getARCHooks returns the runtime ARC function names needed for a specific type.
-func (b *Builder) getARCHooks(t types.Type) (string, string) {
-	if t != nil && t.IsNeedsARC() {
-		return "maml_retain", "maml_release"
-	}
-	return "null", "null"
 }

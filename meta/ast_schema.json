@@ -49,6 +49,16 @@
         "Value": "Expr"
       }
     },
+    "AliasDecl": {
+      "interfaces": [
+        "Stmt"
+      ],
+      "fields": {
+        "Name": "string",
+        "Cap": "string",
+        "Value": "Expr"
+      }
+    },
     "AssignStmt": {
       "interfaces": [
         "Stmt"
@@ -167,22 +177,6 @@
       "fields": {
         "Function": "Expr",
         "Arguments": "[]CallArg"
-      }
-    },
-    "OwnExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr"
-      }
-    },
-    "FreezeExpr": {
-      "interfaces": [
-        "Expr"
-      ],
-      "fields": {
-        "Value": "Expr"
       }
     },
     "InfixExpr": {
@@ -357,8 +351,7 @@
       "fields": {
         "Name": "string",
         "Type": "TypeExpr",
-        "Mut": "bool",
-        "Own": "bool"
+        "Cap": "string"
       }
     },
     "CompositeElement": {
@@ -370,8 +363,7 @@
     "CallArg": {
       "fields": {
         "Argument": "Expr",
-        "Mut": "bool",
-        "Own": "bool"
+        "Cap": "string"
       }
     },
     "MatchArm": {

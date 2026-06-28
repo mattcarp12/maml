@@ -47,6 +47,13 @@ type Pattern interface {
 // =============================================================================
 // AST Node Structs
 // =============================================================================
+type AliasDecl struct {
+	Pos_  Position `json:"-"`
+	End_  Position `json:"-"`
+	Cap   string
+	Name  string
+	Value Expr
+}
 type ArrayTypeExpr struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
@@ -139,11 +146,6 @@ type ForStmt struct {
 	Init      Stmt
 	Post      Stmt
 }
-type FreezeExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Value Expr
-}
 type GenericTypeExpr struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
@@ -200,11 +202,6 @@ type NamedTypeExpr struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
 	Name *Identifier
-}
-type OwnExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Value Expr
 }
 type PrefixExpr struct {
 	Pos_     Position `json:"-"`
@@ -286,8 +283,7 @@ type CallArg struct {
 	Pos_     Position `json:"-"`
 	End_     Position `json:"-"`
 	Argument Expr
-	Mut      bool
-	Own      bool
+	Cap      string
 }
 type CompositeElement struct {
 	Pos_  Position `json:"-"`
@@ -310,9 +306,8 @@ type MatchArm struct {
 type Param struct {
 	Pos_ Position `json:"-"`
 	End_ Position `json:"-"`
-	Mut  bool
+	Cap  string
 	Name string
-	Own  bool
 	Type TypeExpr
 }
 type StructTypeField struct {
@@ -332,6 +327,7 @@ type VariantTypeExpr struct {
 // =============================================================================
 // Marker Methods
 // =============================================================================
+func (n *AliasDecl) stmtNode()            {}
 func (n *ArrayTypeExpr) typeNode()        {}
 func (n *AssignStmt) stmtNode()           {}
 func (n *AwaitExpr) exprNode()            {}
@@ -348,7 +344,6 @@ func (n *ExprStmt) stmtNode()             {}
 func (n *FieldAccess) exprNode()          {}
 func (n *FnDecl) declNode()               {}
 func (n *ForStmt) stmtNode()              {}
-func (n *FreezeExpr) exprNode()           {}
 func (n *GenericTypeExpr) typeNode()      {}
 func (n *Identifier) exprNode()           {}
 func (n *IdentifierPattern) patternNode() {}
@@ -359,7 +354,6 @@ func (n *IntLiteral) exprNode()           {}
 func (n *LiteralPattern) patternNode()    {}
 func (n *MatchExpr) exprNode()            {}
 func (n *NamedTypeExpr) typeNode()        {}
-func (n *OwnExpr) exprNode()              {}
 func (n *PrefixExpr) exprNode()           {}
 func (n *Program) declNode()              {}
 func (n *ReturnStmt) stmtNode()           {}
@@ -379,6 +373,7 @@ func (n *YieldStmt) stmtNode()            {}
 // =============================================================================
 
 type Visitor interface {
+	VisitAliasDecl(n *AliasDecl)
 	VisitArrayTypeExpr(n *ArrayTypeExpr)
 	VisitAssignStmt(n *AssignStmt)
 	VisitAwaitExpr(n *AwaitExpr)
@@ -394,7 +389,6 @@ type Visitor interface {
 	VisitFieldAccess(n *FieldAccess)
 	VisitFnDecl(n *FnDecl)
 	VisitForStmt(n *ForStmt)
-	VisitFreezeExpr(n *FreezeExpr)
 	VisitGenericTypeExpr(n *GenericTypeExpr)
 	VisitIdentifier(n *Identifier)
 	VisitIdentifierPattern(n *IdentifierPattern)
@@ -405,7 +399,6 @@ type Visitor interface {
 	VisitLiteralPattern(n *LiteralPattern)
 	VisitMatchExpr(n *MatchExpr)
 	VisitNamedTypeExpr(n *NamedTypeExpr)
-	VisitOwnExpr(n *OwnExpr)
 	VisitPrefixExpr(n *PrefixExpr)
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
@@ -422,6 +415,7 @@ type Visitor interface {
 }
 
 type ASTMapper[R any] interface {
+	MapAliasDecl(n *AliasDecl) R
 	MapArrayTypeExpr(n *ArrayTypeExpr) R
 	MapAssignStmt(n *AssignStmt) R
 	MapAwaitExpr(n *AwaitExpr) R
@@ -437,7 +431,6 @@ type ASTMapper[R any] interface {
 	MapFieldAccess(n *FieldAccess) R
 	MapFnDecl(n *FnDecl) R
 	MapForStmt(n *ForStmt) R
-	MapFreezeExpr(n *FreezeExpr) R
 	MapGenericTypeExpr(n *GenericTypeExpr) R
 	MapIdentifier(n *Identifier) R
 	MapIdentifierPattern(n *IdentifierPattern) R
@@ -448,7 +441,6 @@ type ASTMapper[R any] interface {
 	MapLiteralPattern(n *LiteralPattern) R
 	MapMatchExpr(n *MatchExpr) R
 	MapNamedTypeExpr(n *NamedTypeExpr) R
-	MapOwnExpr(n *OwnExpr) R
 	MapPrefixExpr(n *PrefixExpr) R
 	MapProgram(n *Program) R
 	MapReturnStmt(n *ReturnStmt) R
@@ -472,6 +464,8 @@ func MapNode[R any](node Node, m ASTMapper[R]) R {
 		return zero
 	}
 	switch n := node.(type) {
+	case *AliasDecl:
+		return m.MapAliasDecl(n)
 	case *ArrayTypeExpr:
 		return m.MapArrayTypeExpr(n)
 	case *AssignStmt:
@@ -502,8 +496,6 @@ func MapNode[R any](node Node, m ASTMapper[R]) R {
 		return m.MapFnDecl(n)
 	case *ForStmt:
 		return m.MapForStmt(n)
-	case *FreezeExpr:
-		return m.MapFreezeExpr(n)
 	case *GenericTypeExpr:
 		return m.MapGenericTypeExpr(n)
 	case *Identifier:
@@ -524,8 +516,6 @@ func MapNode[R any](node Node, m ASTMapper[R]) R {
 		return m.MapMatchExpr(n)
 	case *NamedTypeExpr:
 		return m.MapNamedTypeExpr(n)
-	case *OwnExpr:
-		return m.MapOwnExpr(n)
 	case *PrefixExpr:
 		return m.MapPrefixExpr(n)
 	case *Program:
@@ -560,6 +550,10 @@ func MapNode[R any](node Node, m ASTMapper[R]) R {
 // =============================================================================
 // Position & Interface Methods
 // =============================================================================
+func (n *AliasDecl) Pos() Position                             { return n.Pos_ }
+func (n *AliasDecl) End() Position                             { return n.End_ }
+func (n *AliasDecl) Accept(v Visitor)                          { v.VisitAliasDecl(n) }
+func (n *AliasDecl) AcceptMapper(v ASTMapper[any]) any         { return v.MapAliasDecl(n) }
 func (n *ArrayTypeExpr) Pos() Position                         { return n.Pos_ }
 func (n *ArrayTypeExpr) End() Position                         { return n.End_ }
 func (n *ArrayTypeExpr) Accept(v Visitor)                      { v.VisitArrayTypeExpr(n) }
@@ -620,10 +614,6 @@ func (n *ForStmt) Pos() Position                               { return n.Pos_ }
 func (n *ForStmt) End() Position                               { return n.End_ }
 func (n *ForStmt) Accept(v Visitor)                            { v.VisitForStmt(n) }
 func (n *ForStmt) AcceptMapper(v ASTMapper[any]) any           { return v.MapForStmt(n) }
-func (n *FreezeExpr) Pos() Position                            { return n.Pos_ }
-func (n *FreezeExpr) End() Position                            { return n.End_ }
-func (n *FreezeExpr) Accept(v Visitor)                         { v.VisitFreezeExpr(n) }
-func (n *FreezeExpr) AcceptMapper(v ASTMapper[any]) any        { return v.MapFreezeExpr(n) }
 func (n *GenericTypeExpr) Pos() Position                       { return n.Pos_ }
 func (n *GenericTypeExpr) End() Position                       { return n.End_ }
 func (n *GenericTypeExpr) Accept(v Visitor)                    { v.VisitGenericTypeExpr(n) }
@@ -664,10 +654,6 @@ func (n *NamedTypeExpr) Pos() Position                         { return n.Pos_ }
 func (n *NamedTypeExpr) End() Position                         { return n.End_ }
 func (n *NamedTypeExpr) Accept(v Visitor)                      { v.VisitNamedTypeExpr(n) }
 func (n *NamedTypeExpr) AcceptMapper(v ASTMapper[any]) any     { return v.MapNamedTypeExpr(n) }
-func (n *OwnExpr) Pos() Position                               { return n.Pos_ }
-func (n *OwnExpr) End() Position                               { return n.End_ }
-func (n *OwnExpr) Accept(v Visitor)                            { v.VisitOwnExpr(n) }
-func (n *OwnExpr) AcceptMapper(v ASTMapper[any]) any           { return v.MapOwnExpr(n) }
 func (n *PrefixExpr) Pos() Position                            { return n.Pos_ }
 func (n *PrefixExpr) End() Position                            { return n.End_ }
 func (n *PrefixExpr) Accept(v Visitor)                         { v.VisitPrefixExpr(n) }

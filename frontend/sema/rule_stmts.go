@@ -70,20 +70,17 @@ func (r AssignMutabilityCheck) Name() string { return "assign-mutability-check" 
 func (r AssignMutabilityCheck) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
 	sym := ctx.getRootSymbol(node.LValue)
 	if sym == nil {
-		// AssignLValueMustBeSymbol already reported this; don't double-report.
 		return nil
 	}
-	if !sym.Mutable {
+
+	// Allow mutation if it's an owned mutable variable OR a mutable borrow
+	if !sym.Mutable && sym.Cap != "mut" {
 		return []Violation{violation(node.Pos_, "cannot mutate immutable variable '%s'", sym.Name)}
 	}
 	return nil
 }
 
-// AssignmentTypeCompatibility checks that the RHS type is assignable to the
-// LHS type. There is one special case: when assigning into a map index
-// expression, the LHS type reported by the index expression is Option<V>
-// (because map reads return Option), but the correct expected type for a
-// write is the raw V. This rule unwraps that before comparing.
+// AssignmentTypeCompatibility checks that the RHS type is assignable to the LHS type.
 type AssignmentTypeCompatibility struct{}
 
 func (r AssignmentTypeCompatibility) Name() string { return "assignment-type-compatibility" }
@@ -91,15 +88,7 @@ func (r AssignmentTypeCompatibility) Name() string { return "assignment-type-com
 func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
 	lvalType := tast.TypeOf(node.LValue)
 	rvalType := tast.TypeOf(node.RValue)
-
-	// Map-index write: strip the Option<V> wrapper that map reads impose.
 	expectedType := lvalType
-	if idxExpr, ok := node.LValue.(*tast.IndexExpr); ok {
-		if mapTy, isMap := tast.TypeOf(idxExpr.Left).(*types.MapType); isMap {
-			expectedType = mapTy.Value
-		}
-	}
-
 	if !expectedType.Equals(rvalType) && !types.IsUnknown(expectedType) && !types.IsUnknown(rvalType) {
 		return []Violation{violation(node.Pos_,
 			"type mismatch: cannot assign '%s' to '%s'",
@@ -108,10 +97,8 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 	}
 
 	if node.Operator != "" {
-		// Both types must be integers (or floats if you support them later)
-		// for +, -, *, /. (Strings might support + later, but keep it simple for now).
-		_, isExpectedInt := expectedType.(types.IntType)
-		_, isRvalInt := rvalType.(types.IntType)
+		isExpectedInt := isIntegerType(expectedType)
+		isRvalInt := isIntegerType(rvalType)
 
 		if !isExpectedInt || !isRvalInt {
 			return []Violation{violation(node.Pos_,
@@ -121,6 +108,58 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 		}
 	}
 
+	return nil
+}
+
+func isIntegerType(t types.Type) bool {
+	switch t.(type) {
+	case types.I8Type, types.I16Type, types.I32Type, types.I64Type, types.I128Type,
+		types.U8Type, types.U16Type, types.U32Type, types.U64Type, types.U128Type:
+		return true
+	}
+	return false
+}
+
+// =============================================================================
+// AliasDecl Rules
+// =============================================================================
+
+type AliasMutabilityValid struct{}
+
+func (r AliasMutabilityValid) Name() string { return "alias-mutability-valid" }
+
+func (r AliasMutabilityValid) Check(node *tast.AliasDecl, ctx *RuleContext) []Violation {
+	if node.Symbol == nil || node.Symbol.Cap != "mut" {
+		return nil
+	}
+
+	rootSym := ctx.getRootSymbol(node.Value)
+	if rootSym != nil {
+		// If we are asking for a 'mut' alias, the source must be mutable
+		if !rootSym.Mutable && rootSym.Cap != "mut" {
+			return []Violation{violation(node.Pos_,
+				"cannot take a 'mut' alias of immutable variable '%s'", rootSym.Name)}
+		}
+	}
+	return nil
+}
+
+type AliasPathValid struct{}
+
+func (r AliasPathValid) Name() string { return "alias-path-valid" }
+
+func (r AliasPathValid) Check(node *tast.AliasDecl, ctx *RuleContext) []Violation {
+	if node.Symbol == nil {
+		return nil
+	}
+
+	cap := node.Symbol.Cap
+	if cap == types.CapMut || cap == types.CapOwn || cap == types.CapRo {
+		if !isValidMemoryPath(node.Value) {
+			return []Violation{violation(node.Pos_,
+				"the '%s' capability can only be applied to variables and their fields", cap)}
+		}
+	}
 	return nil
 }
 
@@ -152,7 +191,7 @@ func (r VecPushMutabilityCheck) Check(node *tast.VecPushStmt, ctx *RuleContext) 
 	if sym == nil {
 		return []Violation{violation(node.Pos_, "cannot push to non-variable expression")}
 	}
-	if !sym.Mutable {
+	if !sym.Mutable && sym.Cap != "mut" {
 		return []Violation{violation(node.Pos_, "cannot mutate immutable variable '%s'", sym.Name)}
 	}
 	return nil
@@ -216,6 +255,10 @@ func (r ReturnTypeCompatibility) Check(node *tast.ReturnStmt, ctx *RuleContext) 
 			"type mismatch: expected return type '%s', got '%s'",
 			expected.String(), retType.String(),
 		)}
+	}
+
+	if _, isView := retType.(*types.ViewType); isView {
+		return []Violation{violation(node.Pos_, "cannot return a View from a function (views are stack-scoped borrows)")}
 	}
 	return nil
 }

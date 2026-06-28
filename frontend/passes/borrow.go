@@ -160,18 +160,24 @@ func New() *Analyzer {
 
 func (a *Analyzer) isRef(name string) bool {
 	t, ok := a.varTypes[name]
-	return ok && t != nil && t.IsNeedsARC()
+	if !ok || t == nil {
+		return false
+	}
+
+	switch t.(type) {
+	case *types.RefType, *types.WeakRefType:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileError {
 	// Pre-scan types to detect Reference Types (ARC) vs Value Types
 	for _, block := range g.SortedBlocks() {
 		for _, inst := range block.Statements {
-			switch i := inst.(type) {
-			case *mir.TempDeclInst:
-				a.varTypes[i.Name] = i.Type
-			case *mir.RefAllocInst:
-				a.varTypes[i.Dst] = i.Type
+			if temp, ok := inst.(*mir.TempDeclInst); ok {
+				a.varTypes[temp.Name] = temp.Type
 			}
 		}
 	}
@@ -208,7 +214,7 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 			a.analyzeInstruction(inst, currentState)
 		}
 
-		a.analyzeTerminator(block.Terminator, currentState)
+		a.analyzeTerminator(block.Terminator, currentState, live.LiveOut[block.ID])
 
 		for _, binding := range currentState.Bindings {
 			if binding.MutLockedBy != "" {
@@ -460,9 +466,6 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	case *mir.TempDeclInst:
 		initOrRevive(i.Name)
 
-	case *mir.RefAllocInst:
-		initOrRevive(i.Dst)
-
 	case *mir.AssignInst:
 		a.checkOperandAccess(i.RValue, state, pos)
 		releaseLocksHeldBy(i.Dst)
@@ -522,62 +525,56 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		} else {
 			initOrRevive(i.Dst)
 		}
-	case *mir.OwnInst:
-		a.checkOperandAccess(i.Root, state, pos)
-		if reg, ok := i.Root.(*mir.Register); ok && !isCompilerGenerated(reg.Name) {
-			if binding, exists := state.Bindings[reg.Name]; exists {
-				binding.setPathState(i.Path, Invalidated)
-			}
-		}
-		initOrRevive(i.Dst)
-
-	case *mir.FreezeInst:
-		a.checkOperandAccess(i.Root, state, pos)
-		if reg, ok := i.Root.(*mir.Register); ok && !isCompilerGenerated(reg.Name) {
-			if binding, exists := state.Bindings[reg.Name]; exists {
-				agg := binding.AggregateState()
-				if agg != ExclusiveWrite {
-					a.errorf(pos, "freeze requires an ExclusiveWrite binding, found %s", agg.String())
-				}
-				binding.setPathState(i.Path, Invalidated)
-			}
-		}
-		if binding, exists := state.Bindings[i.Dst]; exists {
-			binding.State = SharedRead
-		} else {
-			state.Bindings[i.Dst] = &BindingState{State: SharedRead}
-		}
-
-	case *mir.MutBorrowInst:
+	case *mir.BorrowInst:
 		a.checkStringAccess(i.Src, state, pos)
 		releaseLocksHeldBy(i.Dst)
+
 		if binding, exists := state.Bindings[i.Src]; exists {
-			binding.MutLockedBy = i.Dst
+			if i.IsMut {
+				// XOR Mutability: Reject mutable borrow if it's aliased or already borrowed
+				if binding.AliasOf != "" {
+					a.errorf(pos, "cannot take mutable borrow of aliased data '%s'", i.Src)
+				} else if binding.AggregateState() != ExclusiveWrite {
+					a.errorf(pos, "cannot borrow '%s' mutably; current state is %s", i.Src, binding.AggregateState())
+				}
+				binding.MutLockedBy = i.Dst
+			} else {
+				// Shared Read Borrow
+				binding.State = SharedRead
+			}
 		}
 		initOrRevive(i.Dst)
 
-	// NEW: FieldReadInst must be present to check struct field accesses!
-	case *mir.FieldReadInst:
+		// CRITICAL: Track provenance so validateScopeExit knows this is tied to the source!
+		state.Bindings[i.Dst].DependsOn = i.Src
+
+	case *mir.FieldAddrInst:
 		a.checkOperandAccess(i.Object, state, pos)
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
+
 		if reg, ok := i.Object.(*mir.Register); ok {
 			if objBinding, exists := state.Bindings[reg.Name]; exists {
+				// 1. A pointer to a field inherently depends on the base object.
+				dependsOn := reg.Name
+
+				// 2. If the base object is ALREADY a borrow/view, inherit its parent dependency instead.
+				if objBinding.DependsOn != "" {
+					dependsOn = objBinding.DependsOn
+				}
+
+				// 3. Inherit deep-field aliasing if we are tracking this specific field
 				if fieldBinding, exists := objBinding.Fields[i.FieldName]; exists {
-					state.Bindings[i.Dst].DependsOn = fieldBinding.DependsOn
+					if fieldBinding.DependsOn != "" {
+						dependsOn = fieldBinding.DependsOn
+					}
 					state.Bindings[i.Dst].AliasOf = fieldBinding.AliasOf
 				}
-			}
-		}
 
-	case *mir.IndexAssignInst:
-		a.checkOperandAccess(i.Index, state, pos)
-		a.checkOperandAccess(i.Value, state, pos)
-		a.checkStringAccess(i.Target, state, pos)
-		// Reject mutation if target is an alias
-		if binding, exists := state.Bindings[i.Target]; exists {
-			if binding.AliasOf != "" {
-				a.errorf(pos, "mutation of aliased data '%s' (aliases '%s')", i.Target, binding.AliasOf)
+				// CRITICAL: Tie the new pointer to its memory owner!
+				// This ensures `validateScopeExit` and `analyzeTerminator` will catch
+				// if this pointer tries to escape the function or live across an `await`.
+				state.Bindings[i.Dst].DependsOn = dependsOn
 			}
 		}
 
@@ -605,23 +602,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	case *mir.CallInst:
 		a.checkOperandAccess(i.Function, state, pos)
 		for _, arg := range i.Arguments {
-			a.checkOperandAccess(arg.Argument, state, pos)
-
-			if arg.Mut {
-				if reg, ok := arg.Argument.(*mir.Register); ok && !isCompilerGenerated(reg.Name) {
-					if binding, exists := state.Bindings[reg.Name]; exists {
-						// XOR MUTABILITY: Rejects 'mut' if it's an alias
-						if binding.AliasOf != "" {
-							a.errorf(pos, "mutation of aliased data '%s' (aliases '%s')", reg.Name, binding.AliasOf)
-						} else {
-							agg := binding.AggregateState()
-							if agg != ExclusiveWrite {
-								a.errorf(pos, "cannot pass '%s' as a mutable argument because its current state is %s", reg.Name, agg.String())
-							}
-						}
-					}
-				}
-			}
+			a.checkOperandAccess(arg, state, pos)
 		}
 		if i.Dst != "" && i.Dst != "_" {
 			releaseLocksHeldBy(i.Dst)
@@ -636,16 +617,46 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 			state.Bindings[i.Dst].DependsOn = reg.Name
 		}
 
-	case *mir.IndexReadInst:
-		a.checkOperandAccess(i.Source, state, pos)
-		a.checkOperandAccess(i.Index, state, pos)
+	case *mir.UnaryOpInst:
+		a.checkOperandAccess(i.Operand, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+	case *mir.CastInst:
+		a.checkOperandAccess(i.Src, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+	case *mir.LoadPtrInst:
+		a.checkOperandAccess(i.Ptr, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+	case *mir.StoreInst:
+		a.checkStringAccess(i.DstPtr, state, pos)
+		a.checkOperandAccess(i.Value, state, pos)
+
+	case *mir.VariantInitInst:
+		for _, p := range i.Payloads {
+			a.checkOperandAccess(p, state, pos)
+		}
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+	case *mir.VariantReadInst:
+		a.checkOperandAccess(i.Object, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+	case *mir.VariantDiscriminantInst:
+		a.checkOperandAccess(i.Object, state, pos)
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
 	}
 }
 
 // NEW: ReturnTerminator must be analyzed to catch "return dead_var.id"!
-func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
+func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState, liveOut map[string]bool) {
 	pos := ast.Position{}
 
 	switch t := term.(type) {
@@ -658,8 +669,15 @@ func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState) {
 
 		for _, name := range names {
 			binding := state.Bindings[name]
-			if binding.MutLockedBy != "" {
+
+			// 1. Is something mutably locking this variable across the await?
+			if binding.MutLockedBy != "" && liveOut[binding.MutLockedBy] {
 				a.errorf(pos, "mutable reference '%s' borrowing '%s' cannot be held across an `await` point", binding.MutLockedBy, name)
+			}
+
+			// 2. Is this variable ITSELF a borrow/view that is living across the await?
+			if binding.DependsOn != "" && liveOut[name] {
+				a.errorf(pos, "borrow or view '%s' cannot be held across an `await` point", name)
 			}
 		}
 	case *mir.ReturnTerminator:

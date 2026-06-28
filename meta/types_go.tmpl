@@ -4,7 +4,6 @@ package types
 type Type interface {
 	isType()
 	IsReferenceType() bool
-    IsNeedsARC() bool
     String() string
     Equals(Type) bool
 }
@@ -14,7 +13,6 @@ type Type interface {
 type {{ .Name }} struct{}
 func (t {{ .Name }}) isType() {}
 func (t {{ .Name }}) IsReferenceType() bool { return {{ .IsReference }} }
-func (t {{ .Name }}) IsNeedsARC() bool { return {{ .IsNeedsArc }} }
 func (t {{ .Name }}) Equals(other Type) bool {
 	{{- if eq .Name "AnyType" }}
 	return true
@@ -35,32 +33,6 @@ type {{ .Name }} struct {
 }
 func (t *{{ .Name }}) isType() {}
 func (t *{{ .Name }}) IsReferenceType() bool { return false }
-func (t *{{ .Name }}) IsNeedsARC() bool {
-{{- if eq .Name "StructType" }}
-	for _, f := range t.Fields {
-		if f.Type != nil && f.Type.IsNeedsARC() {
-			return true
-		}
-	}
-	return false
-
-{{/*
-{{- else if eq .Name "SumType" }}
-	for _, v := range t.Variants {
-		for _, tt := range v.TupleTypes {
-			if tt != nil && tt.IsNeedsARC() { return true }
-		}
-		for _, f := range v.Fields {
-			if f.Type != nil && f.Type.IsNeedsARC() { return true }
-		}
-	}
-	return false
-*/}}
-
-{{- else }}
-	return false
-{{- end }}
-}
 func (t *{{ .Name }}) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok { return true }
 	o, ok := other.(*{{ .Name }})
@@ -85,15 +57,6 @@ type {{ .Name }} struct {
 }
 func (t *{{ .Name }}) isType() {}
 func (t *{{ .Name }}) IsReferenceType() bool { return true }
-func (t *{{ .Name }}) IsNeedsARC() bool {
-{{- if .IsNeedsArc }}
-	return true
-{{- else if eq .Name "ArrayType" }}
-	return t.Base != nil && t.Base.IsNeedsARC()
-{{- else }}
-	return false
-{{- end }}
-}
 func (t *{{ .Name }}) Equals(other Type) bool {
 	if _, ok := other.(AnyType); ok { return true }
 	o, ok := other.(*{{ .Name }})

@@ -8,6 +8,8 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Module.h>
 
+#include "types_generated.hpp"
+
 namespace maml {
 
 // Forward declaration to allow recursive type resolution inside the visitor
@@ -21,11 +23,25 @@ struct TypeVisitor {
   CodegenContext& ctx;
 
   // --- Primitives ---
-  llvm::Type* operator()(const IntType&) { return llvm::Type::getInt32Ty(ctx.Context); }
+  llvm::Type* operator()(const I8Type&) { return llvm::Type::getInt8Ty(ctx.Context); }
+  llvm::Type* operator()(const I16Type&) { return llvm::Type::getInt16Ty(ctx.Context); }
+  llvm::Type* operator()(const I32Type&) { return llvm::Type::getInt32Ty(ctx.Context); }
+  llvm::Type* operator()(const I64Type&) { return llvm::Type::getInt64Ty(ctx.Context); }
+  llvm::Type* operator()(const I128Type&) { return llvm::Type::getInt128Ty(ctx.Context); }
+  llvm::Type* operator()(const U8Type&) { return llvm::Type::getInt8Ty(ctx.Context); }
+  llvm::Type* operator()(const U16Type&) { return llvm::Type::getInt16Ty(ctx.Context); }
+  llvm::Type* operator()(const U32Type&) { return llvm::Type::getInt32Ty(ctx.Context); }
+  llvm::Type* operator()(const U64Type&) { return llvm::Type::getInt64Ty(ctx.Context); }
+  llvm::Type* operator()(const U128Type&) { return llvm::Type::getInt128Ty(ctx.Context); }
+
+  llvm::Type* operator()(const F32Type&) { return llvm::Type::getFloatTy(ctx.Context); }
+  llvm::Type* operator()(const F64Type&) { return llvm::Type::getFloatTy(ctx.Context); }
+
   llvm::Type* operator()(const BoolType&) { return llvm::Type::getInt1Ty(ctx.Context); }
   llvm::Type* operator()(const UnitType&) { return llvm::Type::getVoidTy(ctx.Context); }
   llvm::Type* operator()(const AnyType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const PtrType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const CharType&) { return llvm::Type::getInt32Ty(ctx.Context); }
   llvm::Type* operator()(const UnknownType&) {
     ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
     return nullptr;
@@ -34,7 +50,11 @@ struct TypeVisitor {
   llvm::Type* operator()(const StringType&) {
     // String is a fat pointer: { ptr, i32 len }
     return llvm::StructType::get(ctx.Context,
-                                 {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)});
+                                 {
+                                     llvm::PointerType::getUnqual(ctx.Context),  // ptr
+                                     llvm::Type::getInt32Ty(ctx.Context),        // len
+                                     llvm::Type::getInt1Ty(ctx.Context)          // is_heap
+                                 });
   }
 
   // --- Composites ---
@@ -115,6 +135,15 @@ struct TypeVisitor {
   llvm::Type* operator()(const VectorType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const MapType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const FutureType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+
+  // --- Ref Types ---
+  // TODO: Implement these
+  llvm::Type* operator()(const RefType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const WeakRefType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+
+  // --- Coroutine Channel Types ---
+  llvm::Type* operator()(const SenderType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  llvm::Type* operator()(const ReceiverType&) { return llvm::PointerType::getUnqual(ctx.Context); }
 };
 
 // Helper function to initiate the std::visit loop

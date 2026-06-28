@@ -190,9 +190,19 @@ func (l *Lowerer) MapInfixExpr(e *tast.InfixExpr) Node {
 func (l *Lowerer) MapCallExpr(e *tast.CallExpr) Node {
 	hirArgs := make([]CallArg, len(e.Arguments))
 	for i, arg := range e.Arguments {
-		hirArgs[i] = lowerTASTCallArg(l, arg)
+		hirArgs[i] = CallArg{
+			Argument: l.lowerExpr(arg.Argument),
+			Cap:      arg.Cap,
+			Pos_:     arg.Pos_,
+			End_:     arg.End_,
+		}
 	}
-	return &CallExpr{Pos_: e.Pos_, Function: l.lowerExpr(e.Function), Arguments: hirArgs, Type: e.Type}
+	return &CallExpr{
+		Pos_:      e.Pos_,
+		Function:  l.lowerExpr(e.Function),
+		Arguments: hirArgs,
+		Type:      e.Type,
+	}
 }
 
 func (l *Lowerer) MapIndexExpr(idx *tast.IndexExpr) Node {
@@ -283,7 +293,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 	case *tast.IdentifierPattern:
 		if sumTy, ok := subjectType.(*types.SumType); ok && sumTy.GetVariant(pat.Name) != nil {
 			variant := sumTy.GetVariant(pat.Name)
-			condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(variant.Discriminant), Type: types.IntType{}}, Type: types.BoolType{}}
+			condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.I64Type{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(variant.Discriminant), Type: types.I64Type{}}, Type: types.BoolType{}}
 		} else {
 			condition = &BoolLiteral{Pos_: pat.Pos(), Value: true, Type: types.BoolType{}}
 			bindingSym := &types.Symbol{Kind: types.VarSymbol, Name: pat.Name, Type: subjectType, Mutable: false}
@@ -301,7 +311,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 				discriminant = v.Discriminant
 			}
 		}
-		condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.IntType{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(discriminant), Type: types.IntType{}}, Type: types.BoolType{}}
+		condition = &InfixExpr{Pos_: pat.Pos(), Operator: "==", Left: &VariantDiscriminantExpr{Pos_: pat.Pos(), Object: subjectIdent, Type: types.I64Type{}}, Right: &IntLiteral{Pos_: pat.Pos(), Value: int64(discriminant), Type: types.I64Type{}}, Type: types.BoolType{}}
 
 		for idx, identPat := range pat.TupleBindings {
 			if identPat.Value == "_" {

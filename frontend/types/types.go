@@ -12,9 +12,16 @@ import (
 	"strings"
 )
 
-// --- INT ---
+// Cap represents a memory reference capability (passing convention / alias rule).
+type Cap string
 
-func (t IntType) String() string { return "int" }
+const (
+	CapNone Cap = ""     // Primitives or unannotated
+	CapOwn  Cap = "own"  // Ownership transfer
+	CapMut  Cap = "mut"  // Exclusive mutable borrow
+	CapRo   Cap = "ro"   // Shared read-only borrow
+	CapCopy Cap = "copy" // Independent deep copy
+)
 
 // --- BOOL ---
 
@@ -115,9 +122,9 @@ func (t *FutureType) String() string { return "Future<" + t.Base.String() + ">" 
 
 // --- FUNCTION ---
 type FunctionType struct {
-	Params     []Type
-	ParamModes []ParamMode
-	Return     Type
+	Params []Type
+	Caps   []Cap
+	Return Type
 }
 
 func (t *FunctionType) String() string {
@@ -177,3 +184,22 @@ func MergeTypes(t1, t2 Type) Type {
 	}
 	return t1
 }
+
+func (t I8Type) String() string   { return "i8" }
+func (t I16Type) String() string  { return "i16" }
+func (t I32Type) String() string  { return "i32" }
+func (t I64Type) String() string  { return "i64" }
+func (t I128Type) String() string { return "i128" }
+func (t U8Type) String() string   { return "u8" }
+func (t U16Type) String() string  { return "u16" }
+func (t U32Type) String() string  { return "u32" }
+func (t U64Type) String() string  { return "u64" }
+func (t U128Type) String() string { return "u128" }
+func (t F32Type) String() string  { return "f32" }
+func (t F64Type) String() string  { return "f64" }
+func (t CharType) String() string { return "char" }
+
+func (t *RefType) String() string      { return "Ref<" + t.Base.String() + ">" }
+func (t *WeakRefType) String() string  { return "WeakRef<" + t.Base.String() + ">" }
+func (t *SenderType) String() string   { return "Sender<" + t.Base.String() + ">" }
+func (t *ReceiverType) String() string { return "Receiver<" + t.Base.String() + ">" }

@@ -17,9 +17,35 @@ func (a *Analyzer) resolveAstType(expr ast.TypeExpr) types.Type {
 	case *ast.NamedTypeExpr:
 		switch e.Name.Value {
 		case "int":
-			return types.IntType{}
+			return types.I64Type{} // Assuming 64-bit platform default for 'int'
+		case "i8":
+			return types.I8Type{}
+		case "i16":
+			return types.I16Type{}
+		case "i32":
+			return types.I32Type{}
+		case "i64":
+			return types.I64Type{}
+		case "i128":
+			return types.I128Type{}
+		case "u8", "byte": // 'byte' is an alias for 'u8'
+			return types.U8Type{}
+		case "u16":
+			return types.U16Type{}
+		case "u32":
+			return types.U32Type{}
+		case "u64":
+			return types.U64Type{}
+		case "u128":
+			return types.U128Type{}
+		case "f32":
+			return types.F32Type{}
+		case "f64":
+			return types.F64Type{}
 		case "bool":
 			return types.BoolType{}
+		case "char":
+			return types.CharType{}
 		case "string":
 			return types.StringType{}
 		case "unit":

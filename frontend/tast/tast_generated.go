@@ -40,6 +40,18 @@ type Pattern interface {
 // =============================================================================
 // TAST Node Structs
 // =============================================================================
+type AliasDecl struct {
+	Pos_   Position `json:"-"`
+	End_   Position `json:"-"`
+	Symbol *types.Symbol
+	Value  Expr
+}
+
+func (n *AliasDecl) Pos() Position    { return n.Pos_ }
+func (n *AliasDecl) End() Position    { return n.End_ }
+func (n *AliasDecl) Accept(v Visitor) { v.VisitAliasDecl(n) }
+func (n *AliasDecl) stmtNode()        {}
+
 type ArrayLiteral struct {
 	Pos_     Position `json:"-"`
 	End_     Position `json:"-"`
@@ -81,6 +93,7 @@ type BlockStmt struct {
 	Pos_       Position `json:"-"`
 	End_       Position `json:"-"`
 	Statements []Stmt
+	Type       types.Type
 }
 
 func (n *BlockStmt) Pos() Position    { return n.Pos_ }
@@ -213,18 +226,6 @@ func (n *ForStmt) End() Position    { return n.End_ }
 func (n *ForStmt) Accept(v Visitor) { v.VisitForStmt(n) }
 func (n *ForStmt) stmtNode()        {}
 
-type FreezeExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Type  types.Type
-	Value Expr
-}
-
-func (n *FreezeExpr) Pos() Position    { return n.Pos_ }
-func (n *FreezeExpr) End() Position    { return n.End_ }
-func (n *FreezeExpr) Accept(v Visitor) { v.VisitFreezeExpr(n) }
-func (n *FreezeExpr) exprNode()        {}
-
 type Identifier struct {
 	Pos_   Position `json:"-"`
 	End_   Position `json:"-"`
@@ -338,18 +339,6 @@ func (n *MatchExpr) Pos() Position    { return n.Pos_ }
 func (n *MatchExpr) End() Position    { return n.End_ }
 func (n *MatchExpr) Accept(v Visitor) { v.VisitMatchExpr(n) }
 func (n *MatchExpr) exprNode()        {}
-
-type OwnExpr struct {
-	Pos_  Position `json:"-"`
-	End_  Position `json:"-"`
-	Type  types.Type
-	Value Expr
-}
-
-func (n *OwnExpr) Pos() Position    { return n.Pos_ }
-func (n *OwnExpr) End() Position    { return n.End_ }
-func (n *OwnExpr) Accept(v Visitor) { v.VisitOwnExpr(n) }
-func (n *OwnExpr) exprNode()        {}
 
 type PrefixExpr struct {
 	Pos_     Position `json:"-"`
@@ -530,8 +519,7 @@ type CallArg struct {
 	Pos_     Position `json:"-"`
 	End_     Position `json:"-"`
 	Argument Expr
-	Mut      bool
-	Own      bool
+	Cap      types.Cap
 }
 
 func (h *CallArg) Pos() Position { return h.Pos_ }
@@ -570,6 +558,7 @@ func (h *MatchArm) End() Position { return h.End_ }
 type Param struct {
 	Pos_   Position `json:"-"`
 	End_   Position `json:"-"`
+	Cap    types.Cap
 	Name   string
 	Symbol *types.Symbol
 	Type   types.Type
@@ -613,6 +602,7 @@ func (h *VariantPatternField) End() Position { return h.End_ }
 // =============================================================================
 
 type Visitor interface {
+	VisitAliasDecl(n *AliasDecl)
 	VisitArrayLiteral(n *ArrayLiteral)
 	VisitAssignStmt(n *AssignStmt)
 	VisitAwaitExpr(n *AwaitExpr)
@@ -627,7 +617,6 @@ type Visitor interface {
 	VisitFieldAccess(n *FieldAccess)
 	VisitFnDecl(n *FnDecl)
 	VisitForStmt(n *ForStmt)
-	VisitFreezeExpr(n *FreezeExpr)
 	VisitIdentifier(n *Identifier)
 	VisitIdentifierPattern(n *IdentifierPattern)
 	VisitIfExpr(n *IfExpr)
@@ -637,7 +626,6 @@ type Visitor interface {
 	VisitLiteralPattern(n *LiteralPattern)
 	VisitMapLiteral(n *MapLiteral)
 	VisitMatchExpr(n *MatchExpr)
-	VisitOwnExpr(n *OwnExpr)
 	VisitPrefixExpr(n *PrefixExpr)
 	VisitProgram(n *Program)
 	VisitReturnStmt(n *ReturnStmt)
@@ -659,6 +647,7 @@ type Visitor interface {
 // =============================================================================
 
 type Mapper[R any] interface {
+	MapAliasDecl(n *AliasDecl) R
 	MapArrayLiteral(n *ArrayLiteral) R
 	MapAssignStmt(n *AssignStmt) R
 	MapAwaitExpr(n *AwaitExpr) R
@@ -673,7 +662,6 @@ type Mapper[R any] interface {
 	MapFieldAccess(n *FieldAccess) R
 	MapFnDecl(n *FnDecl) R
 	MapForStmt(n *ForStmt) R
-	MapFreezeExpr(n *FreezeExpr) R
 	MapIdentifier(n *Identifier) R
 	MapIdentifierPattern(n *IdentifierPattern) R
 	MapIfExpr(n *IfExpr) R
@@ -683,7 +671,6 @@ type Mapper[R any] interface {
 	MapLiteralPattern(n *LiteralPattern) R
 	MapMapLiteral(n *MapLiteral) R
 	MapMatchExpr(n *MatchExpr) R
-	MapOwnExpr(n *OwnExpr) R
 	MapPrefixExpr(n *PrefixExpr) R
 	MapProgram(n *Program) R
 	MapReturnStmt(n *ReturnStmt) R
@@ -708,6 +695,8 @@ func MapNode[R any](node Node, m Mapper[R]) R {
 		return zero
 	}
 	switch n := node.(type) {
+	case *AliasDecl:
+		return m.MapAliasDecl(n)
 	case *ArrayLiteral:
 		return m.MapArrayLiteral(n)
 	case *AssignStmt:
@@ -736,8 +725,6 @@ func MapNode[R any](node Node, m Mapper[R]) R {
 		return m.MapFnDecl(n)
 	case *ForStmt:
 		return m.MapForStmt(n)
-	case *FreezeExpr:
-		return m.MapFreezeExpr(n)
 	case *Identifier:
 		return m.MapIdentifier(n)
 	case *IdentifierPattern:
@@ -756,8 +743,6 @@ func MapNode[R any](node Node, m Mapper[R]) R {
 		return m.MapMapLiteral(n)
 	case *MatchExpr:
 		return m.MapMatchExpr(n)
-	case *OwnExpr:
-		return m.MapOwnExpr(n)
 	case *PrefixExpr:
 		return m.MapPrefixExpr(n)
 	case *Program:
@@ -811,8 +796,6 @@ func TypeOf(expr Expr) types.Type {
 		return e.Type
 	case *FieldAccess:
 		return e.Type
-	case *FreezeExpr:
-		return e.Type
 	case *Identifier:
 		return e.Type
 	case *IfExpr:
@@ -826,8 +809,6 @@ func TypeOf(expr Expr) types.Type {
 	case *MapLiteral:
 		return e.Type
 	case *MatchExpr:
-		return e.Type
-	case *OwnExpr:
 		return e.Type
 	case *PrefixExpr:
 		return e.Type
