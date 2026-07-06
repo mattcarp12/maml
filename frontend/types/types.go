@@ -1,10 +1,3 @@
-// ==========================================================================
-// frontend/types/types.go
-// --------------------------------------------------------------------------
-// This file defines the structs that represent the various types in MAML.
-// These structs are attached by the semantic checker during TAST construction.
-// ==========================================================================
-
 package types
 
 // Cap represents a memory reference capability (passing convention / alias rule).

@@ -11,14 +11,15 @@ void handle(CodegenContext &ctx, const mir::AddressOfInst &inst) {
     ctx.Error.fatal("address_of: undefined variable " + inst.src);
     return;
   }
-
-  // The backend no longer guesses if this needs a dereference.
-  // We simply grab the stack slot address and store it in the destination.
   llvm::Value *dstSlot = ctx.resolveSymbol(inst.dst);
   ctx.Builder->CreateStore(srcSlot, dstSlot);
 }
 
 void handle(CodegenContext &ctx, const mir::AssignInst &inst) {
+  if (inst.dst.empty() || inst.dst == "_") return;
+  llvm::Type *dstTy = ctx.SymbolTypes[inst.dst];
+  if (dstTy && dstTy->isVoidTy()) return;
+
   llvm::Value *val = evaluateValue(ctx, inst.r_value);
   llvm::Value *target = ctx.getMemoryBase(inst.dst);
   if (!target || !val || val->getType()->isVoidTy()) return;

@@ -129,21 +129,50 @@ func (b *Builder) MapIndexExpr(e *hir.IndexExpr) Value {
 
 func (b *Builder) MapAwaitExpr(e *hir.AwaitExpr) Value {
 	flatTask := hir.MapNode(e.Value, b)
-	b.EmitMamlTaskAwait(flatTask, b.currentFuture)
+
+	// 1. Borrow the target task to get its memory address
+	ptrTmp := b.newTemp()
+	b.locals[ptrTmp] = types.PtrType{}
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst:   ptrTmp,
+		Src:   flatTask.(*Register).Name,
+		IsMut: false,
+	})
+	ptrReg := &Register{Name: ptrTmp, Type: types.PtrType{}}
+
+	// 2. Explicitly pass BOTH pointers (target task and current task)
+	b.EmitMamlTaskAwait(ptrReg, b.currentFuture)
+
 	resumeBlock := b.emitCoroSuspend()
+
+	// 3. Get the result using the pointer
 	tmp := b.newTemp()
 	b.locals[tmp] = e.Type
-	resultVal := b.EmitMamlTaskGetResult(flatTask)
-	b.emitTransfer(tmp, resultVal)
-	result := b.EmitMamlTaskGetResult(flatTask)
-	resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{Dst: tmp, RValue: result})
+	resultVal := b.EmitMamlTaskGetResult(ptrReg)
+
+	resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{
+		Dst:    tmp,
+		RValue: resultVal,
+	})
+
 	b.current = resumeBlock
 	return &Register{Name: tmp, Type: e.Type}
 }
 
 func (b *Builder) MapSpawnExpr(e *hir.SpawnExpr) Value {
 	flatFuture := hir.MapNode(e.Value, b)
-	b.EmitMamlSpawnTask(flatFuture)
+	ptrTmp := b.newTemp()
+	b.locals[ptrTmp] = types.PtrType{}
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst:   ptrTmp,
+		Src:   flatFuture.(*Register).Name,
+		IsMut: false,
+	})
+	ptrReg := &Register{
+		Name: ptrTmp,
+		Type: types.PtrType{},
+	}
+	b.EmitMamlSpawnTask(ptrReg)
 	return flatFuture
 }
 
@@ -1099,8 +1128,17 @@ func init() {
 }
 
 func (b *Builder) lowerYieldNow(e *hir.CallExpr) Value {
-	b.EmitMamlYieldNow(b.currentFuture)
-
+	// instead of passing b.currentFuture to EmitMamlYieldNow, which is a struct,
+	// we need to pass a pointer to it. So we create a temporary variable to hold the pointer.
+	tmp := b.newTemp()
+	b.locals[tmp] = types.PtrType{}
+	futRegName := b.currentFuture.(*Register).Name
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst:   tmp,
+		Src:   futRegName,
+		IsMut: false,
+	})
+	b.EmitMamlYieldNow(&Register{Name: tmp, Type: types.PtrType{}})
 	resumeBlock := b.emitCoroSuspend()
 	b.current = resumeBlock
 	return unitValue
@@ -1108,10 +1146,18 @@ func (b *Builder) lowerYieldNow(e *hir.CallExpr) Value {
 
 func (b *Builder) lowerRunExecutor(e *hir.CallExpr) Value {
 	flatArg := hir.MapNode(e.Arguments[0].Argument, b)
-	b.EmitMamlRunExecutor(flatArg)
+	ptrTmp := b.newTemp()
+	b.locals[ptrTmp] = types.PtrType{}
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst:   ptrTmp,
+		Src:   flatArg.(*Register).Name,
+		IsMut: false,
+	})
+	ptrReg := &Register{Name: ptrTmp, Type: types.PtrType{}}
+	b.EmitMamlRunExecutor(ptrReg)
 	resTmp := b.newTemp()
 	b.locals[resTmp] = e.Type
-	result := b.EmitMamlTaskGetResult(flatArg)
+	result := b.EmitMamlTaskGetResult(ptrReg)
 	b.emitTransfer(resTmp, result)
 	return &Register{Name: resTmp, Type: e.Type}
 }

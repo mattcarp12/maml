@@ -64,7 +64,7 @@ func InjectDrops(g *mir.Graph, locals map[string]types.Type, globalLiveness *Liv
 					}
 				}
 
-				buildRecursiveDrop(v, t, false, &newStmts, newDropTemp)
+				buildRecursiveDrop(v, t, false, &newStmts, newDropTemp, locals)
 			}
 		}
 
@@ -89,7 +89,7 @@ func InjectDrops(g *mir.Graph, locals map[string]types.Type, globalLiveness *Liv
 				}
 			}
 
-			buildRecursiveDrop(v, t, false, &newStmts, newDropTemp)
+			buildRecursiveDrop(v, t, false, &newStmts, newDropTemp, locals)
 		}
 
 		block.Statements = newStmts
@@ -121,10 +121,7 @@ func hasLiveAlias(v string, liveSet map[string]bool, revAliases map[string][]str
 	return dfs(v)
 }
 
-// buildRecursiveDrop, lookupDestructorSymbol, buildViewSet, buildTypeEnv, needsDrop, isPrimitive, getDef remain unchanged.
-// They are reproduced below for completeness.
-
-func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.Instruction, newTemp func() string) {
+func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.Instruction, newTemp func() string, locals map[string]types.Type) {
 	if !needsDrop(t) {
 		return
 	}
@@ -133,6 +130,7 @@ func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.In
 		for i, field := range st.Fields {
 			if needsDrop(field.Type) {
 				tmpPtr := newTemp()
+				locals[tmpPtr] = types.PtrType{} // Register the new temporary
 
 				*stmts = append(*stmts, &mir.FieldAddrInst{
 					Dst:        tmpPtr,
@@ -142,7 +140,7 @@ func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.In
 					FieldIndex: i,
 					FieldType:  field.Type,
 				})
-				buildRecursiveDrop(tmpPtr, field.Type, true, stmts, newTemp)
+				buildRecursiveDrop(tmpPtr, field.Type, true, stmts, newTemp, locals)
 			}
 		}
 		return
@@ -151,6 +149,8 @@ func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.In
 	if arr, isArray := t.(*types.ArrayType); isArray {
 		for i := 0; i < arr.Size; i++ {
 			tmpPtr := newTemp()
+			locals[tmpPtr] = types.PtrType{} // Register the new temporary
+
 			*stmts = append(*stmts, &mir.IndexAddrInst{
 				Dst:        tmpPtr,
 				Source:     &mir.Register{Name: vName, Type: t},
@@ -158,40 +158,65 @@ func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.In
 				Index:      &mir.IntConstant{Value: int64(i), Type: types.I64Type{}},
 				Type:       arr.Base,
 			})
-			buildRecursiveDrop(tmpPtr, arr.Base, true, stmts, newTemp)
+			buildRecursiveDrop(tmpPtr, arr.Base, true, stmts, newTemp, locals)
 		}
 		return
 	}
 
 	symbol := lookupDestructorSymbol(t)
 	if symbol != "" {
-		argName := vName
-		if isAddr {
-			loadTmp := newTemp()
-			*stmts = append(*stmts, &mir.LoadPtrInst{
-				Dst:  loadTmp,
-				Ptr:  &mir.Register{Name: vName, Type: types.PtrType{}},
-				Type: t,
-			})
-			argName = loadTmp
+		var callArgName = vName
+		var callArgType types.Type = t
+
+		if _, isFuture := t.(*types.FutureType); isFuture {
+			if isAddr {
+				callArgType = types.PtrType{}
+			} else {
+				ptrTmp := newTemp()
+				locals[ptrTmp] = types.PtrType{} // Register the new temporary
+
+				*stmts = append(*stmts, &mir.BorrowInst{
+					Dst: ptrTmp,
+					Src: vName,
+				})
+
+				callArgName = ptrTmp
+				callArgType = types.PtrType{}
+			}
+		} else {
+			if isAddr {
+				loadTmp := newTemp()
+				locals[loadTmp] = t // Register the new temporary
+
+				*stmts = append(*stmts, &mir.LoadPtrInst{
+					Dst:  loadTmp,
+					Ptr:  &mir.Register{Name: vName, Type: types.PtrType{}},
+					Type: t,
+				})
+				callArgName = loadTmp
+			}
 		}
+
 		*stmts = append(*stmts, &mir.CallInst{
 			Dst:       "_",
 			Function:  &mir.Register{Name: symbol, Type: types.PtrType{}},
-			Arguments: []mir.Value{&mir.Register{Name: argName, Type: t}},
+			Arguments: []mir.Value{&mir.Register{Name: callArgName, Type: callArgType}},
 			Type:      types.UnitType{},
 		})
 	}
 }
 
 func lookupDestructorSymbol(t types.Type) string {
-	if _, isVec := t.(*types.VectorType); isVec {
+	switch t.(type) {
+	case *types.VectorType:
 		return "maml_vec_free"
-	}
-	if _, isMap := t.(*types.MapType); isMap {
+	case *types.MapType:
 		return "maml_map_free"
+	case *types.FutureType:
+		return "maml_task_release"
+	default:
+		return "maml_free"
 	}
-	return "maml_free"
 }
 
 func buildViewSet(g *mir.Graph) map[string]bool {
@@ -242,34 +267,30 @@ func buildTypeEnv(g *mir.Graph, locals map[string]types.Type) map[string]types.T
 }
 
 func needsDrop(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	if isPrimitive(t) {
-		return false
-	}
-	if _, isView := t.(*types.ViewType); isView {
-		return false
-	}
-	if _, isString := t.(types.StringType); isString {
+	if t == nil || isPrimitive(t) {
 		return false
 	}
 
-	if st, isStruct := t.(*types.StructType); isStruct {
-		for _, field := range st.Fields {
+	switch ty := t.(type) {
+	case *types.ViewType, types.StringType:
+		return false
+
+	case *types.VectorType, *types.MapType, *types.FutureType:
+		return true
+
+	case *types.StructType:
+		for _, field := range ty.Fields {
 			if needsDrop(field.Type) {
 				return true
 			}
 		}
 		return false
-	}
 
-	if arr, isArray := t.(*types.ArrayType); isArray {
-		return needsDrop(arr.Base)
-	}
+	case *types.ArrayType:
+		return needsDrop(ty.Base)
 
-	if sum, isSum := t.(*types.SumType); isSum {
-		for _, variant := range sum.Variants {
+	case *types.SumType:
+		for _, variant := range ty.Variants {
 			for _, field := range variant.Fields {
 				if needsDrop(field.Type) {
 					return true
@@ -282,9 +303,10 @@ func needsDrop(t types.Type) bool {
 			}
 		}
 		return false
-	}
 
-	return true
+	default:
+		return true
+	}
 }
 
 func isPrimitive(t types.Type) bool {

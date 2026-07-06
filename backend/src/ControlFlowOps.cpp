@@ -89,11 +89,24 @@ void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
 }
 
 static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
-  llvm::Value *hdl = evaluateValue(ctx, inst.arguments[0]);
+  llvm::Value *futurePtr = evaluateValue(ctx, inst.arguments[0]);
 
+  // llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
+  // llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
+  // llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+  // llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from});
+
+  // Extract raw coroutine frame pointer from the {ptr, i1} wrapper
+  llvm::StructType *futureStructTy = llvm::StructType::get(
+      ctx.Context, {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt1Ty(ctx.Context)});
+  llvm::Value *framePtrAddr = ctx.Builder->CreateStructGEP(futureStructTy, futurePtr, 0);
+  llvm::Value *hdl = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), framePtrAddr, "raw_coro_hdl");
+
+  // Pass the extracted raw frame pointer to coro.promise
   llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
   llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
   llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+
   llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from});
 
   llvm::Type *expectedTy = llvmTypeFor(ctx, inst.type);
@@ -190,10 +203,6 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
   }
 
   std::vector<llvm::Value *> args = prepareCallArguments(ctx, inst, FT, funcName);
-
-  if (funcName == maml::rt::TASK_AWAIT || funcName == maml::rt::YIELD_NOW) {
-    args.push_back(ctx.CurrentCoroHandle);
-  }
 
   llvm::CallInst *callResult = FT && FT->getReturnType()->isVoidTy()
                                    ? ctx.Builder->CreateCall(FT, callee, args)

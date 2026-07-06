@@ -18,40 +18,52 @@ void defineCoroHelperStubs(CodegenContext &ctx) {
   llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
   llvm::Type *i1Ty = llvm::Type::getInt1Ty(Context);
 
+  // Define the LLVM structure type matching your Future: { ptr, i1 }
+  llvm::StructType *futureStructTy = llvm::StructType::get(Context, {ptrTy, i1Ty});
+
   auto defineIfMissing = [&](const char *name, llvm::FunctionType *FT, auto body) {
     llvm::Function *F = Module->getFunction(name);
-
-    // If it doesn't exist at all, create it.
     if (!F) {
       F = llvm::Function::Create(FT, llvm::Function::ExternalLinkage, name, *Module);
-    }
-    // If it exists but already has a body (is not just a declaration), bail out.
-    else if (!F->isDeclaration()) {
+    } else if (!F->isDeclaration()) {
       return;
     }
-
-    // Now append the basic block to the function (whether it was just created or previously declared)
     llvm::BasicBlock *BB = llvm::BasicBlock::Create(Context, "entry", F);
     ctx.Builder->SetInsertPoint(BB);
     body(F);
   };
 
   defineIfMissing(rt::CORO_RESUME_HELPER, llvm::FunctionType::get(voidTy, {ptrTy}, false), [&](llvm::Function *F) {
-    llvm::Value *hdl = F->getArg(0);
+    llvm::Value *futurePtr = F->getArg(0);
+
+    // GEP to the first field of the Future struct: the raw coroutine frame pointer
+    llvm::Value *framePtrAddr = ctx.Builder->CreateStructGEP(futureStructTy, futurePtr, 0, "frame_ptr_addr");
+    llvm::Value *hdl = ctx.Builder->CreateLoad(ptrTy, framePtrAddr, "coro_hdl");
+
     llvm::Function *resumeFn = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_resume);
     ctx.Builder->CreateCall(resumeFn, {hdl});
     ctx.Builder->CreateRetVoid();
   });
 
   defineIfMissing(rt::CORO_DONE_HELPER, llvm::FunctionType::get(i1Ty, {ptrTy}, false), [&](llvm::Function *F) {
-    llvm::Value *hdl = F->getArg(0);
+    llvm::Value *futurePtr = F->getArg(0);
+
+    // Extract raw coroutine frame pointer
+    llvm::Value *framePtrAddr = ctx.Builder->CreateStructGEP(futureStructTy, futurePtr, 0, "frame_ptr_addr");
+    llvm::Value *hdl = ctx.Builder->CreateLoad(ptrTy, framePtrAddr, "coro_hdl");
+
     llvm::Function *doneFn = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_done);
     llvm::Value *isDone = ctx.Builder->CreateCall(doneFn, {hdl});
     ctx.Builder->CreateRet(isDone);
   });
 
   defineIfMissing(rt::CORO_DESTROY_HELPER, llvm::FunctionType::get(voidTy, {ptrTy}, false), [&](llvm::Function *F) {
-    llvm::Value *hdl = F->getArg(0);
+    llvm::Value *futurePtr = F->getArg(0);
+
+    // Extract raw coroutine frame pointer
+    llvm::Value *framePtrAddr = ctx.Builder->CreateStructGEP(futureStructTy, futurePtr, 0, "frame_ptr_addr");
+    llvm::Value *hdl = ctx.Builder->CreateLoad(ptrTy, framePtrAddr, "coro_hdl");
+
     llvm::Function *destroyFn = llvm::Intrinsic::getDeclaration(Module.get(), llvm::Intrinsic::coro_destroy);
     ctx.Builder->CreateCall(destroyFn, {hdl});
     ctx.Builder->CreateRetVoid();
@@ -96,7 +108,7 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
   ctx.Builder->SetInsertPoint(allocBB);
 
   if (fn.name == "main") {
-    llvm::Function *initFn = ctx.Module->getFunction("maml_runtime_init");
+    llvm::Function *initFn = ctx.Module->getFunction("maml_coro_runtime_init");
     if (initFn) {
       ctx.Builder->CreateCall(initFn, {});
     }
@@ -179,7 +191,26 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
     llvm::Value *isUnwind = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
     llvm::Value *noneToken = llvm::ConstantTokenNone::get(ctx.Context);
     ctx.Builder->CreateCall(endFn, {ctx.CurrentCoroHandle, isUnwind, noneToken});
-    ctx.Builder->CreateRet(ctx.CurrentCoroHandle);
+
+    // ctx.Builder->CreateRet(ctx.CurrentCoroHandle);
+    llvm::Type *retTy = F->getReturnType();
+    if (retTy->isStructTy()) {
+      // Create a {ptr, i1} struct to represent the Future.
+      llvm::Value *futureVal = llvm::UndefValue::get(retTy);
+
+      // Insert the coroutine handle at index 0 (ptr)
+      futureVal = ctx.Builder->CreateInsertValue(futureVal, ctx.CurrentCoroHandle, 0);
+
+      // Insert 'false' (0) at index 1 (i1) to indicate the future is pending/suspended
+      llvm::Value *isDone = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+      futureVal = ctx.Builder->CreateInsertValue(futureVal, isDone, 1);
+
+      ctx.Builder->CreateRet(futureVal);
+    } else {
+      // Fallback if an async function ever returns void or just a raw pointer
+      ctx.Builder->CreateRet(ctx.CurrentCoroHandle);
+    }
+
     ctx.Builder->SetInsertPoint(ctx.CoroCleanupBlock);
     llvm::Function *freeFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_free);
     llvm::Value *memToFree = ctx.Builder->CreateCall(freeFn, {ctx.CoroId, ctx.CurrentCoroHandle});

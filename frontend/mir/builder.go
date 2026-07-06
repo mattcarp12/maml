@@ -3,41 +3,60 @@ package mir
 import (
 	"fmt"
 	"slices"
+	"sort"
 
 	"github.com/mattcarp12/maml/frontend/hir"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
 // ==========================================================================
-// Memory Class Helpers
+// Graph Definitions
 // ==========================================================================
 
-// isByRefType returns true if the type's memory class is a heap-allocated pointer (by_reference).
-func isByRefType(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	switch t.(type) {
-	case *types.VectorType, *types.MapType, *types.FutureType:
-		return true
-	default:
-		return false
+type Graph struct {
+	Entry  BlockID
+	Blocks map[BlockID]*BasicBlock
+	Params []Param
+}
+
+type BlockID int
+
+type BasicBlock struct {
+	ID         BlockID
+	Statements []Instruction
+	Terminator Terminator
+}
+
+type Param struct {
+	Name string
+	Type types.Type
+}
+
+func NewGraph() *Graph {
+	return &Graph{
+		Blocks: make(map[BlockID]*BasicBlock),
 	}
 }
 
-// resolveBasePtr injects an explicit dereference instruction if the object type is a by_reference memory class.
-func (b *Builder) resolveBasePtr(basePtr Value, objType types.Type) Value {
-	if isByRefType(objType) {
-		heapPtr := b.newTemp()
-		b.locals[heapPtr] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-			Dst:  heapPtr,
-			Ptr:  basePtr,
-			Type: types.PtrType{},
-		})
-		return &Register{Name: heapPtr, Type: types.PtrType{}}
+func (g *Graph) SortedBlocks() []*BasicBlock {
+	if g == nil || len(g.Blocks) == 0 {
+		return nil
 	}
-	return basePtr
+
+	// 1. Extract and sort the keys
+	var ids []int
+	for id := range g.Blocks {
+		ids = append(ids, int(id))
+	}
+	sort.Ints(ids)
+
+	// 2. Build the deterministic slice of blocks
+	var blocks []*BasicBlock
+	for _, id := range ids {
+		blocks = append(blocks, g.Blocks[BlockID(id)])
+	}
+
+	return blocks
 }
 
 // ==========================================================================
@@ -152,8 +171,8 @@ func buildFn(fn *hir.FnDecl) (*Graph, map[string]types.Type) {
 	if fn.IsAsync {
 		entry.Statements = append(entry.Statements, &CoroPrologueInst{})
 		futReg := b.newTemp()
-		b.locals[futReg] = &types.FutureType{}
-		b.currentFuture = &Register{Name: futReg, Type: &types.FutureType{}}
+		b.locals[futReg] = types.PtrType{}
+		b.currentFuture = &Register{Name: futReg, Type: types.PtrType{}}
 	}
 
 	b.MapBlockStmt(fn.Body)
@@ -556,6 +575,9 @@ func ownsHeapMemory(t types.Type) bool {
 }
 
 func (b *Builder) emitTransfer(dst string, val Value) {
+	if _, isUnit := b.locals[dst].(types.UnitType); isUnit {
+		return
+	}
 	if reg, isReg := val.(*Register); isReg && reg != nil {
 		if reg.Type != nil && (reg.Type.IsReferenceType() || ownsHeapMemory(reg.Type)) {
 			b.current.Statements = append(b.current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
@@ -639,18 +661,6 @@ func (b *Builder) emitCompoundMath(ptrVal Value, operator string, rhsExpr hir.Ex
 	}, opTmp, elemType)
 }
 
-// func lowerParamType(t types.Type, cap types.Cap) types.Type {
-// 	switch cap {
-// 	case types.CapMut, types.CapRo:
-// 		if isByRefType(t) {
-// 			return t
-// 		}
-// 		return types.PtrType{}
-// 	default:
-// 		return t
-// 	}
-// }
-
 func lowerParamType(t types.Type, cap types.Cap) types.Type {
 	switch cap {
 	case types.CapMut, types.CapRo:
@@ -659,7 +669,6 @@ func lowerParamType(t types.Type, cap types.Cap) types.Type {
 		return t
 	}
 }
-
 
 // boxScalar allocates a stack temp of type t, stores val into it, and returns
 // a pointer to that temp. Runtime ABI calls (maml_vec_push, maml_vec_set,
@@ -684,4 +693,36 @@ func (b *Builder) boxScalar(val Value, t types.Type) Value {
 	})
 
 	return &Register{Name: ptr, Type: types.PtrType{}}
+}
+
+// ==========================================================================
+// Memory Class Helpers
+// ==========================================================================
+
+// isByRefType returns true if the type's memory class is a heap-allocated pointer (by_reference).
+func isByRefType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.(type) {
+	case *types.VectorType, *types.MapType, *types.FutureType:
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveBasePtr injects an explicit dereference instruction if the object type is a by_reference memory class.
+func (b *Builder) resolveBasePtr(basePtr Value, objType types.Type) Value {
+	if isByRefType(objType) {
+		heapPtr := b.newTemp()
+		b.locals[heapPtr] = types.PtrType{}
+		b.current.Statements = append(b.current.Statements, &LoadPtrInst{
+			Dst:  heapPtr,
+			Ptr:  basePtr,
+			Type: types.PtrType{},
+		})
+		return &Register{Name: heapPtr, Type: types.PtrType{}}
+	}
+	return basePtr
 }

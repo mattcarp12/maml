@@ -90,221 +90,6 @@ const (
 )
 
 // ============================================================================
-// Runtime Function Typing
-// ============================================================================
-var RuntimeABI = map[string]*types.FunctionType{
-	"maml_alloc": {
-		Params: []types.Type{
-			types.U64Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_free": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_vec_grow": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_vec_create": {
-		Params: []types.Type{
-			types.U32Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_vec_push": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_vec_get": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_vec_set": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_vec_len": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.U32Type{},
-	},
-	"maml_vec_clone": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U64Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_vec_free": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_map_create": {
-		Params: []types.Type{
-			types.U32Type{},
-			types.BoolType{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_map_put": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_map_get": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_map_delete": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_map_len": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.U32Type{},
-	},
-	"maml_map_clone": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_map_free": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_str_hash": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.U32Type{},
-	},
-	"maml_str_eq": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.I32Type{},
-	},
-	"maml_str_clone": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.U32Type{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_coro_runtime_init": {
-		Params: []types.Type{},
-		Return: types.UnitType{},
-	},
-	"maml_coro_resume_helper": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_coro_done_helper": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.BoolType{},
-	},
-	"maml_coro_destroy_helper": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_spawn_task": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_run_executor": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.PtrType{},
-	},
-	"maml_task_await": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_task_release": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_task_get_result": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_yield_now": {
-		Params: []types.Type{
-			types.PtrType{},
-		},
-		Return: types.UnitType{},
-	},
-	"maml_print": {
-		Params: []types.Type{
-			types.PtrType{},
-			types.I32Type{},
-		},
-		Return: types.UnitType{},
-	},
-}
-
-// ============================================================================
 // Runtime Function Emitters
 // ============================================================================
 
@@ -313,7 +98,6 @@ func (b *Builder) EmitMamlAlloc(size Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_ALLOC, Type: types.UnknownType{}},
@@ -329,7 +113,6 @@ func (b *Builder) EmitMamlAlloc(size Value) Value {
 // EmitMamlFree constructs a MIR call to the runtime function maml_free.
 func (b *Builder) EmitMamlFree(ptr Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_FREE, Type: types.UnknownType{}},
@@ -347,7 +130,6 @@ func (b *Builder) EmitMamlVecGrow(buffer Value, cap Value, elem_size Value) Valu
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_GROW, Type: types.UnknownType{}},
@@ -367,7 +149,6 @@ func (b *Builder) EmitMamlVecCreate(elem_size Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_CREATE, Type: types.UnknownType{}},
@@ -383,7 +164,6 @@ func (b *Builder) EmitMamlVecCreate(elem_size Value) Value {
 // EmitMamlVecPush constructs a MIR call to the runtime function maml_vec_push.
 func (b *Builder) EmitMamlVecPush(vec Value, element Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_PUSH, Type: types.UnknownType{}},
@@ -402,7 +182,6 @@ func (b *Builder) EmitMamlVecGet(vec Value, index Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_GET, Type: types.UnknownType{}},
@@ -419,7 +198,6 @@ func (b *Builder) EmitMamlVecGet(vec Value, index Value) Value {
 // EmitMamlVecSet constructs a MIR call to the runtime function maml_vec_set.
 func (b *Builder) EmitMamlVecSet(vec Value, index Value, element Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_SET, Type: types.UnknownType{}},
@@ -439,7 +217,6 @@ func (b *Builder) EmitMamlVecLen(vec Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.U32Type{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_LEN, Type: types.UnknownType{}},
@@ -457,7 +234,6 @@ func (b *Builder) EmitMamlVecClone(vec Value, elem_size Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_CLONE, Type: types.UnknownType{}},
@@ -474,7 +250,6 @@ func (b *Builder) EmitMamlVecClone(vec Value, elem_size Value) Value {
 // EmitMamlVecFree constructs a MIR call to the runtime function maml_vec_free.
 func (b *Builder) EmitMamlVecFree(vec Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_VEC_FREE, Type: types.UnknownType{}},
@@ -492,7 +267,6 @@ func (b *Builder) EmitMamlMapCreate(val_size Value, is_string_key Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_CREATE, Type: types.UnknownType{}},
@@ -509,7 +283,6 @@ func (b *Builder) EmitMamlMapCreate(val_size Value, is_string_key Value) Value {
 // EmitMamlMapPut constructs a MIR call to the runtime function maml_map_put.
 func (b *Builder) EmitMamlMapPut(m Value, key_hash Value, key_ptr Value, key_len Value, val_ptr Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_PUT, Type: types.UnknownType{}},
@@ -531,7 +304,6 @@ func (b *Builder) EmitMamlMapGet(m Value, key_hash Value, key_ptr Value, key_len
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_GET, Type: types.UnknownType{}},
@@ -550,7 +322,6 @@ func (b *Builder) EmitMamlMapGet(m Value, key_hash Value, key_ptr Value, key_len
 // EmitMamlMapDelete constructs a MIR call to the runtime function maml_map_delete.
 func (b *Builder) EmitMamlMapDelete(m Value, key_hash Value, key_ptr Value, key_len Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_DELETE, Type: types.UnknownType{}},
@@ -571,7 +342,6 @@ func (b *Builder) EmitMamlMapLen(m Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.U32Type{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_LEN, Type: types.UnknownType{}},
@@ -589,7 +359,6 @@ func (b *Builder) EmitMamlMapClone(m Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_CLONE, Type: types.UnknownType{}},
@@ -605,7 +374,6 @@ func (b *Builder) EmitMamlMapClone(m Value) Value {
 // EmitMamlMapFree constructs a MIR call to the runtime function maml_map_free.
 func (b *Builder) EmitMamlMapFree(m Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_MAP_FREE, Type: types.UnknownType{}},
@@ -623,7 +391,6 @@ func (b *Builder) EmitMamlStrHash(str_ptr Value, len Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.U32Type{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_STR_HASH, Type: types.UnknownType{}},
@@ -642,7 +409,6 @@ func (b *Builder) EmitMamlStrEq(a_ptr Value, a_len Value, b_ptr Value, b_len Val
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.I32Type{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_STR_EQ, Type: types.UnknownType{}},
@@ -663,7 +429,6 @@ func (b *Builder) EmitMamlStrClone(str_ptr Value, len Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_STR_CLONE, Type: types.UnknownType{}},
@@ -680,7 +445,6 @@ func (b *Builder) EmitMamlStrClone(str_ptr Value, len Value) Value {
 // EmitMamlCoroRuntimeInit constructs a MIR call to the runtime function maml_coro_runtime_init.
 func (b *Builder) EmitMamlCoroRuntimeInit() Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:       dst,
 		Function:  &Register{Name: SYM_CORO_RUNTIME_INIT, Type: types.UnknownType{}},
@@ -694,7 +458,6 @@ func (b *Builder) EmitMamlCoroRuntimeInit() Value {
 // EmitMamlCoroResumeHelper constructs a MIR call to the runtime function maml_coro_resume_helper.
 func (b *Builder) EmitMamlCoroResumeHelper(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_CORO_RESUME_HELPER, Type: types.UnknownType{}},
@@ -712,7 +475,6 @@ func (b *Builder) EmitMamlCoroDoneHelper(task Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.BoolType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_CORO_DONE_HELPER, Type: types.UnknownType{}},
@@ -728,7 +490,6 @@ func (b *Builder) EmitMamlCoroDoneHelper(task Value) Value {
 // EmitMamlCoroDestroyHelper constructs a MIR call to the runtime function maml_coro_destroy_helper.
 func (b *Builder) EmitMamlCoroDestroyHelper(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_CORO_DESTROY_HELPER, Type: types.UnknownType{}},
@@ -744,7 +505,6 @@ func (b *Builder) EmitMamlCoroDestroyHelper(task Value) Value {
 // EmitMamlSpawnTask constructs a MIR call to the runtime function maml_spawn_task.
 func (b *Builder) EmitMamlSpawnTask(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_SPAWN_TASK, Type: types.UnknownType{}},
@@ -762,7 +522,6 @@ func (b *Builder) EmitMamlRunExecutor(task Value) Value {
 	// Create destination temp for return value
 	dst := b.newTemp()
 	b.locals[dst] = types.PtrType{}
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_RUN_EXECUTOR, Type: types.UnknownType{}},
@@ -778,7 +537,6 @@ func (b *Builder) EmitMamlRunExecutor(task Value) Value {
 // EmitMamlTaskAwait constructs a MIR call to the runtime function maml_task_await.
 func (b *Builder) EmitMamlTaskAwait(current_task Value, target_task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_TASK_AWAIT, Type: types.UnknownType{}},
@@ -795,7 +553,6 @@ func (b *Builder) EmitMamlTaskAwait(current_task Value, target_task Value) Value
 // EmitMamlTaskRelease constructs a MIR call to the runtime function maml_task_release.
 func (b *Builder) EmitMamlTaskRelease(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_TASK_RELEASE, Type: types.UnknownType{}},
@@ -811,7 +568,6 @@ func (b *Builder) EmitMamlTaskRelease(task Value) Value {
 // EmitMamlTaskGetResult constructs a MIR call to the runtime function maml_task_get_result.
 func (b *Builder) EmitMamlTaskGetResult(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_TASK_GET_RESULT, Type: types.UnknownType{}},
@@ -827,7 +583,6 @@ func (b *Builder) EmitMamlTaskGetResult(task Value) Value {
 // EmitMamlYieldNow constructs a MIR call to the runtime function maml_yield_now.
 func (b *Builder) EmitMamlYieldNow(task Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_YIELD_NOW, Type: types.UnknownType{}},
@@ -843,7 +598,6 @@ func (b *Builder) EmitMamlYieldNow(task Value) Value {
 // EmitMamlPrint constructs a MIR call to the runtime function maml_print.
 func (b *Builder) EmitMamlPrint(msg_ptr Value, msg_len Value) Value {
 	dst := ""
-
 	call := &CallInst{
 		Dst:      dst,
 		Function: &Register{Name: SYM_PRINT, Type: types.UnknownType{}},
