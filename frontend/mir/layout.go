@@ -1,8 +1,6 @@
-package layout
+package mir
 
 import (
-	"sort"
-
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -27,7 +25,6 @@ func SizeOf(t types.Type, target *Target) int {
 	if t == nil {
 		return 0
 	}
-	// We no longer check t.IsReferenceType() for ARC headers
 	return sizeOfDynamic(t, target)
 }
 
@@ -44,6 +41,21 @@ func AlignOf(t types.Type, target *Target) int {
 	if t == nil {
 		return 1
 	}
+	switch t.(type) {
+	case types.StringType, *types.StringType:
+		return STRING_ALIGN
+	case *types.VectorType:
+		return VECTOR_ALIGN
+	case *types.ViewType:
+		return VIEW_ALIGN
+	case *types.MapType:
+		return MAP_ALIGN
+	case *types.FutureType:
+		return FUTURE_ALIGN
+	case *types.RefType:
+		return REF_ALIGN
+	}
+
 	if t.IsReferenceType() {
 		return target.PointerAlign
 	}
@@ -75,6 +87,20 @@ func AlignOf(t types.Type, target *Target) int {
 
 func sizeOfDynamic(t types.Type, target *Target) int {
 	switch v := t.(type) {
+	// Built‑in container types – sizes from ABI constants
+	case types.StringType, *types.StringType:
+		return STRING_SIZE
+	case *types.VectorType:
+		return VECTOR_SIZE
+	case *types.ViewType:
+		return VIEW_SIZE
+	case *types.MapType:
+		return MAP_SIZE
+	case *types.FutureType:
+		return FUTURE_SIZE
+	case *types.RefType:
+		return REF_SIZE
+
 	case types.I8Type, types.U8Type:
 		return 1
 	case types.I16Type, types.U16Type:
@@ -115,30 +141,13 @@ func computeStructLayout(t *types.StructType, target *Target) ([]int, int) {
 	maxAlign := AlignOf(t, target)
 	currentOffset := 0
 
-	// We use field reordering (MAML ABI)
-	type indexedField struct {
-		originalIndex int
-		align         int
-		size          int
-	}
-
-	sortedFields := make([]indexedField, len(t.Fields))
 	for i, f := range t.Fields {
-		sortedFields[i] = indexedField{
-			originalIndex: i,
-			align:         AlignOf(f.Type, target),
-			size:          SizeOf(f.Type, target), // Fields are packed
-		}
-	}
+		align := AlignOf(f.Type, target)
+		size := SizeOf(f.Type, target)
 
-	sort.Slice(sortedFields, func(i, j int) bool {
-		return sortedFields[i].align > sortedFields[j].align
-	})
-
-	for _, sf := range sortedFields {
-		currentOffset = padToAlign(currentOffset, sf.align)
-		offsets[sf.originalIndex] = currentOffset
-		currentOffset += sf.size
+		currentOffset = padToAlign(currentOffset, align)
+		offsets[i] = currentOffset
+		currentOffset += size
 	}
 
 	return offsets, padToAlign(currentOffset, maxAlign)
@@ -168,4 +177,69 @@ func padToAlign(offset int, align int) int {
 		return offset + (align - rem)
 	}
 	return offset
+}
+
+// FieldOffsetBuiltin returns the ABI‑derived byte offset of a field inside a
+// built‑in runtime container type. If t is not a known built‑in, or the field
+// does not exist, it returns -1.
+func FieldOffsetBuiltin(t types.Type, fieldName string) int {
+	switch t.(type) {
+	case types.StringType, *types.StringType:
+		switch fieldName {
+		case "ptr":
+			return STRING_PTR_OFFSET
+		case "len":
+			return STRING_LEN_OFFSET
+		case "is_owned":
+			return STRING_IS_OWNED_OFFSET
+		}
+	case *types.VectorType:
+		switch fieldName {
+		case "buffer":
+			return VECTOR_BUFFER_OFFSET
+		case "cap":
+			return VECTOR_CAP_OFFSET
+		case "len":
+			return VECTOR_LEN_OFFSET
+		case "elem_size":
+			return VECTOR_ELEM_SIZE_OFFSET
+		}
+	case *types.ViewType:
+		switch fieldName {
+		case "data_ptr":
+			return VIEW_DATA_PTR_OFFSET
+		case "len":
+			return VIEW_LEN_OFFSET
+		}
+	case *types.MapType:
+		switch fieldName {
+		case "entries":
+			return MAP_ENTRIES_OFFSET
+		case "count":
+			return MAP_COUNT_OFFSET
+		case "tombstone_count":
+			return MAP_TOMBSTONE_COUNT_OFFSET
+		case "cap":
+			return MAP_CAP_OFFSET
+		case "val_size":
+			return MAP_VAL_SIZE_OFFSET
+		case "is_string_key":
+			return MAP_IS_STRING_KEY_OFFSET
+		}
+	case *types.FutureType:
+		switch fieldName {
+		case "state":
+			return FUTURE_STATE_OFFSET
+		case "ready":
+			return FUTURE_READY_OFFSET
+		}
+	case *types.RefType:
+		switch fieldName {
+		case "ptr":
+			return REF_PTR_OFFSET
+		case "refcount":
+			return REF_REFCOUNT_OFFSET
+		}
+	}
+	return -1
 }

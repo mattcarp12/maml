@@ -15,25 +15,25 @@ all: codegen frontend backend runtime
 # 0. Single Source of Truth Code Generation
 codegen:
 	@echo "==> Running Types Codegen..."
-	@go run meta/gen_types.go
+	@go run meta/types/gen_types.go
 
 	@echo "==> Running AST Codegen..."
-	@go run meta/gen_ast.go
+	@go run meta/ast/gen_ast.go
 
 	@echo "==> Running TAST Codegen..."
-	@go run meta/gen_tast.go
+	@go run meta/tast/gen_tast.go
 
 	@echo "==> Running HIR Codegen..."
-	@go run meta/gen_hir.go
+	@go run meta/hir/gen_hir.go
 
 	@echo "==> Running MIR Go Codegen..."
-	@go run meta/gen_mir_go.go
+	@go run meta/mir/gen_mir_go.go
 
 	@echo "==> Running MIR C++ Codegen..."
-	@go run meta/gen_mir_cpp.go
+	@go run meta/mir/gen_mir_cpp.go
 
-	@echo "==> Running Runtime Codegen..."
-	@go run meta/gen_runtime.go
+	@echo "==> Running ABI + Runtime Codegen..."
+	@go run meta/abi/gen_abi.go
 
 	@echo "==> Running go generate..."
 	@go generate ./...

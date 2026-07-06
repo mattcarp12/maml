@@ -1,7 +1,3 @@
-// =============================================================================
-// frontend/mir/export.go
-// =============================================================================
-
 package mir
 
 import (
@@ -9,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/layout"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -22,13 +17,14 @@ type exportProgram struct {
 }
 
 type exportFunction struct {
-	Name       string        `json:"name"`
-	ReturnType any           `json:"return_type"`
-	Params     []exportParam `json:"params"`
-	IsAsync    bool          `json:"is_async"`
-	IsExtern   bool          `json:"is_extern"`
-	Entry      string        `json:"entry_block"`
-	Blocks     []exportBlock `json:"blocks"`
+	Name       string         `json:"name"`
+	ReturnType any            `json:"return_type"`
+	Params     []exportParam  `json:"params"`
+	IsAsync    bool           `json:"is_async"`
+	IsExtern   bool           `json:"is_extern"`
+	Entry      string         `json:"entry_block"`
+	Blocks     []exportBlock  `json:"blocks"`
+	Locals     map[string]any `json:"locals"`
 }
 
 type exportParam struct {
@@ -48,7 +44,7 @@ type exportBlock struct {
 
 // MarshalProgram serializes the MIR program into a strictly controlled,
 // flat JSON schema designed explicitly for the LLVM backend.
-func MarshalProgram(p *Program, target *layout.Target) ([]byte, error) {
+func MarshalProgram(p *Program, target *Target) ([]byte, error) {
 	if p == nil {
 		return []byte("null"), nil
 	}
@@ -68,7 +64,7 @@ func MarshalProgram(p *Program, target *layout.Target) ([]byte, error) {
 	return buffer.Bytes(), err
 }
 
-func buildFunctionDTO(fn *Function, target *layout.Target) exportFunction {
+func buildFunctionDTO(fn *Function, target *Target) exportFunction {
 	blocks := []exportBlock{}
 	var entry string
 
@@ -80,11 +76,20 @@ func buildFunctionDTO(fn *Function, target *layout.Target) exportFunction {
 	}
 
 	params := make([]exportParam, 0, len(fn.Params))
+	paramNames := make(map[string]bool)
 	for _, p := range fn.Params {
 		params = append(params, exportParam{
 			Name: p.Name,
 			Type: lowerType(p.Type, target),
 		})
+		paramNames[p.Name] = true
+	}
+
+	locals := make(map[string]any)
+	for n, t := range fn.Locals {
+		if !paramNames[n] {
+			locals[n] = lowerType(t, target)
+		}
 	}
 
 	return exportFunction{
@@ -95,10 +100,11 @@ func buildFunctionDTO(fn *Function, target *layout.Target) exportFunction {
 		IsExtern:   fn.IsExtern,
 		Entry:      entry,
 		Blocks:     blocks,
+		Locals:     locals,
 	}
 }
 
-func buildBlockDTO(block *BasicBlock, target *layout.Target) exportBlock {
+func buildBlockDTO(block *BasicBlock, target *Target) exportBlock {
 	insts := make([]map[string]any, 0, len(block.Statements))
 	for _, inst := range block.Statements {
 		if _, isKeepAlive := inst.(*KeepAliveInst); isKeepAlive {
@@ -122,18 +128,18 @@ func buildBlockDTO(block *BasicBlock, target *layout.Target) exportBlock {
 var _ Mapper[map[string]any] = (*Exporter)(nil)
 
 type Exporter struct {
-	target *layout.Target
+	target *Target
 }
 
-func buildInstructionDTO(inst Instruction, target *layout.Target) map[string]any {
+func buildInstructionDTO(inst Instruction, target *Target) map[string]any {
 	return MapNode(inst, &Exporter{target: target})
 }
 
-func buildTerminatorDTO(term Terminator, target *layout.Target) map[string]any {
+func buildTerminatorDTO(term Terminator, target *Target) map[string]any {
 	return MapNode(term, &Exporter{target: target})
 }
 
-func buildValueDTO(val Value, target *layout.Target) any {
+func buildValueDTO(val Value, target *Target) any {
 	if val == nil {
 		return nil
 	}
@@ -159,9 +165,6 @@ func (e *Exporter) MapStringConstant(v *StringConstant) map[string]any {
 // -----------------------------------------------------------------------------
 // Instruction Mappers
 // -----------------------------------------------------------------------------
-func (e *Exporter) MapTempDeclInst(i *TempDeclInst) map[string]any {
-	return map[string]any{"op": "temp_decl", "name": i.Name, "type": lowerType(i.Type, e.target)}
-}
 func (e *Exporter) MapAssignInst(i *AssignInst) map[string]any {
 	return map[string]any{"op": "assign", "dst": i.Dst, "value": buildValueDTO(i.RValue, e.target)}
 }
@@ -171,6 +174,9 @@ func (e *Exporter) MapBinaryOpInst(i *BinaryOpInst) map[string]any {
 func (e *Exporter) MapUnaryOpInst(i *UnaryOpInst) map[string]any {
 	return map[string]any{"op": "unary_op", "dst": i.Dst, "operator": i.Operator, "operand": buildValueDTO(i.Operand, e.target), "type": lowerType(i.Type, e.target)}
 }
+func (e *Exporter) MapBitcastPtrInst(i *BitcastPtrInst) map[string]any {
+	return map[string]any{"op": "bitcast", "dst": i.Dst, "src": buildValueDTO(i.Src, e.target), "type": lowerType(i.Type, e.target)}
+}
 func (e *Exporter) MapCallInst(i *CallInst) map[string]any {
 	args := []any{}
 	for _, arg := range i.Arguments {
@@ -178,41 +184,15 @@ func (e *Exporter) MapCallInst(i *CallInst) map[string]any {
 	}
 	return map[string]any{"op": "call_inst", "dst": i.Dst, "function": buildValueDTO(i.Function, e.target), "arguments": args, "type": lowerType(i.Type, e.target)}
 }
-func (e *Exporter) MapDropInst(i *DropInst) map[string]any {
-	return map[string]any{
-		"op":  "drop",
-		"src": i.Src,
-	}
-}
-func (e *Exporter) MapSliceInst(i *SliceInst) map[string]any {
-	var lowDTO, highDTO any
-	if i.Low != nil {
-		lowDTO = buildValueDTO(i.Low, e.target)
-	}
-	if i.High != nil {
-		highDTO = buildValueDTO(i.High, e.target)
-	}
-	return map[string]any{"op": "slice_read", "dst": i.Dst, "left": buildValueDTO(i.Left, e.target), "container_type": lowerType(i.ContainerType, e.target), "low": lowDTO, "high": highDTO, "result_type": lowerType(i.ResultType, e.target)}
-}
-func (e *Exporter) MapStructInitInst(i *StructInitInst) map[string]any {
-	m := map[string]any{"op": "struct_init", "dst": i.Dst, "field_name": i.FieldName, "field_index": i.FieldIndex, "value": buildValueDTO(i.Value, e.target)}
-	if len(i.VariantLayout) > 0 {
-		layoutList := make([]any, len(i.VariantLayout))
-		for idx, ty := range i.VariantLayout {
-			layoutList[idx] = lowerType(ty, e.target)
-		}
-		m["variant_layout"] = layoutList
-	}
-	return m
-}
 func (e *Exporter) MapFieldAddrInst(i *FieldAddrInst) map[string]any {
 	m := map[string]any{
 		"op":          "field_addr",
 		"dst":         i.Dst,
 		"object":      buildValueDTO(i.Object, e.target),
+		"object_type": lowerType(i.ObjectType, e.target),
 		"field_name":  i.FieldName,
 		"field_index": i.FieldIndex,
-		"type":        lowerType(i.Type, e.target),
+		"field_type":  lowerType(i.FieldType, e.target),
 	}
 
 	// Pass along the variant layout if this address calculation involves a sum-type payload
@@ -226,6 +206,13 @@ func (e *Exporter) MapFieldAddrInst(i *FieldAddrInst) map[string]any {
 
 	return m
 }
+func (e *Exporter) MapAddressOfInst(i *AddressOfInst) map[string]any {
+	return map[string]any{
+		"op":  "address_of",
+		"dst": i.Dst,
+		"src": i.Src,
+	}
+}
 func (e *Exporter) MapIndexAddrInst(i *IndexAddrInst) map[string]any {
 	return map[string]any{
 		"op":          "index_addr",
@@ -235,22 +222,6 @@ func (e *Exporter) MapIndexAddrInst(i *IndexAddrInst) map[string]any {
 		"index":       buildValueDTO(i.Index, e.target),
 		"type":        lowerType(i.Type, e.target),
 	}
-}
-func (e *Exporter) MapArrayInitInst(i *ArrayInitInst) map[string]any {
-	return map[string]any{"op": "array_init", "dst": i.Dst, "index": i.Index, "value": buildValueDTO(i.Value, e.target)}
-}
-func (e *Exporter) MapVariantInitInst(i *VariantInitInst) map[string]any {
-	payloads := []any{}
-	for _, p := range i.Payloads {
-		payloads = append(payloads, buildValueDTO(p, e.target))
-	}
-	return map[string]any{"op": "variant_init", "dst": i.Dst, "variant_name": i.VariantName, "discriminant": i.Discriminant, "payloads": payloads, "type": lowerType(i.Type, e.target)}
-}
-func (e *Exporter) MapVariantReadInst(i *VariantReadInst) map[string]any {
-	return map[string]any{"op": "variant_read", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "variant_name": i.VariantName, "payload_index": i.PayloadIndex, "type": lowerType(i.Type, e.target)}
-}
-func (e *Exporter) MapVariantDiscriminantInst(i *VariantDiscriminantInst) map[string]any {
-	return map[string]any{"op": "variant_discriminant", "dst": i.Dst, "object": buildValueDTO(i.Object, e.target), "type": lowerType(i.Type, e.target)}
 }
 func (e *Exporter) MapCastInst(i *CastInst) map[string]any {
 	return map[string]any{"op": "cast", "dst": i.Dst, "src": buildValueDTO(i.Src, e.target), "type": lowerType(i.Type, e.target)}
@@ -303,7 +274,7 @@ func (e *Exporter) MapCoroYieldTerminator(t *CoroYieldTerminator) map[string]any
 	return map[string]any{"op": "coro_yield"}
 }
 
-func lowerType(t types.Type, target *layout.Target) any {
+func lowerType(t types.Type, target *Target) any {
 	if t == nil {
 		return "void"
 	}
@@ -379,7 +350,7 @@ func lowerType(t types.Type, target *layout.Target) any {
 		}
 		return map[string]any{
 			"kind":      "sum_type",
-			"base_name": v.BaseName,
+			"base_name": v.MangledName(),
 			"variants":  variants,
 		}
 	case *types.ArrayType:

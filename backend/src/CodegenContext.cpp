@@ -28,26 +28,21 @@ std::string ErrorHandler::stringify(llvm::Type *ty) {
 // =========================================================================
 void ErrorHandler::report(std::string_view message) {
   hasError = true;
-
-  // Use llvm::errs() which is tightly integrated with LLVM's internal diagnostics
-  llvm::errs() << "\n\033[1;31m[MAML Codegen Error]\033[0m ";
+  llvm::errs() << "\n[MAML Codegen Error] ";
 
   if (Ctx) {
-    llvm::errs() << "In function '\033[1;33m" << Ctx->CurrentFunctionName << "\033[0m' near instruction '\033[1;36m"
-                 << Ctx->CurrentInstructionName << "\033[0m':\n";
+    llvm::errs() << "In function '" << Ctx->CurrentFunctionName << "' near instruction '" << Ctx->CurrentInstructionName
+                 << "':\n";
   }
 
   llvm::errs() << "  -> " << message << "\n\n";
 }
 
-void ErrorHandler::warn(std::string_view message) {
-  llvm::errs() << "\033[1;33m[MAML Warning]\033[0m " << message << "\n";
-}
+void ErrorHandler::warn(std::string_view message) { llvm::errs() << "[MAML Warning] " << message << "\n"; }
 
 void ErrorHandler::fatal(std::string_view message) {
   report(message);
   llvm::report_fatal_error(llvm::StringRef(message.data(), message.size()), false);
-  // 'false' prevents LLVM from printing the massive C++ stack trace, keeping output clean.
 }
 
 // =========================================================================
@@ -78,12 +73,6 @@ llvm::Value *CodegenContext::getMemoryBase(std::string_view name) {
     Error.fatal("Attempted to access undefined variable: " + std::string(name));
     return nullptr;
   }
-
-  if (HeapVars.count(std::string(name))) {
-    llvm::Type *ptrTy = llvm::PointerType::getUnqual(Context);
-    return Builder->CreateLoad(ptrTy, symbol, std::string(name) + "_heap_addr");
-  }
-
   return symbol;
 }
 

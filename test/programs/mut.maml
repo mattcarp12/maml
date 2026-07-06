@@ -12,8 +12,8 @@ fn populate_buffer(mut buf DataBuffer) int {
 }
 
 // Strictly immutable read-only view
-fn sum_buffer(buf DataBuffer) int {
-    if len(buf.values) == 0 { return 0 }
+fn sum_buffer(ro buf DataBuffer) int {
+    if len(ro buf.values) == 0 { return 0 }
     return buf.values[0] + buf.values[1] + buf.values[2]
 }
 
@@ -29,14 +29,14 @@ fn main() int {
     my_buffer.values[0] = 12 
 
     // 3. State Transition: Mutable -> Deeply Immutable
-    frozen_buffer := freeze(own my_buffer)
+    frozen_buffer := own my_buffer
     
     // NOTE: If we attempted `my_buffer.id = 2` here, the MIR pass 
     // should block it because the variable has been frozen.
 
     // 4. Safe immutable aliasing
     // The underlying Rc (if escaped) or stack buffer can now be safely read.
-    result := sum_buffer(frozen_buffer)
+    result := sum_buffer(ro frozen_buffer)
 
     // Expected: 12 + 20 + 30 = 62
     // Return: 62 - 20 = 42

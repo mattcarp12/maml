@@ -7,4 +7,5 @@
 
 namespace maml {
 llvm::Value *evaluateValue(CodegenContext &ctx, const mir::Value &val);
+llvm::Value *evaluateAddress(CodegenContext &ctx, const mir::Value &val);
 }

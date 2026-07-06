@@ -622,6 +622,138 @@ type Visitor interface {
 }
 
 // =============================================================================
+// Generic Mapper & Dispatcher
+// =============================================================================
+
+type Mapper[R any] interface {
+	MapAliasDecl(n *AliasDecl) R
+	MapArrayLiteral(n *ArrayLiteral) R
+	MapAssignStmt(n *AssignStmt) R
+	MapAwaitExpr(n *AwaitExpr) R
+	MapBlockStmt(n *BlockStmt) R
+	MapBoolLiteral(n *BoolLiteral) R
+	MapBreakStmt(n *BreakStmt) R
+	MapCallExpr(n *CallExpr) R
+	MapContinueStmt(n *ContinueStmt) R
+	MapDeclareStmt(n *DeclareStmt) R
+	MapExprStmt(n *ExprStmt) R
+	MapFieldAccess(n *FieldAccess) R
+	MapFnDecl(n *FnDecl) R
+	MapIdentifier(n *Identifier) R
+	MapIfExpr(n *IfExpr) R
+	MapIndexExpr(n *IndexExpr) R
+	MapInfixExpr(n *InfixExpr) R
+	MapIntLiteral(n *IntLiteral) R
+	MapLoopStmt(n *LoopStmt) R
+	MapMapInsertStmt(n *MapInsertStmt) R
+	MapMapLiteral(n *MapLiteral) R
+	MapMapReadExpr(n *MapReadExpr) R
+	MapPrefixExpr(n *PrefixExpr) R
+	MapProgram(n *Program) R
+	MapReturnStmt(n *ReturnStmt) R
+	MapSliceExpr(n *SliceExpr) R
+	MapSpawnExpr(n *SpawnExpr) R
+	MapStringLiteral(n *StringLiteral) R
+	MapStructLiteral(n *StructLiteral) R
+	MapTypeDecl(n *TypeDecl) R
+	MapVariantDiscriminantExpr(n *VariantDiscriminantExpr) R
+	MapVariantLiteral(n *VariantLiteral) R
+	MapVariantReadExpr(n *VariantReadExpr) R
+	MapVecLiteral(n *VecLiteral) R
+	MapVecPushStmt(n *VecPushStmt) R
+	MapVecReadExpr(n *VecReadExpr) R
+	MapVecWriteStmt(n *VecWriteStmt) R
+	MapYieldStmt(n *YieldStmt) R
+}
+
+func MapNode[R any](node Node, m Mapper[R]) R {
+	if node == nil {
+		var zero R
+		return zero
+	}
+	switch n := node.(type) {
+	case *AliasDecl:
+		return m.MapAliasDecl(n)
+	case *ArrayLiteral:
+		return m.MapArrayLiteral(n)
+	case *AssignStmt:
+		return m.MapAssignStmt(n)
+	case *AwaitExpr:
+		return m.MapAwaitExpr(n)
+	case *BlockStmt:
+		return m.MapBlockStmt(n)
+	case *BoolLiteral:
+		return m.MapBoolLiteral(n)
+	case *BreakStmt:
+		return m.MapBreakStmt(n)
+	case *CallExpr:
+		return m.MapCallExpr(n)
+	case *ContinueStmt:
+		return m.MapContinueStmt(n)
+	case *DeclareStmt:
+		return m.MapDeclareStmt(n)
+	case *ExprStmt:
+		return m.MapExprStmt(n)
+	case *FieldAccess:
+		return m.MapFieldAccess(n)
+	case *FnDecl:
+		return m.MapFnDecl(n)
+	case *Identifier:
+		return m.MapIdentifier(n)
+	case *IfExpr:
+		return m.MapIfExpr(n)
+	case *IndexExpr:
+		return m.MapIndexExpr(n)
+	case *InfixExpr:
+		return m.MapInfixExpr(n)
+	case *IntLiteral:
+		return m.MapIntLiteral(n)
+	case *LoopStmt:
+		return m.MapLoopStmt(n)
+	case *MapInsertStmt:
+		return m.MapMapInsertStmt(n)
+	case *MapLiteral:
+		return m.MapMapLiteral(n)
+	case *MapReadExpr:
+		return m.MapMapReadExpr(n)
+	case *PrefixExpr:
+		return m.MapPrefixExpr(n)
+	case *Program:
+		return m.MapProgram(n)
+	case *ReturnStmt:
+		return m.MapReturnStmt(n)
+	case *SliceExpr:
+		return m.MapSliceExpr(n)
+	case *SpawnExpr:
+		return m.MapSpawnExpr(n)
+	case *StringLiteral:
+		return m.MapStringLiteral(n)
+	case *StructLiteral:
+		return m.MapStructLiteral(n)
+	case *TypeDecl:
+		return m.MapTypeDecl(n)
+	case *VariantDiscriminantExpr:
+		return m.MapVariantDiscriminantExpr(n)
+	case *VariantLiteral:
+		return m.MapVariantLiteral(n)
+	case *VariantReadExpr:
+		return m.MapVariantReadExpr(n)
+	case *VecLiteral:
+		return m.MapVecLiteral(n)
+	case *VecPushStmt:
+		return m.MapVecPushStmt(n)
+	case *VecReadExpr:
+		return m.MapVecReadExpr(n)
+	case *VecWriteStmt:
+		return m.MapVecWriteStmt(n)
+	case *YieldStmt:
+		return m.MapYieldStmt(n)
+	default:
+		panic("HIR Mapper Error: Unhandled node type in MapNode")
+	}
+}
+
+// =============================================================================
 // TypeOf Helpers
 // =============================================================================
 

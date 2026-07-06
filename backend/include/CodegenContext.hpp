@@ -56,12 +56,10 @@ class CodegenContext {
   std::string CurrentFunctionName = "<top-level>";
   std::string CurrentInstructionName = "<unknown>";
 
-  ViewMap<llvm::Value *> SymbolTable;
   std::vector<FastMap<llvm::Value *>> SymbolEnv;
   std::unordered_map<int, llvm::BasicBlock *> Blocks;
   std::vector<llvm::BasicBlock *> LoopExitStack;
 
-  std::unordered_set<std::string> HeapVars;
   std::unordered_map<std::string, llvm::Type *> SymbolTypes;
   llvm::Value *getMemoryBase(std::string_view name);
 

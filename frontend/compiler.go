@@ -77,7 +77,7 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	for i := range mirProgram.Functions {
 		fn := &mirProgram.Functions[i]
 		if fn.Graph != nil {
-			ownershipErrors := passes.RunPasses(fn.Graph, cfg)
+			ownershipErrors := passes.RunPasses(fn.Graph, fn.Locals, cfg)
 			if len(ownershipErrors) > 0 {
 				return nil, formatErrors("OWNERSHIP", ownershipErrors)
 			}

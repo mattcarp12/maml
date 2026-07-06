@@ -1,17 +1,18 @@
 const alloc = @import("alloc.zig");
 const std = @import("std");
+const abi = @import("abi.zig");
 
 // -----------------------------------------------------------------------------
 // Async Executor Runtime
 // -----------------------------------------------------------------------------
 
 // These helpers will be generated dynamically by our LLVM Codegen backend!
-pub extern "C" fn maml_coro_resume_helper(hdl: ?*anyopaque) void;
-pub extern "C" fn maml_coro_done_helper(hdl: ?*anyopaque) bool;
-pub extern "C" fn maml_coro_destroy_helper(hdl: ?*anyopaque) void;
+pub extern "C" fn maml_coro_resume_helper(hdl:*abi.Future) void;
+pub extern "C" fn maml_coro_done_helper(hdl: *abi.Future) bool;
+pub extern "C" fn maml_coro_destroy_helper(hdl: *abi.Future) void;
 
 const TaskNode = struct {
-    hdl: ?*anyopaque,
+    hdl: ?*abi.Future,
     next: ?*TaskNode,
 };
 
@@ -19,31 +20,25 @@ var run_queue_head: ?*TaskNode = null;
 var run_queue_tail: ?*TaskNode = null;
 
 // Registry for tasks waiting on other tasks
-var waker_registry: std.AutoHashMap(?*anyopaque, ?*anyopaque) = undefined;
+var waker_registry: std.AutoHashMap(*abi.Future, *abi.Future) = undefined;
 // Registry for tasks that have been dropped without being awaited
-var detached_registry: std.AutoHashMap(?*anyopaque, void) = undefined;
+var detached_registry: std.AutoHashMap(*abi.Future, void) = undefined;
 
 pub export fn maml_coro_runtime_init() void {
     const page_alloc = std.heap.page_allocator; // Use your actual allocator here
-    waker_registry = std.AutoHashMap(?*anyopaque, ?*anyopaque).init(page_alloc);
-    detached_registry = std.AutoHashMap(?*anyopaque, void).init(page_alloc);
+    waker_registry = std.AutoHashMap(*abi.Future, *abi.Future).init(page_alloc);
+    detached_registry = std.AutoHashMap(*abi.Future, void).init(page_alloc);
 }
 
-pub export fn maml_task_await(target_task: ?*anyopaque, waiting_task: ?*anyopaque) void {
-    if (target_task == null or waiting_task == null) return;
-    // 1. FAST PATH: The target task finished before we reached the await!
-    // Do not suspend. Put ourselves right back in the ready queue.
+pub export fn maml_task_await(target_task: *abi.Future, waiting_task: *abi.Future) void {
     if (maml_coro_done_helper(target_task)) {
         maml_spawn_task(waiting_task);
         return;
     }
-
-    // 2. SLOW PATH: Target is still running. Register for wakeup.
     waker_registry.put(target_task, waiting_task) catch @panic("OOM in waker registry");
 }
 
-pub export fn maml_spawn_task(hdl: ?*anyopaque) void {
-    if (hdl == null) return;
+pub export fn maml_spawn_task(hdl: *abi.Future) void {
     const node_ptr = alloc.mi_malloc(@sizeOf(TaskNode)) orelse @panic("OOM in task spawn");
     var node = @as(*TaskNode, @ptrCast(@alignCast(node_ptr)));
     node.hdl = hdl;
@@ -57,15 +52,10 @@ pub export fn maml_spawn_task(hdl: ?*anyopaque) void {
     }
 }
 
-pub export fn maml_run_executor(root_task: ?*anyopaque) ?*anyopaque {
+pub export fn maml_run_executor(root_task: *abi.Future) *abi.Future {
     while (!maml_coro_done_helper(root_task)) {
         if (run_queue_head == null) {
-            // FIX: If the queue is empty, the executor should sleep
-            // briefly to allow the OS to schedule other threads/events.
-            // In a real system, you'd use a conditional variable here.
             std.Thread.yield() catch {};
-
-            // Re-check: Did any new tasks get spawned by an interrupt?
             if (run_queue_head == null) {
                 continue;
             }
@@ -101,24 +91,18 @@ pub export fn maml_run_executor(root_task: ?*anyopaque) ?*anyopaque {
     return root_task;
 }
 
-// Emitted by the ARC injector when a Future<T> variable dies out of scope
-pub export fn maml_task_release(handle: ?*anyopaque) void {
-    if (handle == null) return;
-
+pub export fn maml_task_release(handle: *abi.Future) void {
     if (maml_coro_done_helper(handle)) {
-        // Task is already finished. Safe to destroy immediately.
         maml_coro_destroy_helper(handle);
     } else {
-        // Task is still running in the background. Mark it as detached so
-        // the executor knows to clean it up when it finally finishes.
         detached_registry.put(handle, {}) catch @panic("OOM in detached registry");
     }
 }
 
-pub export fn maml_task_get_result(target_task: ?*anyopaque) void { // Or whatever return type
+pub export fn maml_task_get_result(target_task: *abi.Future) void { // Or whatever return type
     maml_coro_destroy_helper(target_task);
 }
 
-pub export fn maml_yield_now(current_coro: ?*anyopaque) void {
+pub export fn maml_yield_now(current_coro: *abi.Future) void {
     maml_spawn_task(current_coro);
 }

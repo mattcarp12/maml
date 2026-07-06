@@ -88,6 +88,13 @@ func (r AssignmentTypeCompatibility) Name() string { return "assignment-type-com
 func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleContext) []Violation {
 	lvalType := tast.TypeOf(node.LValue)
 	rvalType := tast.TypeOf(node.RValue)
+
+	if idx, ok := node.LValue.(*tast.IndexExpr); ok {
+		if mapTy, isMap := tast.TypeOf(idx.Left).(*types.MapType); isMap {
+			lvalType = mapTy.Value
+		}
+	}
+
 	expectedType := lvalType
 	if !expectedType.Equals(rvalType) && !types.IsUnknown(expectedType) && !types.IsUnknown(rvalType) {
 		return []Violation{violation(node.Pos_,

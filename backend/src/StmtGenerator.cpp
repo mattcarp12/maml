@@ -6,25 +6,19 @@
 namespace maml {
 
 // Forward declare the handler overloads (implemented in the Ops cpp files)
-void handle(CodegenContext &ctx, const mir::TempDeclInst &inst);
 void handle(CodegenContext &ctx, const mir::AssignInst &inst);
 void handle(CodegenContext &ctx, const mir::IndexAddrInst &inst);
-void handle(CodegenContext &ctx, const mir::StructInitInst &inst);
 void handle(CodegenContext &ctx, const mir::FieldAddrInst &inst);
-void handle(CodegenContext &ctx, const mir::ArrayInitInst &inst);
-void handle(CodegenContext &ctx, const mir::SliceInst &inst);
+void handle(CodegenContext &ctx, const mir::AddressOfInst &inst);
 void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst);
+void handle(CodegenContext &ctx, const mir::BitcastPtrInst &inst);
 void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst);
 void handle(CodegenContext &ctx, const mir::CallInst &inst);
-void handle(CodegenContext &ctx, const mir::VariantInitInst &inst);
-void handle(CodegenContext &ctx, const mir::VariantReadInst &inst);
-void handle(CodegenContext &ctx, const mir::VariantDiscriminantInst &inst);
 void handle(CodegenContext &ctx, const mir::CastInst &inst);
 void handle(CodegenContext &ctx, const mir::LoadPtrInst &inst);
 void handle(CodegenContext &ctx, const mir::StoreInst &inst);
 void handle(CodegenContext &ctx, const mir::CopyInst &inst);
 void handle(CodegenContext &ctx, const mir::MoveInst &inst);
-void handle(CodegenContext &ctx, const mir::DropInst &inst);
 void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst);
 
 void compileInstruction(CodegenContext &ctx, const mir::Instruction &inst) {

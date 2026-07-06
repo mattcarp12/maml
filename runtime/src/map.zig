@@ -1,28 +1,19 @@
 const alloc = @import("alloc.zig");
+const abi = @import("abi.zig");
 const std = @import("std");
 
 // -----------------------------------------------------------------------------
-// Map runtime
+// Map runtime helpers
 // -----------------------------------------------------------------------------
-
-const MapHeader = extern struct {
-    entries: ?*anyopaque,
-    count: u32,
-    tombstone_count: u32,
-    cap: u32,
-    val_size: u32,
-    is_string_key: bool,
-    _pad: [7]u8,
-};
 
 inline fn entryOccupied(entry: [*]u8) *u32 {
     return @as(*u32, @ptrCast(@alignCast(entry)));
 }
 
-// Helper to step to the Nth entry in the array
-inline fn entryAt(entries: [*]u8, index: usize, val_size: u32, is_str: bool) [*]u8 {
+inline fn entryAt(entries: *anyopaque, index: usize, val_size: u32, is_str: bool) [*]u8 {
     const stride = entrySize(val_size, is_str);
-    return entries + (index * stride);
+    const entries_bytes = @as([*]u8, @ptrCast(entries));
+    return entries_bytes + (index * stride);
 }
 
 inline fn entryKeyHash(entry: [*]u8) *u32 {
@@ -44,324 +35,280 @@ inline fn entryValuePtr(entry: [*]u8, is_str: bool) [*]u8 {
 
 inline fn entrySize(val_size: u32, is_str: bool) usize {
     const header_offset: usize = if (is_str) 24 else 8;
-    const raw_size = header_offset + @as(usize, val_size);
-    return (raw_size + 7) & ~@as(usize, 7); // Maintain 8-byte alignment
+    return header_offset + val_size;
 }
 
-const INITIAL_MAP_CAP: u32 = 16;
+fn findSlot(
+    entries: *anyopaque,
+    cap: u32,
+    hash: u32,
+    key_str_ptr: ?*anyopaque,
+    key_str_len: u32,
+    val_size: u32,
+    is_str: bool,
+) ?usize {
+    if (cap == 0) return null;
 
-pub export fn maml_map_create(val_size: u32, is_string_key: bool) ?*anyopaque {
-    // 1. Allocate a raw header without the ArcHeader prefix
-    const raw_ptr = alloc.mi_malloc(@sizeOf(MapHeader)) orelse @panic("OOM in maml_map_create");
-    var header = @as(*MapHeader, @ptrCast(@alignCast(raw_ptr)));
+    var index = @as(usize, hash) % @as(usize, cap);
+    var first_tombstone: ?usize = null;
 
-    header.entries = null;
-    header.count = 0;
-    header.tombstone_count = 0;
-    header.cap = 16;
-    header.val_size = val_size;
-    header.is_string_key = is_string_key;
-    header._pad = [7]u8{ 0, 0, 0, 0, 0, 0, 0 };
+    var i: usize = 0;
+    while (i < cap) : (i += 1) {
+        const entry = entryAt(entries, index, val_size, is_str);
+        const status = entryOccupied(entry).*;
 
-    return raw_ptr;
-}
-
-fn mapGrow(header: *MapHeader) void {
-    const old_cap = header.cap;
-    const new_cap = old_cap * 2;
-    const val_size = header.val_size;
-    const is_str = header.is_string_key;
-    const esize = entrySize(val_size, is_str);
-
-    const new_entries_raw = alloc.mi_malloc(@as(usize, new_cap) * esize) orelse
-        @panic("maml_map: out of memory during grow");
-
-    const new_entries = @as([*]u8, @ptrCast(new_entries_raw));
-    @memset(new_entries[0 .. @as(usize, new_cap) * esize], 0);
-
-    if (header.entries) |old_raw| {
-        const old_entries = @as([*]u8, @ptrCast(old_raw));
-        for (0..@as(usize, old_cap)) |i| {
-            const old_entry = entryAt(old_entries, i, val_size, is_str);
-            if (entryOccupied(old_entry).* != 1) continue;
-
-            const hash = entryKeyHash(old_entry).*;
-            var slot = @as(usize, @truncate(hash % @as(u64, new_cap)));
-            while (entryOccupied(entryAt(new_entries, slot, val_size, is_str)).* != 0) {
-                slot = (slot + 1) % @as(usize, new_cap);
+        if (status == 0) {
+            return first_tombstone orelse index;
+        } else if (status == 2) {
+            if (first_tombstone == null) {
+                first_tombstone = index;
             }
-            const dest = entryAt(new_entries, slot, val_size, is_str);
-            @memcpy(dest[0..esize], old_entry[0..esize]);
+        } else if (status == 1) {
+            if (is_str) {
+                const entry_hash = entryKeyHash(entry).*;
+                if (entry_hash == hash) {
+                    const elen = entryKeyStringLen(entry).*;
+                    if (elen == key_str_len) {
+                        const eptr = entryKeyStringPtr(entry).*;
+                        if (eptr != null) {
+                            const key_slice = @as([*]const u8, @ptrCast(key_str_ptr))[0..key_str_len];
+                            if (std.mem.eql(u8, eptr.?[0..elen], key_slice)) {
+                                return index;
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (entryKeyHash(entry).* == hash) {
+                    return index;
+                }
+            }
         }
-        alloc.mi_free(old_raw);
+
+        index = (index + 1) % @as(usize, cap);
     }
 
-    header.entries = new_entries_raw;
-    header.cap = new_cap;
-    header.tombstone_count = 0;
+    return first_tombstone;
+}
+
+fn resize(map: *abi.Map, new_cap: u32) void {
+    const is_str = map.is_string_key;
+    const esize = entrySize(map.val_size, is_str);
+    const total_bytes = @as(usize, new_cap) * esize;
+
+    const new_entries_raw = alloc.mi_malloc(total_bytes) orelse @panic("OOM in map resize");
+    var idx: usize = 0;
+    while (idx < new_cap) : (idx += 1) {
+        const entries_bytes = @as([*]u8, @ptrCast(new_entries_raw));
+        const entry = entries_bytes + (idx * esize);
+        @as(*u32, @ptrCast(@alignCast(entry))).* = 0;
+    }
+
+    const old_entries_ptr = map.entries;
+    const old_cap = map.cap;
+
+    map.entries = new_entries_raw;
+    map.cap = new_cap;
+    map.count = 0;
+    map.tombstone_count = 0;
+
+    if (old_cap > 0) {
+        const old_entries = @as([*]u8, @ptrCast(old_entries_ptr));
+        var i: usize = 0;
+        while (i < old_cap) : (i += 1) {
+            const old_entry = entryAt(old_entries, i, map.val_size, is_str);
+            if (entryOccupied(old_entry).* == 1) {
+                const hash = entryKeyHash(old_entry).*;
+                var kptr: ?[*]const u8 = null;
+                var klen: u32 = 0;
+
+                if (is_str) {
+                    kptr = entryKeyStringPtr(old_entry).*;
+                    klen = entryKeyStringLen(old_entry).*;
+                }
+
+                const slot = findSlot(new_entries_raw, new_cap, hash, @constCast(kptr), klen, map.val_size, is_str).?;
+                const dest_entry = entryAt(new_entries_raw, slot, map.val_size, is_str);
+
+                entryOccupied(dest_entry).* = 1;
+                entryKeyHash(dest_entry).* = hash;
+
+                if (is_str) {
+                    entryKeyStringPtr(dest_entry).* = kptr;
+                    entryKeyStringLen(dest_entry).* = klen;
+                }
+
+                const src_val = entryValuePtr(old_entry, is_str);
+                const dest_val = entryValuePtr(dest_entry, is_str);
+                @memcpy(dest_val[0..map.val_size], src_val[0..map.val_size]);
+
+                map.count += 1;
+            }
+        }
+        alloc.mi_free(old_entries_ptr);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Exported C Runtime API
+// -----------------------------------------------------------------------------
+
+pub export fn maml_map_create(val_size: u32, is_string_key: bool) *abi.Map {
+    // 1. Allocate the header
+    const raw_ptr = alloc.mi_malloc(abi.MAP_SIZE) orelse @panic("OOM in maml_map_create");
+    var map = @as(*abi.Map, @ptrCast(@alignCast(raw_ptr)));
+
+    // 2. Pre-allocate initial buffer (e.g., capacity 8)
+    const initial_cap: u32 = 8;
+    const esize = entrySize(val_size, is_string_key);
+    const initial_entries = alloc.mi_malloc(@as(usize, initial_cap) * esize) orelse @panic("OOM in map initial allocation");
+
+    // Clear initial buffer
+    @memset(@as([*]u8, @ptrCast(initial_entries))[0..(initial_cap * esize)], 0);
+
+    map.count = 0;
+    map.tombstone_count = 0;
+    map.cap = initial_cap;
+    map.val_size = val_size;
+    map.is_string_key = is_string_key;
+    map.entries = initial_entries; // Now always valid non-null pointer
+
+    return map;
 }
 
 pub export fn maml_map_put(
-    map_ptr: ?*anyopaque,
-    key_hash: u32,
-    str_key_ptr: ?*anyopaque,
-    str_key_len: u32,
-    int_key: i32,
-    val_ptr: ?*anyopaque,
+    map: *abi.Map,
+    hash: u32,
+    key_str_ptr: *anyopaque,
+    key_str_len: u32,
+    val_ptr: *anyopaque,
 ) void {
-    if (map_ptr == null or val_ptr == null) return;
-    var header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
-
-    // Check physical load factor (active elements + tombstones)
-    const physical_load = header.count + header.tombstone_count;
-    if ((physical_load + 1) * 4 >= header.cap * 3) {
-        mapGrow(header); // Note: Make sure mapGrow resets tombstone_count to 0!
+    if (map.cap == 0 or (map.count + map.tombstone_count + 1) * 4 > map.cap * 3) {
+        const new_cap = if (map.cap == 0) 8 else map.cap * 2;
+        resize(map, new_cap);
     }
 
-    // Allocate initial entries if needed
-    if (header.entries == null) {
-        mapGrow(header);
-    }
+    const entries = @as([*]u8, @ptrCast(map.entries));
+    const is_str = map.is_string_key;
+    const slot = findSlot(entries, map.cap, hash, key_str_ptr, key_str_len, map.val_size, is_str).?;
+    const entry = entryAt(entries, slot, map.val_size, is_str);
 
-    const entries = @as([*]u8, @ptrCast(header.entries.?));
-    const is_str = header.is_string_key;
-
-    var slot = key_hash & (header.cap - 1);
-    var first_tombstone: ?u32 = null;
-    var probes: u32 = 0;
-
-    while (probes < header.cap) : (probes += 1) {
-        const entry = entryAt(entries, slot, header.val_size, is_str);
-        const occupied = entryOccupied(entry);
-
-        if (occupied.* == 0) {
-            // Case 1: Insert into Empty Slot (or recycled Tombstone)
-            const target_slot = if (first_tombstone) |t| t else slot;
-            const target_entry = entryAt(entries, target_slot, header.val_size, is_str);
-
-            entryOccupied(target_entry).* = 1;
-            entryKeyHash(target_entry).* = key_hash;
-
-            if (is_str) {
-                entryKeyStringPtr(target_entry).* = @as(?[*]const u8, @ptrCast(str_key_ptr));
-                entryKeyStringLen(target_entry).* = str_key_len;
-            }
-            // For integer keys, key_hash == int_key (set above), no separate storage needed.
-            // Copy value bytes
-            @memcpy(entryValuePtr(target_entry, is_str)[0..header.val_size], @as([*]u8, @ptrCast(val_ptr))[0..header.val_size]);
-
-            header.count += 1;
-            if (first_tombstone != null) {
-                header.tombstone_count -= 1; // Recycled a tombstone
-            }
-            return;
-        } else if (occupied.* == 2) {
-            if (first_tombstone == null) first_tombstone = slot;
-        } else {
-            // Case 2: Slot Occupied, Check for Match
-            var match = false;
-            if (entryKeyHash(entry).* == key_hash) {
-                if (is_str) {
-                    const e_ptr = entryKeyStringPtr(entry).*;
-                    const e_len = entryKeyStringLen(entry).*;
-                    if (e_len == str_key_len) {
-                        const e_slice = @as([*]const u8, @ptrCast(e_ptr.?))[0..e_len];
-                        const s_slice = @as([*]const u8, @ptrCast(str_key_ptr.?))[0..str_key_len];
-                        match = std.mem.eql(u8, e_slice, s_slice);
-                    }
-                } else {
-                    match = (entryKeyHash(entry).* == @as(u32, @bitCast(int_key)));
-                }
-            }
-
-            if (match) {
-                @memcpy(entryValuePtr(entry, is_str)[0..header.val_size], @as([*]u8, @ptrCast(val_ptr))[0..header.val_size]);
-                return;
-            }
+    const old_status = entryOccupied(entry).*;
+    if (old_status != 1) {
+        if (old_status == 2) {
+            map.tombstone_count -= 1;
         }
-        slot = (slot + 1) & (header.cap - 1);
+        map.count += 1;
     }
+
+    entryOccupied(entry).* = 1;
+    entryKeyHash(entry).* = hash;
+
+    if (is_str) {
+        entryKeyStringPtr(entry).* = @as(?[*]const u8, @ptrCast(key_str_ptr));
+        entryKeyStringLen(entry).* = key_str_len;
+    }
+
+    const dest_val = entryValuePtr(entry, is_str);
+    @memcpy(dest_val[0..map.val_size], @as([*]const u8, @ptrCast(val_ptr))[0..map.val_size]);
 }
 
 pub export fn maml_map_get(
-    map_ptr: ?*anyopaque,
-    key_hash: u32,
-    str_key_ptr: ?*anyopaque,
-    str_key_len: u32,
+    map: *abi.Map,
+    hash: u32,
+    key_str_ptr: *anyopaque,
+    key_str_len: u32,
 ) ?*anyopaque {
-    if (map_ptr == null) return null;
-    const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
-    if (header.entries == null or header.count == 0) return null;
+    if (map.cap == 0 or map.count == 0) return null;
 
-    const val_size = header.val_size;
-    const is_str = header.is_string_key;
-    const entries = @as([*]u8, @ptrCast(header.entries.?));
-    var slot = @as(usize, key_hash % header.cap);
+    const entries = @as([*]u8, @ptrCast(map.entries));
+    const is_str = map.is_string_key;
+    const slot = findSlot(entries, map.cap, hash, key_str_ptr, key_str_len, map.val_size, is_str).?;
+    const entry = entryAt(entries, slot, map.val_size, is_str);
 
-    var probes: usize = 0;
-    while (probes < header.cap) : (probes += 1) {
-        const entry = entryAt(entries, slot, val_size, is_str);
-        const occupied = entryOccupied(entry);
-
-        if (occupied.* == 0) return null; // Hit an empty slot, key isn't here
-
-        if (occupied.* == 1 and entryKeyHash(entry).* == key_hash) {
-            var match = true;
-            if (is_str) {
-                const len = entryKeyStringLen(entry).*;
-                if (len != str_key_len) {
-                    match = false;
-                } else if (len > 0) {
-                    // 1. Unpack the entry pointer (it is already typed as ?[*]const u8 via the helper)
-                    const e_slice = entryKeyStringPtr(entry).*.?[0..len];
-
-                    // 2. Explicitly cast the anyopaque parameter to a many-item pointer before slicing
-                    const s_slice = @as([*]const u8, @ptrCast(str_key_ptr.?))[0..len];
-
-                    if (!std.mem.eql(u8, e_slice, s_slice)) {
-                        match = false;
-                    }
-                }
-            }
-
-            if (match) {
-                const ret_ptr = entryValuePtr(entry, is_str);
-                return @as(?*anyopaque, @ptrCast(ret_ptr));
-            }
-        }
-
-        slot = (slot + 1) % @as(usize, header.cap);
+    if (entryOccupied(entry).* == 1) {
+        return @ptrCast(entryValuePtr(entry, is_str));
     }
+
     return null;
 }
 
 pub export fn maml_map_delete(
-    map_ptr: ?*anyopaque,
-    key_hash: u32,
-    str_key_ptr: ?*anyopaque,
-    str_key_len: u32,
-    int_key: i32,
+    map: *abi.Map,
+    hash: u32,
+    key_str_ptr: *anyopaque,
+    key_str_len: u32,
 ) void {
-    if (map_ptr == null) return;
-    var header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
-    if (header.entries == null) return;
+    if (map.cap == 0 or map.count == 0) return;
 
-    const entries = @as([*]u8, @ptrCast(header.entries.?));
-    const is_str = header.is_string_key;
+    const entries = @as([*]u8, @ptrCast(map.entries));
+    const is_str = map.is_string_key;
+    const slot = findSlot(entries, map.cap, hash, key_str_ptr, key_str_len, map.val_size, is_str).?;
+    const entry = entryAt(entries, slot, map.val_size, is_str);
 
-    var slot = key_hash & (header.cap - 1);
-    var probes: u32 = 0;
-
-    while (probes < header.cap) : (probes += 1) {
-        const entry = entryAt(entries, slot, header.val_size, is_str);
-        const occupied = entryOccupied(entry);
-
-        if (occupied.* == 0) return; // Not found
-
-        if (occupied.* == 1 and entryKeyHash(entry).* == key_hash) {
-            var match = false;
-            if (is_str) {
-                const e_len = entryKeyStringLen(entry).*;
-                if (e_len == str_key_len) {
-                    const e_slice = entryKeyStringPtr(entry).*.?[0..e_len];
-                    const s_slice = @as([*]const u8, @ptrCast(str_key_ptr.?))[0..str_key_len];
-                    match = std.mem.eql(u8, e_slice, s_slice);
-                }
-            } else {
-                match = (entryKeyHash(entry).* == @as(u32, @bitCast(int_key)));
-            }
-
-            if (match) {
-                // Update layout flags
-                occupied.* = 2; // Mark as Tombstone
-                header.count -= 1;
-                header.tombstone_count += 1; // Track dead space
-                return;
-            }
-        }
-        slot = (slot + 1) & (header.cap - 1);
+    if (entryOccupied(entry).* == 1) {
+        entryOccupied(entry).* = 2; // Write tombstone status
+        map.count -= 1;
+        map.tombstone_count += 1;
     }
 }
 
-pub export fn maml_map_len(map_ptr: ?*anyopaque) u32 {
-    if (map_ptr == null) return 0;
-    const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
-    return header.count;
+pub export fn maml_map_len(map: *abi.Map) u32 {
+    return map.count;
 }
 
 pub export fn maml_map_next_active(
-    map_ptr: ?*anyopaque,
-    iter_state_ptr: ?*anyopaque,
-    out_str_ptr: ?*anyopaque,
+    map: *abi.Map,
+    index_ptr: *u32,
+    out_str_key: *?*anyopaque,
 ) ?*anyopaque {
-    if (map_ptr == null or iter_state_ptr == null or out_str_ptr == null) return null;
+    if (map.cap == 0 or map.count == 0) return null;
+    const entries = @as([*]u8, @ptrCast(map.entries));
+    const is_str = map.is_string_key;
+    while (index_ptr.* < map.cap) {
+        const current_idx = index_ptr.*;
+        index_ptr.* += 1;
 
-    const header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
-    if (header.entries == null) return null;
+        const entry = entryAt(entries, current_idx, map.val_size, is_str);
 
-    // Cast the type-erased ABI pointers into typed pointers
-    const iter_state = @as(*u32, @ptrCast(@alignCast(iter_state_ptr.?)));
-    const out_str_key = @as(*?*anyopaque, @ptrCast(@alignCast(out_str_ptr.?)));
-
-    const entries = @as([*]u8, @ptrCast(header.entries.?));
-    const is_str = header.is_string_key;
-
-    // Scan forward starting from the current iter_state index
-    while (iter_state.* < header.cap) {
-        const i = iter_state.*;
-        iter_state.* += 1; // Advance state for the next call
-
-        const entry = entryAt(entries, i, header.val_size, is_str);
-
-        // 1 means occupied/active
         if (entryOccupied(entry).* == 1) {
-            // If it's a string map, populate the out-parameter
             if (is_str) {
-                out_str_key.* = @constCast(entryKeyStringPtr(entry).*);
+                out_str_key.* = @as(?*anyopaque, @constCast(entryKeyStringPtr(entry).*));
             } else {
                 out_str_key.* = null;
             }
-
-            // Return the pointer to the value slot
             return @ptrCast(entryValuePtr(entry, is_str));
         }
     }
 
-    // Iteration complete
     return null;
 }
 
-pub export fn maml_map_clone(map_ptr: ?*anyopaque) ?*anyopaque {
-    if (map_ptr == null) return null;
-    const old_header = @as(*MapHeader, @ptrCast(@alignCast(map_ptr.?)));
+pub export fn maml_map_clone(map: *abi.Map) *abi.Map {
+    const raw_new_ptr = alloc.mi_malloc(abi.MAP_SIZE) orelse @panic("OOM in map clone");
+    var new_header = @as(*abi.Map, @ptrCast(@alignCast(raw_new_ptr)));
 
-    // 1. Allocate the new shell
-    const raw_new_ptr = alloc.mi_malloc(@sizeOf(MapHeader)) orelse @panic("OOM in map clone");
-    var new_header = @as(*MapHeader, @ptrCast(@alignCast(raw_new_ptr)));
+    new_header.count = map.count;
+    new_header.tombstone_count = map.tombstone_count;
+    new_header.cap = map.cap;
+    new_header.val_size = map.val_size;
+    new_header.is_string_key = map.is_string_key;
 
-    new_header.count = old_header.count;
-    new_header.tombstone_count = old_header.tombstone_count;
-    new_header.cap = old_header.cap;
-    new_header.val_size = old_header.val_size;
-    new_header.is_string_key = old_header.is_string_key;
-    new_header._pad = [7]u8{ 0, 0, 0, 0, 0, 0, 0 };
-    new_header.entries = null;
+    const old_entries_raw = map.entries;
+    const is_str = map.is_string_key;
+    const esize = entrySize(map.val_size, is_str);
+    const total_bytes = @as(usize, map.cap) * esize;
+    const new_entries = alloc.mi_malloc(total_bytes) orelse @panic("OOM in map clone elements");
+    const dest_bytes = @as([*]u8, @ptrCast(new_entries))[0..total_bytes];
+    const src_bytes = @as([*]const u8, @ptrCast(old_entries_raw))[0..total_bytes];
+    @memcpy(dest_bytes, src_bytes);
+    new_header.entries = new_entries;
 
-    // 2. Clone the hash array if it exists
-    if (old_header.entries) |old_entries_raw| {
-        const is_str = old_header.is_string_key;
-        const esize = entrySize(old_header.val_size, is_str);
-        const total_bytes = @as(usize, old_header.cap) * esize;
+    return new_header;
+}
 
-        const new_entries_raw = alloc.mi_malloc(total_bytes) orelse @panic("OOM in map entries clone");
-
-        // Because it's open addressing, we must copy the exact layout including tombstones
-        const src = @as([*]u8, @ptrCast(old_entries_raw))[0..total_bytes];
-        const dst = @as([*]u8, @ptrCast(new_entries_raw))[0..total_bytes];
-        @memcpy(dst, src);
-
-        new_header.entries = new_entries_raw;
-    }
-
-    return raw_new_ptr;
+/// Frees the map's backing entries buffer and its heap-allocated header.
+pub export fn maml_map_free(map: *abi.Map) void {
+    alloc.mi_free(map.entries);
+    alloc.mi_free(map);
 }

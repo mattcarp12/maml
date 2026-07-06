@@ -5,6 +5,7 @@ type Type interface {
 	isType()
 	IsReferenceType() bool
 	String() string
+	MangledName() string
 	Equals(Type) bool
 }
 
@@ -206,7 +207,11 @@ type AnyType struct{}
 func (t AnyType) isType()               {}
 func (t AnyType) IsReferenceType() bool { return false }
 func (t AnyType) Equals(other Type) bool {
-	return true
+	if _, ok := other.(AnyType); ok {
+		return true
+	}
+	_, ok := other.(AnyType)
+	return ok
 }
 
 type UnknownType struct{}
@@ -327,6 +332,9 @@ func (t *ViewType) Equals(other Type) bool {
 			return false
 		}
 	} else if t.Base != o.Base {
+		return false
+	}
+	if t.IsMut != o.IsMut {
 		return false
 	}
 	return true

@@ -2,11 +2,43 @@ package mir
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/mattcarp12/maml/frontend/hir"
-	"github.com/mattcarp12/maml/frontend/layout"
 	"github.com/mattcarp12/maml/frontend/types"
 )
+
+// ==========================================================================
+// Memory Class Helpers
+// ==========================================================================
+
+// isByRefType returns true if the type's memory class is a heap-allocated pointer (by_reference).
+func isByRefType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.(type) {
+	case *types.VectorType, *types.MapType, *types.FutureType:
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveBasePtr injects an explicit dereference instruction if the object type is a by_reference memory class.
+func (b *Builder) resolveBasePtr(basePtr Value, objType types.Type) Value {
+	if isByRefType(objType) {
+		heapPtr := b.newTemp()
+		b.locals[heapPtr] = types.PtrType{}
+		b.current.Statements = append(b.current.Statements, &LoadPtrInst{
+			Dst:  heapPtr,
+			Ptr:  basePtr,
+			Type: types.PtrType{},
+		})
+		return &Register{Name: heapPtr, Type: types.PtrType{}}
+	}
+	return basePtr
+}
 
 // ==========================================================================
 // MIR Program and Builder
@@ -14,11 +46,12 @@ import (
 
 type Function struct {
 	Name       string
-	Params     []*hir.Param
+	Params     []Param
 	ReturnType types.Type
 	IsAsync    bool
 	IsExtern   bool
 	Graph      *Graph
+	Locals     map[string]types.Type
 }
 
 type Program struct {
@@ -44,18 +77,25 @@ func BuildProgram(hirProg *hir.Program) *Program {
 
 		case *hir.FnDecl:
 			var graph *Graph = nil
+			var locals map[string]types.Type = nil
 			if !d.IsExtern {
-				graph = buildFn(d)
+				graph, locals = buildFn(d)
+			}
+
+			params := make([]Param, len(d.Params))
+			for i, p := range d.Params {
+				params[i] = Param{Name: p.Name, Type: lowerParamType(p.Type, p.Symbol.Cap)}
 			}
 
 			// Bundle the CFG with the function's static signature
 			mirProg.Functions = append(mirProg.Functions, Function{
 				Name:       d.Name,
-				Params:     d.Params,
+				Params:     params,
 				ReturnType: d.ReturnType,
 				IsAsync:    d.IsAsync,
 				IsExtern:   d.IsExtern,
 				Graph:      graph,
+				Locals:     locals,
 			})
 		}
 	}
@@ -63,9 +103,9 @@ func BuildProgram(hirProg *hir.Program) *Program {
 	return mirProg
 }
 
-// =============================================================================
-// State Management
-// =============================================================================
+// unitValue is the sentinel Value used for statement-shaped Mapper methods
+// and other nodes that don't produce a meaningful runtime value.
+var unitValue Value = &Register{Name: "_unit", Type: types.UnitType{}}
 
 type LoopTracker struct {
 	Header BlockID
@@ -73,53 +113,56 @@ type LoopTracker struct {
 }
 
 type Builder struct {
-	graph     *Graph
-	nextID    BlockID
-	loops     []LoopTracker
-	tempCount int
-	symNames  map[*types.Symbol]string
-	nameFreq  map[string]int
-	Target    *layout.Target
+	graph         *Graph
+	nextID        BlockID
+	loops         []LoopTracker
+	tempCount     int
+	symNames      map[*types.Symbol]string
+	nameFreq      map[string]int
+	Target        *Target
+	locals        map[string]types.Type
+	current       *BasicBlock
+	currentFuture Value
 }
 
+var _ hir.Mapper[Value] = (*Builder)(nil)
+
 // buildFn translates a hierarchical HIR function into a flat MIR Control Flow Graph.
-func buildFn(fn *hir.FnDecl) *Graph {
+func buildFn(fn *hir.FnDecl) (*Graph, map[string]types.Type) {
 	b := &Builder{
 		graph:    NewGraph(),
 		symNames: make(map[*types.Symbol]string),
 		nameFreq: make(map[string]int),
-		Target:   layout.DefaultTarget, // TODO - allow different targets to be passed.
+		locals:   make(map[string]types.Type),
+		Target:   DefaultTarget,
 	}
 
-	// Register function parameters so they keep their original names
-	// and trigger suffixes only on local variables that try to shadow them.
 	for _, p := range fn.Params {
 		if p.Symbol != nil {
 			b.nameFreq[p.Name] = 1
 			b.symNames[p.Symbol] = p.Name
+			b.locals[p.Name] = lowerParamType(p.Type, p.Symbol.Cap)
 		}
 	}
 
 	entry := b.newBlock()
 	b.graph.Entry = entry.ID
+	b.current = entry
 
-	// =========================================================================
-	// Coroutine Initialization
-	// =========================================================================
 	if fn.IsAsync {
 		entry.Statements = append(entry.Statements, &CoroPrologueInst{})
+		futReg := b.newTemp()
+		b.locals[futReg] = &types.FutureType{}
+		b.currentFuture = &Register{Name: futReg, Type: &types.FutureType{}}
 	}
 
-	// Traverse the AST function body
-	finalBlock := b.buildBlockStmt(fn.Body, entry)
+	b.MapBlockStmt(fn.Body)
 
-	// If the trailing basic block was left completely open/unterminated,
-	// inject an implicit ReturnTerminator to seal the block control-flow sequence cleanly.
-	if finalBlock != nil && finalBlock.Terminator == nil {
-		finalBlock.Terminator = &ReturnTerminator{}
+	if b.current != nil && b.current.Terminator == nil {
+		b.current.Terminator = &ReturnTerminator{}
 	}
 
-	return b.graph
+	return b.graph, b.locals
 }
 
 func (b *Builder) newBlock() *BasicBlock {
@@ -134,100 +177,110 @@ func (b *Builder) newBlock() *BasicBlock {
 }
 
 // =============================================================================
-// Traversal and Flattening
+// Top-level / Declaration Mappers
 // =============================================================================
 
-func (b *Builder) buildBlockStmt(body *hir.BlockStmt, current *BasicBlock) *BasicBlock {
-	if body == nil {
-		return current
-	}
-
-	for _, stmt := range body.Statements {
-		if current == nil {
-			break // Dead code after terminator
-		}
-		current = b.buildStmt(stmt, current)
-	}
-
-	return current
+func (b *Builder) MapProgram(n *hir.Program) Value {
+	return unitValue
 }
 
-func (b *Builder) buildStmt(stmt hir.Stmt, current *BasicBlock) *BasicBlock {
-	switch s := stmt.(type) {
-	case *hir.DeclareStmt:
-		current = b.buildDeclareStmt(s, current)
-		return current
-	case *hir.AliasDecl:
-		return b.buildAliasDecl(s, current)
-	case *hir.AssignStmt:
-		return b.buildAssignStmt(s, current)
-	case *hir.BlockStmt:
-		return b.buildBlockStmt(s, current)
-	case *hir.ExprStmt:
-		_, current = b.flattenExpr(s.Value, current)
-		return current
-	case *hir.ReturnStmt:
-		return b.buildReturnStmt(s, current)
-	case *hir.YieldStmt:
-		_, current = b.flattenExpr(s.Value, current)
-		return current
-	case *hir.LoopStmt:
-		return b.buildLoopStmt(s, current)
-	case *hir.BreakStmt:
-		if len(b.loops) == 0 {
-			return current
-		}
-		activeLoop := b.loops[len(b.loops)-1]
-		current.Terminator = &JumpTerminator{Target: activeLoop.Exit}
-		return nil
-	case *hir.ContinueStmt:
-		if len(b.loops) == 0 {
-			return current
-		}
-		activeLoop := b.loops[len(b.loops)-1]
-		current.Terminator = &JumpTerminator{Target: activeLoop.Header}
-		return nil
-	case *hir.MapInsertStmt:
-		return b.buildMapInsertStmt(s, current)
-	case *hir.VecWriteStmt:
-		return b.buildVecWriteStmt(s, current)
-	case *hir.VecPushStmt:
-		return b.buildVecPushStmt(s, current)
-	}
-	return current
+func (b *Builder) MapFnDecl(n *hir.FnDecl) Value {
+	return unitValue
 }
 
-func (b *Builder) buildReturnStmt(stmt *hir.ReturnStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) MapTypeDecl(n *hir.TypeDecl) Value {
+	return unitValue
+}
+
+// =============================================================================
+// Statement Mappers
+// =============================================================================
+
+func (b *Builder) MapBlockStmt(n *hir.BlockStmt) Value {
+	if n == nil || len(n.Statements) == 0 {
+		return unitValue
+	}
+
+	stmts := n.Statements
+	for i, stmt := range stmts {
+		if b.current == nil {
+			break
+		}
+		if i == len(stmts)-1 {
+			switch s := stmt.(type) {
+			case *hir.YieldStmt:
+				return hir.MapNode(s.Value, b)
+			case *hir.ExprStmt:
+				return hir.MapNode(s.Value, b)
+			}
+		}
+		hir.MapNode(stmt, b)
+	}
+
+	return unitValue
+}
+
+func (b *Builder) MapExprStmt(n *hir.ExprStmt) Value {
+	hir.MapNode(n.Value, b)
+	return unitValue
+}
+
+func (b *Builder) MapYieldStmt(n *hir.YieldStmt) Value {
+	hir.MapNode(n.Value, b)
+	return unitValue
+}
+
+func (b *Builder) MapBreakStmt(n *hir.BreakStmt) Value {
+	if len(b.loops) == 0 {
+		return unitValue
+	}
+	activeLoop := b.loops[len(b.loops)-1]
+	b.current.Terminator = &JumpTerminator{Target: activeLoop.Exit}
+	b.current = nil
+	return unitValue
+}
+
+func (b *Builder) MapContinueStmt(n *hir.ContinueStmt) Value {
+	if len(b.loops) == 0 {
+		return unitValue
+	}
+	activeLoop := b.loops[len(b.loops)-1]
+	b.current.Terminator = &JumpTerminator{Target: activeLoop.Header}
+	b.current = nil
+	return unitValue
+}
+
+func (b *Builder) MapReturnStmt(n *hir.ReturnStmt) Value {
 	var flatRet Value = nil
-	if stmt.Value != nil {
-		flatRet, current = b.flattenExpr(stmt.Value, current)
+	if n.Value != nil {
+		flatRet = hir.MapNode(n.Value, b)
 		if reg, ok := flatRet.(*Register); ok {
 			if _, isU := reg.Type.(types.UnitType); isU {
 				flatRet = nil
 			}
 		}
 	}
-	current.Terminator = &ReturnTerminator{Value: flatRet}
-	return nil
+	b.current.Terminator = &ReturnTerminator{Value: flatRet}
+	b.current = nil
+	return unitValue
 }
 
-func (b *Builder) buildLoopStmt(stmt *hir.LoopStmt, current *BasicBlock) *BasicBlock {
+func (b *Builder) MapLoopStmt(n *hir.LoopStmt) Value {
 	condBlock := b.newBlock()
 	bodyBlock := b.newBlock()
-	postBlock := b.newBlock() // Dedicated block for the increment step
+	postBlock := b.newBlock()
 	exitBlock := b.newBlock()
 
-	// 1. Enter loop by jumping to condition
-	current.Terminator = &JumpTerminator{Target: condBlock.ID}
+	b.current.Terminator = &JumpTerminator{Target: condBlock.ID}
 
-	// 2. Evaluate Condition
 	var flatCond Value
-	condEvalBlock := condBlock
-	if stmt.Condition != nil {
-		flatCond, condEvalBlock = b.flattenExpr(stmt.Condition, condBlock)
+	b.current = condBlock
+	if n.Condition != nil {
+		flatCond = hir.MapNode(n.Condition, b)
 	} else {
 		flatCond = &BoolConstant{Value: true, Type: types.BoolType{}}
 	}
+	condEvalBlock := b.current
 
 	condEvalBlock.Terminator = &BranchTerminator{
 		Condition:   flatCond,
@@ -235,347 +288,210 @@ func (b *Builder) buildLoopStmt(stmt *hir.LoopStmt, current *BasicBlock) *BasicB
 		FalseTarget: exitBlock.ID,
 	}
 
-	// 3. Track loop. Header is the 'continue' target (now postBlock!). Exit is the 'break' target.
 	b.loops = append(b.loops, LoopTracker{Header: postBlock.ID, Exit: exitBlock.ID})
 
-	// 4. Build Body
-	bodyEndBlock := b.buildBlockStmt(stmt.Body, bodyBlock)
-	if bodyEndBlock != nil && bodyEndBlock.Terminator == nil {
-		bodyEndBlock.Terminator = &JumpTerminator{Target: postBlock.ID}
+	b.current = bodyBlock
+	b.MapBlockStmt(n.Body)
+	if b.current != nil && b.current.Terminator == nil {
+		b.current.Terminator = &JumpTerminator{Target: postBlock.ID}
 	}
 
-	// 5. Build Post step (the i++)
-	postEndBlock := postBlock
-	if stmt.Post != nil {
-		postEndBlock = b.buildStmt(stmt.Post, postBlock)
+	b.current = postBlock
+	if n.Post != nil {
+		hir.MapNode(n.Post, b)
 	}
-	if postEndBlock != nil && postEndBlock.Terminator == nil {
-		postEndBlock.Terminator = &JumpTerminator{Target: condBlock.ID}
+	if b.current != nil && b.current.Terminator == nil {
+		b.current.Terminator = &JumpTerminator{Target: condBlock.ID}
 	}
 
-	// 6. Pop loop tracker
 	b.loops = b.loops[:len(b.loops)-1]
 
-	return exitBlock
+	b.current = exitBlock
+	return unitValue
 }
 
-func (b *Builder) buildDeclareStmt(stmt *hir.DeclareStmt, current *BasicBlock) *BasicBlock {
-	flatRHS, current := b.flattenExpr(stmt.Value, current)
-	uniqueName := b.getSymbolName(stmt.Symbol)
-	b.emitMemoryTransfer(uniqueName, flatRHS, stmt.Symbol, current)
-	return current
+func (b *Builder) MapDeclareStmt(n *hir.DeclareStmt) Value {
+	flatRHS := hir.MapNode(n.Value, b)
+	uniqueName := b.getSymbolName(n.Symbol)
+	var t types.Type = types.UnknownType{}
+	if n.Symbol != nil {
+		t = n.Symbol.Type
+	}
+	b.locals[uniqueName] = t
+	b.emitTransfer(uniqueName, flatRHS)
+	return unitValue
 }
 
-func (b *Builder) buildAliasDecl(stmt *hir.AliasDecl, current *BasicBlock) *BasicBlock {
-	flatSrc, current := b.flattenExpr(stmt.Value, current)
-	aliasName := b.getSymbolName(stmt.Symbol)
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: aliasName,
-		Type: stmt.Symbol.Type,
-	})
+func (b *Builder) MapAliasDecl(n *hir.AliasDecl) Value {
+	flatSrc := hir.MapNode(n.Value, b)
+	aliasName := b.getSymbolName(n.Symbol)
+	b.locals[aliasName] = n.Symbol.Type
 	srcReg, ok := flatSrc.(*Register)
 	if !ok {
 		panic("compiler error: cannot take alias of non-register value")
 	}
-	switch stmt.Symbol.Cap {
-	case types.CapMut:
-		current.Statements = append(current.Statements, &BorrowInst{
-			Dst:   aliasName,
-			Src:   srcReg.Name,
-			IsMut: true,
-		})
-	case types.CapRo:
-		current.Statements = append(current.Statements, &BorrowInst{
-			Dst:   aliasName,
-			Src:   srcReg.Name,
-			IsMut: false,
-		})
-	case types.CapOwn:
-		current.Statements = append(current.Statements, &MoveInst{
-			Dst: aliasName,
-			Src: srcReg.Name,
-		})
-	case types.CapCopy:
-		current.Statements = append(current.Statements, &CopyInst{
-			Dst: aliasName,
-			Src: srcReg.Name,
-		})
-	}
-	return current
+	b.emitCapTransfer(aliasName, srcReg.Name, n.Symbol.Cap, n.Symbol.Type)
+	return unitValue
 }
 
-// buildAssignStmt translates a reassignment into explicit memory ops without re-allocating.
-func (b *Builder) buildAssignStmt(stmt *hir.AssignStmt, current *BasicBlock) *BasicBlock {
-	if stmt == nil || stmt.LValue == nil || stmt.RValue == nil {
-		return current
+func (b *Builder) MapAssignStmt(n *hir.AssignStmt) Value {
+	if n == nil || n.LValue == nil || n.RValue == nil {
+		return unitValue
 	}
 
-	// 1. FIELD ASSIGNMENT (e.g., player.health = 80 OR player.health -= 20)
-	if fa, ok := stmt.LValue.(*hir.FieldAccess); ok {
-		// Evaluate the exact memory address of the field exactly ONCE
-		ptrVal, current := b.flattenPlace(fa, current)
+	if fa, ok := n.LValue.(*hir.FieldAccess); ok {
+		ptrVal := b.flattenPlace(fa)
 
 		var writeVal Value
-		if stmt.Operator != "" {
-			// Compound assignment: Read from the pointer, do math
-			readTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: fa.Type})
-			current.Statements = append(current.Statements, &LoadPtrInst{
-				Dst:  readTmp,
-				Ptr:  ptrVal,
-				Type: fa.Type,
-			})
-
-			flatRHS, current := b.flattenExpr(stmt.RValue, current)
-
-			opTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: fa.Type})
-			current.Statements = append(current.Statements, &BinaryOpInst{
-				Dst:      opTmp,
-				Operator: stmt.Operator,
-				Left:     &Register{Name: readTmp, Type: fa.Type},
-				Right:    flatRHS,
-				Type:     fa.Type,
-			})
-			writeVal = &Register{Name: opTmp, Type: fa.Type}
+		if n.Operator != "" {
+			writeVal = b.emitCompoundMath(ptrVal, n.Operator, n.RValue, fa.Type)
 		} else {
-			// Simple assignment
-			writeVal, current = b.flattenExpr(stmt.RValue, current)
+			writeVal = hir.MapNode(n.RValue, b)
 		}
 
-		// Write the final value directly to the memory address!
 		ptrReg := ptrVal.(*Register)
-		current.Statements = append(current.Statements, &StoreInst{
+		b.current.Statements = append(b.current.Statements, &StoreInst{
 			DstPtr: ptrReg.Name,
 			Value:  writeVal,
 			Type:   fa.Type,
 		})
-		return current
+		return unitValue
 	}
 
-	// 2. ARRAY / VIEW INDEX ASSIGNMENT (e.g., arr[0] = 5 OR arr[0] += 5)
-	if idx, ok := stmt.LValue.(*hir.IndexExpr); ok {
-		// Evaluate the exact memory address of the array/slice index exactly ONCE!
-		ptrVal, nextBlock := b.flattenPlace(idx, current)
-		current = nextBlock
+	if idx, ok := n.LValue.(*hir.IndexExpr); ok {
+		ptrVal := b.flattenPlace(idx)
 
-		elemType := hir.TypeOf(stmt.LValue)
+		elemType := hir.TypeOf(n.LValue)
 		var writeVal Value
 
-		if stmt.Operator != "" {
-			// Compound assignment: Read from the pointer, do math
-			readTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
-			current.Statements = append(current.Statements, &LoadPtrInst{
-				Dst:  readTmp,
-				Ptr:  ptrVal,
-				Type: elemType,
-			})
-
-			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
-			current = nextBlock
-
-			opTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
-			current.Statements = append(current.Statements, &BinaryOpInst{
-				Dst:      opTmp,
-				Operator: stmt.Operator,
-				Left:     &Register{Name: readTmp, Type: elemType},
-				Right:    flatRHS,
-				Type:     elemType,
-			})
-			writeVal = &Register{Name: opTmp, Type: elemType}
+		if n.Operator != "" {
+			writeVal = b.emitCompoundMath(ptrVal, n.Operator, n.RValue, elemType)
 		} else {
-			writeVal, current = b.flattenExpr(stmt.RValue, current)
+			writeVal = hir.MapNode(n.RValue, b)
 		}
 
-		// Write the final value directly to the memory address using standard StoreInst
 		ptrReg := ptrVal.(*Register)
-		current.Statements = append(current.Statements, &StoreInst{
+		b.current.Statements = append(b.current.Statements, &StoreInst{
 			DstPtr: ptrReg.Name,
 			Value:  writeVal,
 			Type:   elemType,
 		})
-		return current
+		return unitValue
 	}
 
-	// 3. LOCAL VARIABLE ASSIGNMENT (e.g., score = 100 OR score += 5)
-	if ident, ok := stmt.LValue.(*hir.Identifier); ok {
+	if ident, ok := n.LValue.(*hir.Identifier); ok {
+		dstName := b.getSymbolName(ident.Symbol)
+		b.locals[dstName] = ident.Type
 		var writeVal Value
-		if stmt.Operator != "" {
-			flatLHS, nextBlock := b.flattenExpr(stmt.LValue, current)
-			current = nextBlock
-
-			flatRHS, nextBlock := b.flattenExpr(stmt.RValue, current)
-			current = nextBlock
+		if n.Operator != "" {
+			flatLHS := hir.MapNode(n.LValue, b)
+			flatRHS := hir.MapNode(n.RValue, b)
 
 			opTmp := b.newTemp()
-			current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: ident.Type})
-			current.Statements = append(current.Statements, &BinaryOpInst{
+			writeVal = b.emit(&BinaryOpInst{
 				Dst:      opTmp,
-				Operator: stmt.Operator,
+				Operator: n.Operator,
 				Left:     flatLHS,
 				Right:    flatRHS,
 				Type:     ident.Type,
-			})
-			writeVal = &Register{Name: opTmp, Type: ident.Type}
+			}, opTmp, ident.Type)
 		} else {
-			writeVal, current = b.flattenExpr(stmt.RValue, current)
+			writeVal = hir.MapNode(n.RValue, b)
 		}
 
-		dstName := b.getSymbolName(ident.Symbol)
-		if reg, isReg := writeVal.(*Register); isReg && reg != nil {
-			if reg.Type != nil && reg.Type.IsReferenceType() {
-				current.Statements = append(current.Statements, &MoveInst{Dst: dstName, Src: reg.Name})
-			} else {
-				current.Statements = append(current.Statements, &CopyInst{Dst: dstName, Src: reg.Name})
-			}
-		} else {
-			current.Statements = append(current.Statements, &AssignInst{Dst: dstName, RValue: writeVal})
-		}
-		return current
+		b.emitTransfer(dstName, writeVal)
+		return unitValue
 	}
 
-	// Failsafe catch-all
-	flatLHS, current := b.flattenExpr(stmt.LValue, current)
-	flatRHS, current := b.flattenExpr(stmt.RValue, current)
+	flatLHS := hir.MapNode(n.LValue, b)
+	flatRHS := hir.MapNode(n.RValue, b)
 	if reg, ok := flatLHS.(*Register); ok {
-		current.Statements = append(current.Statements, &AssignInst{Dst: reg.Name, RValue: flatRHS})
+		b.current.Statements = append(b.current.Statements, &AssignInst{Dst: reg.Name, RValue: flatRHS})
 	}
-	return current
+	return unitValue
 }
 
-func (b *Builder) buildMapInsertStmt(stmt *hir.MapInsertStmt, current *BasicBlock) *BasicBlock {
-	if stmt == nil {
-		return current
+func (b *Builder) MapMapInsertStmt(n *hir.MapInsertStmt) Value {
+	if n == nil {
+		return unitValue
 	}
 
-	flatMap, current := b.flattenExpr(stmt.Map, current)
-	hashVal, ptrVal, lenVal, intKey, current := b.lowerMapKey(stmt.Key, current)
+	flatMapPtr := hir.MapNode(n.Map, b)
+	hashVal, ptrVal, lenVal := b.lowerMapKey(n.Key)
 
 	var writeVal Value
-	if stmt.Operator != "" {
-		// Read the opaque pointer exactly once
-		opaquePtr, nextBlock := b.EmitMamlMapGet(current, flatMap, hashVal, ptrVal, lenVal)
-		current = nextBlock
-
-		elemType := hir.TypeOf(stmt.Value)
-		readTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
-		current.Statements = append(current.Statements, &LoadPtrInst{Dst: readTmp, Ptr: opaquePtr, Type: elemType})
-
-		flatRHS, nextBlock := b.flattenExpr(stmt.Value, current)
-		current = nextBlock
-
-		opTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
-		current.Statements = append(current.Statements, &BinaryOpInst{
-			Dst:      opTmp,
-			Operator: stmt.Operator,
-			Left:     &Register{Name: readTmp, Type: elemType},
-			Right:    flatRHS,
-			Type:     elemType,
-		})
-		writeVal = &Register{Name: opTmp, Type: elemType}
+	var elemType types.Type
+	if n.Operator != "" {
+		opaquePtr := b.EmitMamlMapGet(flatMapPtr, hashVal, ptrVal, lenVal)
+		elemType = hir.TypeOf(n.Value)
+		writeVal = b.emitCompoundMath(opaquePtr, n.Operator, n.Value, elemType)
 	} else {
-		writeVal, current = b.flattenExpr(stmt.Value, current)
+		writeVal = hir.MapNode(n.Value, b)
+		elemType = getValueType(writeVal)
 	}
 
-	_, current = b.EmitMamlMapPut(current, flatMap, hashVal, ptrVal, lenVal, intKey, writeVal)
-	return current
+	boxedVal := b.boxScalar(writeVal, elemType)
+	b.EmitMamlMapPut(flatMapPtr, hashVal, ptrVal, lenVal, boxedVal)
+	return unitValue
 }
 
-func (b *Builder) buildVecWriteStmt(stmt *hir.VecWriteStmt, current *BasicBlock) *BasicBlock {
-	if stmt == nil {
-		return current
+func (b *Builder) MapVecWriteStmt(n *hir.VecWriteStmt) Value {
+	if n == nil {
+		return unitValue
 	}
-
-	// Evaluate Receiver and Index exactly ONCE
-	flatVec, current := b.flattenExpr(stmt.Vec, current)
-	flatIdx, current := b.flattenExpr(stmt.Index, current)
+	flatVecPtr := hir.MapNode(n.Vec, b)
+	flatIdx := hir.MapNode(n.Index, b)
 
 	var writeVal Value
-	if stmt.Operator != "" {
-		opaquePtr, nextBlock := b.EmitMamlVecGet(current, flatVec, flatIdx)
-		current = nextBlock
-
-		elemType := hir.TypeOf(stmt.Value)
-		readTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: readTmp, Type: elemType})
-		current.Statements = append(current.Statements, &LoadPtrInst{Dst: readTmp, Ptr: opaquePtr, Type: elemType})
-
-		flatRHS, nextBlock := b.flattenExpr(stmt.Value, current)
-		current = nextBlock
-
-		opTmp := b.newTemp()
-		current.Statements = append(current.Statements, &TempDeclInst{Name: opTmp, Type: elemType})
-		current.Statements = append(current.Statements, &BinaryOpInst{
-			Dst:      opTmp,
-			Operator: stmt.Operator,
-			Left:     &Register{Name: readTmp, Type: elemType},
-			Right:    flatRHS,
-			Type:     elemType,
-		})
-		writeVal = &Register{Name: opTmp, Type: elemType}
+	var elemType types.Type
+	if n.Operator != "" {
+		opaquePtr := b.EmitMamlVecGet(flatVecPtr, flatIdx)
+		elemType = hir.TypeOf(n.Value)
+		writeVal = b.emitCompoundMath(opaquePtr, n.Operator, n.Value, elemType)
 	} else {
-		writeVal, current = b.flattenExpr(stmt.Value, current)
+		writeVal = hir.MapNode(n.Value, b)
+		elemType = getValueType(writeVal)
 	}
 
-	_, current = b.EmitMamlVecSet(current, flatVec, flatIdx, writeVal)
-	return current
+	boxedVal := b.boxScalar(writeVal, elemType)
+	b.EmitMamlVecSet(flatVecPtr, flatIdx, boxedVal)
+	return unitValue
 }
 
-func (b *Builder) buildVecPushStmt(stmt *hir.VecPushStmt, current *BasicBlock) *BasicBlock {
-	if stmt == nil {
-		return current
+func (b *Builder) MapVecPushStmt(n *hir.VecPushStmt) Value {
+	if n == nil {
+		return unitValue
 	}
+	flatVecPtr := hir.MapNode(n.Vec, b)
+	flatVal := hir.MapNode(n.Value, b)
+	elemType := getValueType(flatVal)
 
-	var flatVec, flatVal Value
-
-	// 1. Flatten the receiver, index, and value into atomic operands
-	flatVec, current = b.flattenExpr(stmt.Vec, current)
-	flatVal, current = b.flattenExpr(stmt.Value, current)
-
-	// 2. Emit the runtime call to mutate the vector in-place
-	_, current = b.EmitMamlVecPush(current, flatVec, flatVal)
-
-	return current
-}
-
-func (b *Builder) emitMemoryTransfer(dst string, flatRHS Value, dstSym *types.Symbol, current *BasicBlock) {
-	// Emit an allocation-agnostic temporary declaration
-	var t types.Type = types.UnknownType{}
-	if dstSym != nil {
-		t = dstSym.Type
-	}
-
-	current.Statements = append(current.Statements, &TempDeclInst{
-		Name: dst,
-		Type: t,
+	slotTmp := b.newTemp()
+	b.locals[slotTmp] = elemType
+	b.current.Statements = append(b.current.Statements, &StoreInst{
+		DstPtr: slotTmp,
+		Value:  flatVal,
+		Type:   elemType,
 	})
 
-	if reg, isReg := flatRHS.(*Register); isReg {
-		if reg.Type != nil && reg.Type.IsReferenceType() {
-			current.Statements = append(current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
-		} else {
-			current.Statements = append(current.Statements, &CopyInst{Dst: dst, Src: reg.Name})
-		}
-	} else {
-		current.Statements = append(current.Statements, &AssignInst{Dst: dst, RValue: flatRHS})
-	}
+	slotPtr := b.newTemp()
+	b.locals[slotPtr] = types.PtrType{}
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst: slotPtr, Src: slotTmp, IsMut: true,
+	})
+
+	b.EmitMamlVecPush(flatVecPtr, &Register{Name: slotPtr, Type: types.PtrType{}})
+	return unitValue
 }
 
-// getSymbolName guarantees a collision-free variable name for the MIR environment.
 func (b *Builder) getSymbolName(sym *types.Symbol) string {
 	if sym == nil {
 		return ""
 	}
-	// If we have already mapped this specific symbol, return its unique name
 	if name, exists := b.symNames[sym]; exists {
 		return name
 	}
 
-	// Otherwise, it's a new declaration. Generate a unique name if shadowed.
 	count := b.nameFreq[sym.Name]
 	b.nameFreq[sym.Name] = count + 1
 
@@ -594,9 +510,178 @@ func (b *Builder) getSymbolName(sym *types.Symbol) string {
 // Utilities
 // =============================================================================
 
-// emitTemp generates a new temporary variable and appends its declaration to the basic block.
-func (b *Builder) emitTemp(current *BasicBlock, t types.Type) string {
+func (b *Builder) emitTemp(t types.Type) string {
 	tmp := b.newTemp()
-	current.Statements = append(current.Statements, &TempDeclInst{Name: tmp, Type: t})
+	b.locals[tmp] = t
 	return tmp
+}
+
+func (b *Builder) emit(inst Instruction, dst string, t types.Type) Value {
+	b.locals[dst] = t
+	b.current.Statements = append(b.current.Statements, inst)
+	return &Register{Name: dst, Type: t}
+}
+
+func ownsHeapMemory(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch v := t.(type) {
+	case *types.VectorType, *types.MapType:
+		return true
+	case *types.StructType:
+		for _, field := range v.Fields {
+			if ownsHeapMemory(field.Type) {
+				return true
+			}
+		}
+		return false
+	case *types.ArrayType:
+		return ownsHeapMemory(v.Base)
+	case *types.SumType:
+		for _, variant := range v.Variants {
+			for _, field := range variant.Fields {
+				if ownsHeapMemory(field.Type) {
+					return true
+				}
+			}
+			if slices.ContainsFunc(variant.TupleTypes, ownsHeapMemory) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func (b *Builder) emitTransfer(dst string, val Value) {
+	if reg, isReg := val.(*Register); isReg && reg != nil {
+		if reg.Type != nil && (reg.Type.IsReferenceType() || ownsHeapMemory(reg.Type)) {
+			b.current.Statements = append(b.current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
+		} else {
+			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: reg.Name})
+		}
+		return
+	}
+	b.current.Statements = append(b.current.Statements, &AssignInst{Dst: dst, RValue: val})
+}
+
+func (b *Builder) emitCapTransfer(dst, src string, cap any, t types.Type) {
+	switch cap {
+	case types.CapMut:
+		if isByRefType(t) {
+			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
+		} else {
+			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: dst, Src: src, IsMut: true})
+		}
+	case types.CapRo:
+		if isByRefType(t) {
+			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
+		} else {
+			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: dst, Src: src, IsMut: false})
+		}
+	case types.CapOwn:
+		b.current.Statements = append(b.current.Statements, &MoveInst{Dst: dst, Src: src})
+	case types.CapCopy:
+		b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
+	}
+}
+
+func (b *Builder) emitCoroSuspend() *BasicBlock {
+	resumeBlock := b.newBlock()
+	cleanupBlock := b.newBlock()
+	suspendBlock := b.newBlock()
+
+	b.current.Terminator = &CoroSuspendTerminator{
+		ResumeBlock:  resumeBlock.ID,
+		CleanupBlock: cleanupBlock.ID,
+		SuspendBlock: suspendBlock.ID,
+	}
+	cleanupBlock.Terminator = &JumpTerminator{Target: suspendBlock.ID}
+	suspendBlock.Terminator = &CoroYieldTerminator{}
+
+	return resumeBlock
+}
+
+func getValueType(val Value) types.Type {
+	switch v := val.(type) {
+	case *Register:
+		return v.Type
+	case *BoolConstant:
+		return v.Type
+	case *IntConstant:
+		return v.Type
+	case *StringConstant:
+		return v.Type
+	default:
+		panic(fmt.Sprintf("Type %T does not implement mir.Value interface", val))
+	}
+}
+
+func (b *Builder) emitCompoundMath(ptrVal Value, operator string, rhsExpr hir.Expr, elemType types.Type) Value {
+	readTmp := b.newTemp()
+	readVal := b.emit(&LoadPtrInst{
+		Dst:  readTmp,
+		Ptr:  ptrVal,
+		Type: elemType,
+	}, readTmp, elemType)
+
+	flatRHS := hir.MapNode(rhsExpr, b)
+
+	opTmp := b.newTemp()
+	return b.emit(&BinaryOpInst{
+		Dst:      opTmp,
+		Operator: operator,
+		Left:     readVal,
+		Right:    flatRHS,
+		Type:     elemType,
+	}, opTmp, elemType)
+}
+
+// func lowerParamType(t types.Type, cap types.Cap) types.Type {
+// 	switch cap {
+// 	case types.CapMut, types.CapRo:
+// 		if isByRefType(t) {
+// 			return t
+// 		}
+// 		return types.PtrType{}
+// 	default:
+// 		return t
+// 	}
+// }
+
+func lowerParamType(t types.Type, cap types.Cap) types.Type {
+	switch cap {
+	case types.CapMut, types.CapRo:
+		return types.PtrType{}
+	default:
+		return t
+	}
+}
+
+
+// boxScalar allocates a stack temp of type t, stores val into it, and returns
+// a pointer to that temp. Runtime ABI calls (maml_vec_push, maml_vec_set,
+// maml_map_put, ...) take element data by address, not by value — this is
+// the one place that boxing should happen so we don't reimplement it at
+// every call site.
+func (b *Builder) boxScalar(val Value, t types.Type) Value {
+	slot := b.newTemp()
+	b.locals[slot] = t
+	b.current.Statements = append(b.current.Statements, &StoreInst{
+		DstPtr: slot,
+		Value:  val,
+		Type:   t,
+	})
+
+	ptr := b.newTemp()
+	b.locals[ptr] = types.PtrType{}
+	b.current.Statements = append(b.current.Statements, &BorrowInst{
+		Dst:   ptr,
+		Src:   slot,
+		IsMut: false,
+	})
+
+	return &Register{Name: ptr, Type: types.PtrType{}}
 }

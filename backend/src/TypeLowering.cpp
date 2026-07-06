@@ -8,16 +8,12 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Module.h>
 
+#include "abi_generated.hpp"
 #include "types_generated.hpp"
 
 namespace maml {
 
-// Forward declaration to allow recursive type resolution inside the visitor
 llvm::Type* llvmTypeForVariant(CodegenContext& ctx, const maml::Type& generatedType);
-
-// -----------------------------------------------------------------------------
-// std::visit Router Engine
-// -----------------------------------------------------------------------------
 
 struct TypeVisitor {
   CodegenContext& ctx;
@@ -35,7 +31,7 @@ struct TypeVisitor {
   llvm::Type* operator()(const U128Type&) { return llvm::Type::getInt128Ty(ctx.Context); }
 
   llvm::Type* operator()(const F32Type&) { return llvm::Type::getFloatTy(ctx.Context); }
-  llvm::Type* operator()(const F64Type&) { return llvm::Type::getFloatTy(ctx.Context); }
+  llvm::Type* operator()(const F64Type&) { return llvm::Type::getDoubleTy(ctx.Context); }
 
   llvm::Type* operator()(const BoolType&) { return llvm::Type::getInt1Ty(ctx.Context); }
   llvm::Type* operator()(const UnitType&) { return llvm::Type::getVoidTy(ctx.Context); }
@@ -47,14 +43,37 @@ struct TypeVisitor {
     return nullptr;
   }
 
-  llvm::Type* operator()(const StringType&) {
-    // String is a fat pointer: { ptr, i32 len }
-    return llvm::StructType::get(ctx.Context,
-                                 {
-                                     llvm::PointerType::getUnqual(ctx.Context),  // ptr
-                                     llvm::Type::getInt32Ty(ctx.Context),        // len
-                                     llvm::Type::getInt1Ty(ctx.Context)          // is_heap
-                                 });
+  // --- Runtime compound types now use the generated, schema‑driven builders ---
+  llvm::Type* operator()(const StringType&) { return rt::getStringType(ctx.Context); }
+
+  llvm::Type* operator()(const ViewType&) { return rt::getViewType(ctx.Context); }
+
+  llvm::Type* operator()(const VectorType&) {
+    // Full Vector struct: { buffer, cap, len, elem_size }
+    // return rt::getVectorType(ctx.Context);
+
+    // The runtime allocates the Vector header on the heap and returns a pointer.
+    // Therefore, the local variable should just be a pointer to that header.
+    return llvm::PointerType::getUnqual(ctx.Context);
+  }
+
+  llvm::Type* operator()(const MapType&) {
+    // // Full Map struct: { entries, count, tombstone_count, cap, val_size, is_string_key }
+    // return rt::getMapType(ctx.Context);
+
+    // The runtime allocates the Vector header on the heap and returns a pointer.
+    // Therefore, the local variable should just be a pointer to that header.
+    return llvm::PointerType::getUnqual(ctx.Context);
+  }
+
+  llvm::Type* operator()(const FutureType&) {
+    // Future struct: { state, ready }
+    return rt::getFutureType(ctx.Context);
+  }
+
+  llvm::Type* operator()(const RefType&) {
+    // Ref struct: { ptr, refcount }
+    return rt::getRefType(ctx.Context);
   }
 
   // --- Composites ---
@@ -71,8 +90,6 @@ struct TypeVisitor {
     }
 
     llvm::StructType* st = existingST ? existingST : llvm::StructType::create(ctx.Context, t.name);
-    // Note: isPacked=false tells LLVM to apply standard alignment padding.
-    // If MAML dictates a custom packed layout, the Go exporter must pass the fields in the exact sorted order.
     st->setBody(fieldTypes, /*isPacked=*/false);
     return st;
   }
@@ -83,18 +100,14 @@ struct TypeVisitor {
       return existingST;
     }
 
-    // We must dynamically compute the maximum payload size across all variants
-    // using LLVM's target-aware DataLayout, since the frontend no longer hardcodes it.
     uint64_t maxPayloadSize = 0;
     const llvm::DataLayout& DL = ctx.Module->getDataLayout();
 
     for (const auto& variant : t.variants) {
       std::vector<llvm::Type*> payloadFields;
-      // Variants can hold named fields...
       for (const auto& f : variant.fields) {
         payloadFields.push_back(llvmTypeForVariant(ctx, *f.type));
       }
-      // ...or unnamed tuple types
       for (const auto& tupleTy : variant.tuple_types) {
         payloadFields.push_back(llvmTypeForVariant(ctx, *tupleTy));
       }
@@ -108,7 +121,6 @@ struct TypeVisitor {
       }
     }
 
-    // Calculate how many i64 blocks we need to hold the largest payload
     uint64_t numBlocks = (maxPayloadSize + 7) / 8;
     llvm::Type* discrimTy = llvm::Type::getInt32Ty(ctx.Context);
     llvm::Type* payloadTy = llvm::ArrayType::get(llvm::Type::getInt64Ty(ctx.Context), numBlocks);
@@ -121,48 +133,50 @@ struct TypeVisitor {
   // --- Containers ---
   llvm::Type* operator()(const ArrayType& t) { return llvm::ArrayType::get(llvmTypeForVariant(ctx, *t.base), t.size); }
 
-  llvm::Type* operator()(const ViewType&) {
-    // View is a slice fat pointer: { raw_ptr, data_ptr, len, cap }
-    return llvm::StructType::get(ctx.Context, {
-                                                  llvm::PointerType::getUnqual(ctx.Context),
-                                                  llvm::PointerType::getUnqual(ctx.Context),
-                                                  llvm::Type::getInt32Ty(ctx.Context),
-                                                  llvm::Type::getInt32Ty(ctx.Context),
-                                              });
-  }
-
-  // Heap-allocated dynamic containers decay to simple pointers in the LLVM IR
-  llvm::Type* operator()(const VectorType&) { return llvm::PointerType::getUnqual(ctx.Context); }
-  llvm::Type* operator()(const MapType&) { return llvm::PointerType::getUnqual(ctx.Context); }
-  llvm::Type* operator()(const FutureType&) { return llvm::PointerType::getUnqual(ctx.Context); }
-
-  // --- Ref Types ---
-  // TODO: Implement these
-  llvm::Type* operator()(const RefType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+  // Removed hand‑crafted View, Vector, Map, Future, Ref entries — they are now above.
+  // WeakRef, Sender, Receiver remain simple pointers (not part of the runtime schema yet)
   llvm::Type* operator()(const WeakRefType&) { return llvm::PointerType::getUnqual(ctx.Context); }
-
-  // --- Coroutine Channel Types ---
   llvm::Type* operator()(const SenderType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const ReceiverType&) { return llvm::PointerType::getUnqual(ctx.Context); }
 };
 
-// Helper function to initiate the std::visit loop
 llvm::Type* llvmTypeForVariant(CodegenContext& ctx, const maml::Type& generatedType) {
   return std::visit(TypeVisitor{ctx}, generatedType.inner);
 }
-
-// -----------------------------------------------------------------------------
-// Public AST/MIR Type Router Entry Point
-// -----------------------------------------------------------------------------
 
 llvm::Type* llvmTypeFor(CodegenContext& ctx, const std::shared_ptr<maml::Type>& type) {
   if (!type) {
     return llvm::Type::getVoidTy(ctx.Context);
   }
-
-  // LLVM natively caches and deduplicates types under the hood.
-  // We can just visit the tree directly without maintaining a custom pointer cache.
   return llvmTypeForVariant(ctx, *type);
+}
+
+// 1. Add this function alongside your existing llvmTypeFor
+llvm::Type* llvmLayoutTypeFor(CodegenContext& ctx, const std::shared_ptr<maml::Type>& type) {
+  if (!type) {
+    ctx.Error.fatal("llvmLayoutTypeFor: null type");
+    return nullptr;
+  }
+
+  // Bypass the standard local-variable pointer resolution to fetch the raw StructType
+  if (std::holds_alternative<maml::VectorType>(type->inner)) {
+    return rt::getVectorType(ctx.Context);
+  }
+  if (std::holds_alternative<maml::MapType>(type->inner)) {
+    return rt::getMapType(ctx.Context);
+  }
+  if (std::holds_alternative<maml::ViewType>(type->inner)) {
+    return rt::getViewType(ctx.Context);
+  }
+  if (std::holds_alternative<maml::FutureType>(type->inner)) {
+    return rt::getFutureType(ctx.Context);
+  }
+  if (std::holds_alternative<maml::RefType>(type->inner)) {
+    return rt::getRefType(ctx.Context);
+  }
+
+  // Fallback to standard type resolution for Arrays, Structs, etc.
+  return llvmTypeFor(ctx, type);
 }
 
 }  // namespace maml

@@ -21,6 +21,14 @@ void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst) {
       left = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(right->getType()));
   }
 
+  if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) {
+    if (left->getType() != right->getType()) {
+      // Coerce the right operand to match the left operand's integer width.
+      // (This will cleanly truncate your i64 `0` down to an i32 to match the discriminant)
+      right = ctx.Builder->CreateSExtOrTrunc(right, left->getType(), "binop_cast");
+    }
+  }
+
   if (inst.operator_ == "/" || inst.operator_ == "%") {
     llvm::Value *isZero = ctx.Builder->CreateICmpEQ(right, llvm::ConstantInt::get(right->getType(), 0));
     llvm::Function *F = ctx.Builder->GetInsertBlock()->getParent();
@@ -75,7 +83,7 @@ void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
   if (inst.operator_ == "!") {
     result = ctx.Builder->CreateXor(operand, llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 1), "nottmp");
   } else if (inst.operator_ == "-") {
-    result = ctx.Builder->CreateSub(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 0), operand, "negtmp");
+    result = ctx.Builder->CreateSub(llvm::ConstantInt::get(operand->getType(), 0), operand, "negtmp");
   }
   ctx.SymbolEnv.back()[inst.dst] = result;
 }
@@ -119,13 +127,9 @@ static std::vector<llvm::Value *> prepareCallArguments(CodegenContext &ctx, cons
       llvm::Type *actualTy = argVal->getType();
 
       if (expectedTy != actualTy) {
-        if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
-          llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
-          llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
-          llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_struct_spill");
-          ctx.Builder->CreateStore(argVal, spill);
-          argVal = spill;
-        } else if (expectedTy->isIntegerTy() && actualTy->isIntegerTy()) {
+        // We only retain simple LLVM-level type coercions (like integer resizing or bitcasts).
+        // Structural memory logic has been entirely offloaded to the MIR.
+        if (expectedTy->isIntegerTy() && actualTy->isIntegerTy()) {
           argVal = ctx.Builder->CreateIntCast(argVal, expectedTy, false, "arg_cast");
         } else if (expectedTy->isPointerTy() && actualTy->isPointerTy()) {
           argVal = ctx.Builder->CreatePointerCast(argVal, expectedTy, "ptr_cast");
@@ -134,15 +138,14 @@ static std::vector<llvm::Value *> prepareCallArguments(CodegenContext &ctx, cons
           if (cInt && cInt->isZero() && actualTy->isIntegerTy(64)) {
             argVal = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(expectedTy));
           } else {
-            llvm::Function *parentFn = ctx.Builder->GetInsertBlock()->getParent();
-            llvm::IRBuilder<> TmpBuilder(&parentFn->getEntryBlock(), parentFn->getEntryBlock().begin());
-            llvm::AllocaInst *spill = TmpBuilder.CreateAlloca(actualTy, nullptr, "arg_spill");
-            ctx.Builder->CreateStore(argVal, spill);
-            argVal = spill;
+            // Strict Observability Check: We should never hit this anymore!
+            std::string errMsg = "Type mismatch for argument " + std::to_string(i) + " in " + funcName + ".\n" +
+                                 "     Expected: " + maml::ErrorHandler::stringify(expectedTy) + "\n" +
+                                 "     Got:      " + maml::ErrorHandler::stringify(actualTy) + "\n" +
+                                 "     Value:    " + maml::ErrorHandler::stringify(argVal);
+            ctx.Error.fatal(errMsg);
           }
         } else {
-          // --- Strict Observability Check ---
-          // If we exhaust all safe coercion techniques, halt the compiler nicely!
           std::string errMsg = "Type mismatch for argument " + std::to_string(i) + " in " + funcName + ".\n" +
                                "     Expected: " + maml::ErrorHandler::stringify(expectedTy) + "\n" +
                                "     Got:      " + maml::ErrorHandler::stringify(actualTy) + "\n" +

@@ -40,6 +40,16 @@
         "Type": "types.Type"
       }
     },
+    "AddressOfInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "address_of",
+      "fields": {
+        "Dst": "string",
+        "Src": "string"
+      }
+    },
     "FieldAddrInst": {
       "interfaces": [
         "Instruction"
@@ -48,10 +58,10 @@
       "fields": {
         "Dst": "string",
         "Object": "Value",
+        "ObjectType": "types.Type",
         "FieldName": "string",
         "FieldIndex": "int",
-        "FieldOffset": "int",
-        "Type": "types.Type",
+        "FieldType": "types.Type",
         "VariantLayout": "[]types.Type"
       }
     },
@@ -78,43 +88,15 @@
         "RValue": "Value"
       }
     },
-    "StructInitInst": {
+    "BitcastPtrInst": {
       "interfaces": [
         "Instruction"
       ],
-      "opcode": "struct_init",
+      "opcode": "bitcast",
       "fields": {
         "Dst": "string",
-        "FieldName": "string",
-        "FieldIndex": "int",
-        "FieldOffset": "int",
-        "Value": "Value",
-        "VariantLayout": "[]types.Type"
-      }
-    },
-    "ArrayInitInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "array_init",
-      "fields": {
-        "Dst": "string",
-        "Index": "int",
-        "Value": "Value"
-      }
-    },
-    "SliceInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "slice_read",
-      "fields": {
-        "Dst": "string",
-        "Left": "Value",
-        "ContainerType": "types.Type",
-        "Low": "Value",
-        "High": "Value",
-        "ResultType": "types.Type"
+        "Src": "Value",
+        "Type": "types.Type"
       }
     },
     "BinaryOpInst": {
@@ -154,43 +136,6 @@
         "Type": "types.Type"
       }
     },
-    "VariantInitInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "variant_init",
-      "fields": {
-        "Dst": "string",
-        "VariantName": "string",
-        "Discriminant": "int",
-        "Payloads": "[]Value",
-        "Type": "types.Type"
-      }
-    },
-    "VariantReadInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "variant_read",
-      "fields": {
-        "Dst": "string",
-        "Object": "Value",
-        "VariantName": "string",
-        "PayloadIndex": "int",
-        "Type": "types.Type"
-      }
-    },
-    "VariantDiscriminantInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "variant_discriminant",
-      "fields": {
-        "Dst": "string",
-        "Object": "Value",
-        "Type": "types.Type"
-      }
-    },
     "CastInst": {
       "interfaces": [
         "Instruction"
@@ -221,16 +166,6 @@
       "fields": {
         "DstPtr": "string",
         "Value": "Value",
-        "Type": "types.Type"
-      }
-    },
-    "TempDeclInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "temp_decl",
-      "fields": {
-        "Name": "string",
         "Type": "types.Type"
       }
     },
@@ -265,15 +200,6 @@
         "IsMut": "bool"
       },
       "emitCpp": false
-    },
-    "DropInst": {
-      "interfaces": [
-        "Instruction"
-      ],
-      "opcode": "drop",
-      "fields": {
-        "Src": "string"
-      }
     },
     "CoroPrologueInst": {
       "interfaces": [

@@ -51,29 +51,40 @@ llvm::Value *evaluateValue(CodegenContext &ctx, const mir::Value &val) {
         } else if constexpr (std::is_same_v<T, mir::BoolConstant>) {
           return llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), arg.value ? 1 : 0);
         } else if constexpr (std::is_same_v<T, mir::StringConstant>) {
-          // strTy is { ptr, i32, i1 }
-          llvm::Type *strTy = llvmTypeFor(ctx, std::make_shared<maml::Type>(maml::StringType{}));
-
           llvm::Constant *strConst = llvm::ConstantDataArray::getString(ctx.Context, arg.value, true);
           llvm::GlobalVariable *globalVar = new llvm::GlobalVariable(
               *ctx.Module, strConst->getType(), true, llvm::GlobalValue::PrivateLinkage, strConst, "str_lit");
-          llvm::Value *rodataPtr = ctx.Builder->CreatePointerCast(globalVar, llvm::PointerType::getUnqual(ctx.Context));
-
-          llvm::AllocaInst *headerAlloca = ctx.Builder->CreateAlloca(strTy, nullptr, "str_header");
-
-          // 0: Store ptr
-          ctx.Builder->CreateStore(rodataPtr, ctx.Builder->CreateStructGEP(strTy, headerAlloca, 0));
-          // 1: Store len
-          ctx.Builder->CreateStore(ctx.Builder->getInt32(arg.value.length()),
-                                   ctx.Builder->CreateStructGEP(strTy, headerAlloca, 1));
-          // 2: Store is_heap = FALSE
-          ctx.Builder->CreateStore(ctx.Builder->getInt1(false), ctx.Builder->CreateStructGEP(strTy, headerAlloca, 2));
-
-          return ctx.Builder->CreateLoad(strTy, headerAlloca, "str_literal_val");
+          return ctx.Builder->CreatePointerCast(globalVar, llvm::PointerType::getUnqual(ctx.Context));
         }
 
         return nullptr;
       },
       val.inner);
 }
+
+llvm::Value *evaluateAddress(CodegenContext &ctx, const mir::Value &val) {
+  return std::visit(
+      [&](auto &&arg) -> llvm::Value * {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, mir::Register>) {
+          llvm::Value *rawSym = ctx.resolveSymbol(arg.name);
+          if (!rawSym) {
+            ctx.Error.fatal("Variable '" + arg.name + "' is not defined in the current scope.");
+            return nullptr;
+          }
+          if (llvm::isa<llvm::AllocaInst>(rawSym)) {
+            llvm::Type *ty = ctx.SymbolTypes[arg.name];
+            if (ty && ty->isPointerTy()) {
+              return ctx.Builder->CreateLoad(ty, rawSym, arg.name + "_addr");
+            }
+            return rawSym;
+          }
+          return rawSym;
+        }
+        ctx.Error.fatal("Cannot take the address of a non-identifier value.");
+        return nullptr;
+      },
+      val.inner);
+}
+
 }  // namespace maml

@@ -772,7 +772,7 @@ func (a *Analyzer) mapTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) *t
 	case "Option":
 		if variant.Name == "Some" && len(e.Arguments) == 1 {
 			valNode := a.mapExpr(e.Arguments[0].Argument)
-			sumType = types.NewOptionType(tast.TypeOf(valNode))
+			sumType = types.GetOrInstantiateOption(tast.TypeOf(valNode))
 			variant = sumType.GetVariant("Some")
 		} else if variant.Name == "None" {
 			if exp, ok := a.expectedReturn.(*types.SumType); ok && exp.BaseName == "Option" {
@@ -797,7 +797,7 @@ func (a *Analyzer) mapTupleVariantLiteral(e *ast.CallExpr, sym *types.Symbol) *t
 				}
 			}
 		}
-		sumType = types.NewResultType(vType, eType)
+		sumType = types.GetOrInstantiateResult(vType, eType)
 		variant = sumType.GetVariant(sym.Variant.Name)
 	}
 
@@ -994,7 +994,7 @@ func inferIndexType(leftType types.Type) types.Type {
 	case *types.VectorType:
 		return ty.Base
 	case *types.MapType:
-		return types.NewOptionType(ty.Value) // map reads return Option<V>
+		return types.GetOrInstantiateOption(ty.Value) // map reads return Option<V>
 	case types.StringType:
 		return types.I64Type{} // characters are returned as int
 	}

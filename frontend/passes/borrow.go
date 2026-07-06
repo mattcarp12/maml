@@ -75,40 +75,6 @@ func (b *BindingState) AggregateState() LockState {
 	return effective
 }
 
-func (b *BindingState) setPathState(path []string, state LockState) {
-	if len(path) == 0 {
-		b.State = state
-		return
-	}
-	if b.Fields == nil {
-		b.Fields = make(map[string]*BindingState)
-	}
-	head := path[0]
-	child, exists := b.Fields[head]
-	if !exists {
-		child = &BindingState{State: b.State, Fields: make(map[string]*BindingState)}
-		b.Fields[head] = child
-	}
-	child.setPathState(path[1:], state)
-}
-
-func (b *BindingState) setPathDependsOn(path []string, parent string) {
-	if len(path) == 0 {
-		b.DependsOn = parent
-		return
-	}
-	if b.Fields == nil {
-		b.Fields = make(map[string]*BindingState)
-	}
-	head := path[0]
-	child, exists := b.Fields[head]
-	if !exists {
-		child = &BindingState{State: b.State, Fields: make(map[string]*BindingState)}
-		b.Fields[head] = child
-	}
-	child.setPathDependsOn(path[1:], parent)
-}
-
 func (b *BindingState) clone() *BindingState {
 	if b == nil {
 		return nil
@@ -148,7 +114,7 @@ func (b *BlockState) clone() *BlockState {
 
 type Analyzer struct {
 	errors   []ast.CompileError
-	varTypes map[string]types.Type // NEW: Access to type info for Alias detection
+	varTypes map[string]types.Type
 }
 
 func New() *Analyzer {
@@ -172,14 +138,15 @@ func (a *Analyzer) isRef(name string) bool {
 	}
 }
 
-func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileError {
-	// Pre-scan types to detect Reference Types (ARC) vs Value Types
-	for _, block := range g.SortedBlocks() {
-		for _, inst := range block.Statements {
-			if temp, ok := inst.(*mir.TempDeclInst); ok {
-				a.varTypes[temp.Name] = temp.Type
-			}
-		}
+func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *LivenessResult) []ast.CompileError {
+	// 1. Initialize type registry from Function-level Locals
+	// Add function parameters
+	for _, p := range g.Params {
+		a.varTypes[p.Name] = p.Type
+	}
+	// Add function locals
+	for name, t := range locals {
+		a.varTypes[name] = t
 	}
 
 	stateIn := make(map[mir.BlockID]*BlockState)
@@ -207,15 +174,20 @@ func (a *Analyzer) Analyze(g *mir.Graph, live *LivenessResult) []ast.CompileErro
 		block := g.Blocks[id]
 		mergedIn := a.mergePredecessors(g, block, stateOut, visited)
 		stateIn[block.ID] = mergedIn
-
 		currentState := mergedIn.clone()
-
-		for _, inst := range block.Statements {
+		stmtLiveness := AnalyzeStatementLiveness(block, live.LiveOut[block.ID], live.Aliases)
+		for i, inst := range block.Statements {
 			a.analyzeInstruction(inst, currentState)
+			for _, binding := range currentState.Bindings {
+				if binding.MutLockedBy != "" {
+					if !stmtLiveness.LiveOut[i][binding.MutLockedBy] {
+						binding.MutLockedBy = ""
+					}
+				}
+			}
 		}
 
 		a.analyzeTerminator(block.Terminator, currentState, live.LiveOut[block.ID])
-
 		for _, binding := range currentState.Bindings {
 			if binding.MutLockedBy != "" {
 				if !live.LiveOut[block.ID][binding.MutLockedBy] {
@@ -463,9 +435,6 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 	}
 
 	switch i := inst.(type) {
-	case *mir.TempDeclInst:
-		initOrRevive(i.Name)
-
 	case *mir.AssignInst:
 		a.checkOperandAccess(i.RValue, state, pos)
 		releaseLocksHeldBy(i.Dst)
@@ -548,6 +517,24 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		// CRITICAL: Track provenance so validateScopeExit knows this is tied to the source!
 		state.Bindings[i.Dst].DependsOn = i.Src
 
+	case *mir.BitcastPtrInst:
+		a.checkOperandAccess(i.Src, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+		if reg, ok := i.Src.(*mir.Register); ok {
+			if objBinding, exists := state.Bindings[reg.Name]; exists {
+				dependsOn := reg.Name
+				// Inherit parent dependency if the source is already a borrow/view
+				if objBinding.DependsOn != "" {
+					dependsOn = objBinding.DependsOn
+				}
+
+				// CRITICAL: Tie the casted pointer to its memory owner
+				state.Bindings[i.Dst].DependsOn = dependsOn
+			}
+		}
+
 	case *mir.FieldAddrInst:
 		a.checkOperandAccess(i.Object, state, pos)
 		releaseLocksHeldBy(i.Dst)
@@ -578,20 +565,23 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 			}
 		}
 
-	case *mir.StructInitInst:
-		a.checkOperandAccess(i.Value, state, pos)
-		a.checkStringAccess(i.Dst, state, pos)
-		if reg, ok := i.Value.(*mir.Register); ok {
-			if vBinding, exists := state.Bindings[reg.Name]; exists && vBinding.DependsOn != "" {
-				if dstBinding, exists := state.Bindings[i.Dst]; exists {
-					dstBinding.setPathDependsOn([]string{i.FieldName}, vBinding.DependsOn)
+	case *mir.IndexAddrInst:
+		a.checkOperandAccess(i.Source, state, pos)
+		releaseLocksHeldBy(i.Dst)
+		initOrRevive(i.Dst)
+
+		if reg, ok := i.Source.(*mir.Register); ok {
+			if objBinding, exists := state.Bindings[reg.Name]; exists {
+				dependsOn := reg.Name
+				// Inherit parent dependency if the source is already a borrow/view
+				if objBinding.DependsOn != "" {
+					dependsOn = objBinding.DependsOn
 				}
+
+				// CRITICAL: Tie the indexed pointer to its memory owner
+				state.Bindings[i.Dst].DependsOn = dependsOn
 			}
 		}
-
-	case *mir.ArrayInitInst:
-		a.checkOperandAccess(i.Value, state, pos)
-		a.checkStringAccess(i.Dst, state, pos)
 
 	case *mir.BinaryOpInst:
 		a.checkOperandAccess(i.Left, state, pos)
@@ -607,14 +597,17 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		if i.Dst != "" && i.Dst != "_" {
 			releaseLocksHeldBy(i.Dst)
 			initOrRevive(i.Dst)
-		}
 
-	case *mir.SliceInst:
-		a.checkOperandAccess(i.Left, state, pos)
-		releaseLocksHeldBy(i.Dst)
-		initOrRevive(i.Dst)
-		if reg, ok := i.Left.(*mir.Register); ok {
-			state.Bindings[i.Dst].DependsOn = reg.Name
+			// Track provenance for specific runtime accessor functions
+			if reg, ok := i.Function.(*mir.Register); ok {
+				if reg.Name == "maml_vec_get" || reg.Name == "maml_map_get" {
+					if len(i.Arguments) > 0 {
+						if argReg, ok := i.Arguments[0].(*mir.Register); ok {
+							state.Bindings[i.Dst].DependsOn = argReg.Name
+						}
+					}
+				}
+			}
 		}
 
 	case *mir.UnaryOpInst:
@@ -627,35 +620,30 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
 
+	case *mir.StoreInst:
+		a.checkStringAccess(i.DstPtr, state, pos)
+		a.checkOperandAccess(i.Value, state, pos)
+
+		// Inside analyzeInstruction, after the existing cases:
 	case *mir.LoadPtrInst:
 		a.checkOperandAccess(i.Ptr, state, pos)
 		releaseLocksHeldBy(i.Dst)
 		initOrRevive(i.Dst)
 
-	case *mir.StoreInst:
-		a.checkStringAccess(i.DstPtr, state, pos)
-		a.checkOperandAccess(i.Value, state, pos)
-
-	case *mir.VariantInitInst:
-		for _, p := range i.Payloads {
-			a.checkOperandAccess(p, state, pos)
+		// If the pointer we loaded from points to a field of an owning object,
+		// the loaded value is a non-owning view of that object.
+		if ptrReg, ok := i.Ptr.(*mir.Register); ok {
+			if ptrBinding, exists := state.Bindings[ptrReg.Name]; exists && ptrBinding.DependsOn != "" {
+				if a.isRef(i.Dst) {
+					state.Bindings[i.Dst].DependsOn = ptrBinding.DependsOn
+					state.Bindings[i.Dst].State = SharedRead
+				}
+			}
 		}
-		releaseLocksHeldBy(i.Dst)
-		initOrRevive(i.Dst)
 
-	case *mir.VariantReadInst:
-		a.checkOperandAccess(i.Object, state, pos)
-		releaseLocksHeldBy(i.Dst)
-		initOrRevive(i.Dst)
-
-	case *mir.VariantDiscriminantInst:
-		a.checkOperandAccess(i.Object, state, pos)
-		releaseLocksHeldBy(i.Dst)
-		initOrRevive(i.Dst)
 	}
 }
 
-// NEW: ReturnTerminator must be analyzed to catch "return dead_var.id"!
 func (a *Analyzer) analyzeTerminator(term mir.Terminator, state *BlockState, liveOut map[string]bool) {
 	pos := ast.Position{}
 

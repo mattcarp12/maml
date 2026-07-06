@@ -33,6 +33,6 @@ async fn async_main() {
 
 fn main() int {
     s := spawn async_main()
-    run_executor(s)
+    run_executor(own s)
     return 99
 }

@@ -24,13 +24,12 @@ type Value interface {
 // ============================================================================
 // Nodes (Instructions, Terminators, Values)
 // ============================================================================
-type ArrayInitInst struct {
-	Dst   string
-	Index int
-	Value Value
+type AddressOfInst struct {
+	Dst string
+	Src string
 }
 
-func (*ArrayInitInst) isInstruction() {}
+func (*AddressOfInst) isInstruction() {}
 
 type AssignInst struct {
 	Dst    string
@@ -48,6 +47,14 @@ type BinaryOpInst struct {
 }
 
 func (*BinaryOpInst) isInstruction() {}
+
+type BitcastPtrInst struct {
+	Dst  string
+	Src  Value
+	Type types.Type
+}
+
+func (*BitcastPtrInst) isInstruction() {}
 
 type BoolConstant struct {
 	Type  types.Type
@@ -114,19 +121,13 @@ type CoroYieldTerminator struct {
 
 func (*CoroYieldTerminator) isTerminator() {}
 
-type DropInst struct {
-	Src string
-}
-
-func (*DropInst) isInstruction() {}
-
 type FieldAddrInst struct {
 	Dst           string
 	FieldIndex    int
 	FieldName     string
-	FieldOffset   int
+	FieldType     types.Type
 	Object        Value
-	Type          types.Type
+	ObjectType    types.Type
 	VariantLayout []types.Type
 }
 
@@ -189,17 +190,6 @@ type ReturnTerminator struct {
 
 func (*ReturnTerminator) isTerminator() {}
 
-type SliceInst struct {
-	ContainerType types.Type
-	Dst           string
-	High          Value
-	Left          Value
-	Low           Value
-	ResultType    types.Type
-}
-
-func (*SliceInst) isInstruction() {}
-
 type StoreInst struct {
 	DstPtr string
 	Type   types.Type
@@ -215,24 +205,6 @@ type StringConstant struct {
 
 func (*StringConstant) isValue() {}
 
-type StructInitInst struct {
-	Dst           string
-	FieldIndex    int
-	FieldName     string
-	FieldOffset   int
-	Value         Value
-	VariantLayout []types.Type
-}
-
-func (*StructInitInst) isInstruction() {}
-
-type TempDeclInst struct {
-	Name string
-	Type types.Type
-}
-
-func (*TempDeclInst) isInstruction() {}
-
 type UnaryOpInst struct {
 	Dst      string
 	Operand  Value
@@ -247,42 +219,15 @@ type UnreachableTerminator struct {
 
 func (*UnreachableTerminator) isTerminator() {}
 
-type VariantDiscriminantInst struct {
-	Dst    string
-	Object Value
-	Type   types.Type
-}
-
-func (*VariantDiscriminantInst) isInstruction() {}
-
-type VariantInitInst struct {
-	Discriminant int
-	Dst          string
-	Payloads     []Value
-	Type         types.Type
-	VariantName  string
-}
-
-func (*VariantInitInst) isInstruction() {}
-
-type VariantReadInst struct {
-	Dst          string
-	Object       Value
-	PayloadIndex int
-	Type         types.Type
-	VariantName  string
-}
-
-func (*VariantReadInst) isInstruction() {}
-
 // ============================================================================
 // Generic Mapper & Dispatcher
 // ============================================================================
 
 type Mapper[R any] interface {
-	MapArrayInitInst(n *ArrayInitInst) R
+	MapAddressOfInst(n *AddressOfInst) R
 	MapAssignInst(n *AssignInst) R
 	MapBinaryOpInst(n *BinaryOpInst) R
+	MapBitcastPtrInst(n *BitcastPtrInst) R
 	MapBoolConstant(n *BoolConstant) R
 	MapBorrowInst(n *BorrowInst) R
 	MapBranchTerminator(n *BranchTerminator) R
@@ -292,7 +237,6 @@ type Mapper[R any] interface {
 	MapCoroPrologueInst(n *CoroPrologueInst) R
 	MapCoroSuspendTerminator(n *CoroSuspendTerminator) R
 	MapCoroYieldTerminator(n *CoroYieldTerminator) R
-	MapDropInst(n *DropInst) R
 	MapFieldAddrInst(n *FieldAddrInst) R
 	MapIndexAddrInst(n *IndexAddrInst) R
 	MapIntConstant(n *IntConstant) R
@@ -302,16 +246,10 @@ type Mapper[R any] interface {
 	MapMoveInst(n *MoveInst) R
 	MapRegister(n *Register) R
 	MapReturnTerminator(n *ReturnTerminator) R
-	MapSliceInst(n *SliceInst) R
 	MapStoreInst(n *StoreInst) R
 	MapStringConstant(n *StringConstant) R
-	MapStructInitInst(n *StructInitInst) R
-	MapTempDeclInst(n *TempDeclInst) R
 	MapUnaryOpInst(n *UnaryOpInst) R
 	MapUnreachableTerminator(n *UnreachableTerminator) R
-	MapVariantDiscriminantInst(n *VariantDiscriminantInst) R
-	MapVariantInitInst(n *VariantInitInst) R
-	MapVariantReadInst(n *VariantReadInst) R
 }
 
 func MapNode[R any](node any, m Mapper[R]) R {
@@ -320,12 +258,14 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return zero
 	}
 	switch n := node.(type) {
-	case *ArrayInitInst:
-		return m.MapArrayInitInst(n)
+	case *AddressOfInst:
+		return m.MapAddressOfInst(n)
 	case *AssignInst:
 		return m.MapAssignInst(n)
 	case *BinaryOpInst:
 		return m.MapBinaryOpInst(n)
+	case *BitcastPtrInst:
+		return m.MapBitcastPtrInst(n)
 	case *BoolConstant:
 		return m.MapBoolConstant(n)
 	case *BorrowInst:
@@ -344,8 +284,6 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapCoroSuspendTerminator(n)
 	case *CoroYieldTerminator:
 		return m.MapCoroYieldTerminator(n)
-	case *DropInst:
-		return m.MapDropInst(n)
 	case *FieldAddrInst:
 		return m.MapFieldAddrInst(n)
 	case *IndexAddrInst:
@@ -364,26 +302,14 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapRegister(n)
 	case *ReturnTerminator:
 		return m.MapReturnTerminator(n)
-	case *SliceInst:
-		return m.MapSliceInst(n)
 	case *StoreInst:
 		return m.MapStoreInst(n)
 	case *StringConstant:
 		return m.MapStringConstant(n)
-	case *StructInitInst:
-		return m.MapStructInitInst(n)
-	case *TempDeclInst:
-		return m.MapTempDeclInst(n)
 	case *UnaryOpInst:
 		return m.MapUnaryOpInst(n)
 	case *UnreachableTerminator:
 		return m.MapUnreachableTerminator(n)
-	case *VariantDiscriminantInst:
-		return m.MapVariantDiscriminantInst(n)
-	case *VariantInitInst:
-		return m.MapVariantInitInst(n)
-	case *VariantReadInst:
-		return m.MapVariantReadInst(n)
 	default:
 		panic("MIR Exporter Error: Unhandled MIR node type in MapNode")
 	}

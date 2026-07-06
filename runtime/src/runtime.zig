@@ -13,5 +13,5 @@ pub export fn maml_runtime_init() void {
 
 // Force the compiler to evaluate the ABI assertions at comptime
 comptime {
-    _ = @import("abi_assertions.zig");
+    _ = @import("abi.zig");
 }

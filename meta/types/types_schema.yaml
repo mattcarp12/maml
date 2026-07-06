@@ -129,3 +129,100 @@ helpers:
         type: "[]Type"
       - name: Fields
         type: "[]StructField"
+
+type_representations:
+  # --- Primitives ---
+  - name: I8Type
+    string: "i8"
+    mangled: "i8"
+  - name: I16Type
+    string: "i16"
+    mangled: "i16"
+  - name: I32Type
+    string: "i32"
+    mangled: "i32"
+  - name: I64Type
+    string: "i64"
+    mangled: "i64"
+  - name: I128Type
+    string: "i128"
+    mangled: "i128"
+  - name: U8Type
+    string: "u8"
+    mangled: "u8"
+  - name: U16Type
+    string: "u16"
+    mangled: "u16"
+  - name: U32Type
+    string: "u32"
+    mangled: "u32"
+  - name: U64Type
+    string: "u64"
+    mangled: "u64"
+  - name: U128Type
+    string: "u128"
+    mangled: "u128"
+  - name: F32Type
+    string: "f32"
+    mangled: "f32"
+  - name: F64Type
+    string: "f64"
+    mangled: "f64"
+  - name: BoolType
+    string: "bool"
+    mangled: "bool"
+  - name: CharType
+    string: "char"
+    mangled: "char"
+  - name: UnitType
+    string: "unit"
+    mangled: "unit"
+  - name: StringType
+    string: "string"
+    mangled: "string"
+  - name: AnyType
+    string: "any"
+    mangled: "any"
+  - name: UnknownType
+    string: "unknown"
+    mangled: "unknown"
+  - name: PtrType
+    string: "ptr"
+    mangled: "ptr"
+
+  # --- Composites ---
+  - name: StructType
+    string: "{{.Name}}"
+    mangled: "{{.Name}}"
+  - name: SumType
+    string: "{{.BaseName}}{{if .TypeArgs}}<{{.TypeArgs | join \", \"}}>{{end}}"
+    mangled: "{{.BaseName}}{{if .TypeArgs}}_{{.TypeArgs | join \"_\" | sanitizeMangle}}{{end}}"
+
+  # --- Containers ---
+  - name: ArrayType
+    string: "[{{.Size}}]{{.Base.String}}"
+    mangled: "array_{{.Size}}_{{.Base.Mangled}}"
+  - name: ViewType
+    string: "[]{{.Base.String}}{{if .IsMut}}mut{{end}}"
+    mangled: "view_{{.Base.Mangled}}{{if .IsMut}}_mut{{end}}"
+  - name: VectorType
+    string: "Vec<{{.Base.String}}>"
+    mangled: "Vec_{{.Base.Mangled}}"
+  - name: MapType
+    string: "Map<{{.Key.String}}, {{.Value.String}}>"
+    mangled: "Map_{{.Key.Mangled}}_{{.Value.Mangled}}"
+  - name: FutureType
+    string: "Future<{{.Base.String}}>"
+    mangled: "Future_{{.Base.Mangled}}"
+  - name: RefType
+    string: "Ref<{{.Base.String}}>"
+    mangled: "Ref_{{.Base.Mangled}}"
+  - name: WeakRefType
+    string: "WeakRef<{{.Base.String}}>"
+    mangled: "WeakRef_{{.Base.Mangled}}"
+  - name: SenderType
+    string: "Sender<{{.Base.String}}>"
+    mangled: "Sender_{{.Base.Mangled}}"
+  - name: ReceiverType
+    string: "Receiver<{{.Base.String}}>"
+    mangled: "Receiver_{{.Base.Mangled}}"

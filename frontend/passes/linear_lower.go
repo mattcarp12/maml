@@ -12,18 +12,13 @@ func LowerLinearTypes(g *mir.Graph) {
 		var newStmts []mir.Instruction
 		for _, inst := range block.Statements {
 			switch i := inst.(type) {
-
 			case *mir.BorrowInst:
-				// Lower the borrow (mut or ro) into a standard bitwise copy.
-				// For heap types, this just copies the fat pointer.
-				// The borrow checker has already guaranteed this alias is safe.
-				newStmts = append(newStmts, &mir.CopyInst{
+				newStmts = append(newStmts, &mir.AddressOfInst{
 					Dst: i.Dst,
 					Src: i.Src,
 				})
 
 			case *mir.KeepAliveInst:
-				// SCRUB: No longer needed after Liveness/Borrow checking is complete.
 				continue
 
 			default:

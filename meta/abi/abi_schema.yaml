@@ -1,0 +1,318 @@
+# =============================================================================
+# MAML Unified Specification - Single Source of Truth
+# =============================================================================
+
+# ----------------------------------------------------------------------------
+# 1. Primitives
+# Pure declarative metadata. Language-specific definitions are mapped
+# internally by the code generator.
+# ----------------------------------------------------------------------------
+primitives:
+  - name: i8
+    kind: signed_int
+    size: 1
+  - name: i16
+    kind: signed_int
+    size: 2
+  - name: i32
+    kind: signed_int
+    size: 4
+  - name: i64
+    kind: signed_int
+    size: 8
+  - name: i128
+    kind: signed_int
+    size: 16
+  - name: u8
+    kind: unsigned_int
+    size: 1
+  - name: u16
+    kind: unsigned_int
+    size: 2
+  - name: u32
+    kind: unsigned_int
+    size: 4
+  - name: u64
+    kind: unsigned_int
+    size: 8
+  - name: u128
+    kind: unsigned_int
+    size: 16
+  - name: usize
+    kind: unsigned_int
+    size: 8
+  - name: bool
+    kind: boolean
+    size: 1
+  - name: ptr
+    kind: pointer
+    size: 8
+  - name: "?ptr"
+    kind: pointer
+    size: 8
+  - name: "bytes_ptr"
+    kind: pointer
+    size: 8
+  - name: unit
+    kind: void
+    size: 0
+
+# ----------------------------------------------------------------------------
+# 2. Compound Structures (Semantic Layouts & Memory Classes)
+# ----------------------------------------------------------------------------
+types:
+  - name: "String"
+    passing_convention: by_value
+    allocation: stack
+    is_borrow: false
+    is_copyable: true
+    fields:
+      - name: "ptr"
+        type: "ptr"
+      - name: "len"
+        type: "u32"
+      - name: "is_owned"
+        type: "bool"
+
+  - name: "Vector"
+    passing_convention: by_reference
+    allocation: heap
+    is_borrow: false
+    is_copyable: false
+    fields:
+      - name: "buffer"
+        type: "ptr"
+      - name: "cap"
+        type: "u32"
+      - name: "len"
+        type: "u32"
+      - name: "elem_size"
+        type: "u32"
+
+  - name: "View"
+    passing_convention: by_value
+    allocation: stack
+    is_borrow: true
+    is_copyable: true
+    fields:
+      - name: "data_ptr"
+        type: "ptr"
+      - name: "len"
+        type: "u32"
+
+  - name: "Map"
+    passing_convention: by_reference
+    allocation: heap
+    is_borrow: false
+    is_copyable: false
+    fields:
+      - name: "entries"
+        type: "ptr"
+      - name: "count"
+        type: "u32"
+      - name: "tombstone_count"
+        type: "u32"
+      - name: "cap"
+        type: "u32"
+      - name: "val_size"
+        type: "u32"
+      - name: "is_string_key"
+        type: "bool"
+
+  - name: "Future"
+    passing_convention: by_reference
+    allocation: heap
+    is_borrow: false
+    is_copyable: false
+    fields:
+      - name: "state"
+        type: "ptr"
+      - name: "ready"
+        type: "bool"
+
+  - name: "Ref"
+    passing_convention: by_value
+    allocation: stack
+    is_borrow: false
+    is_copyable: true
+    fields:
+      - name: "ptr"
+        type: "ptr"
+      - name: "refcount"
+        type: "ptr"
+
+# ----------------------------------------------------------------------------
+# 3. Runtime Export Functions
+# ----------------------------------------------------------------------------
+modules:
+  # --- Alloc ---
+  - module: "alloc"
+    definitions:
+      - symbol: "maml_alloc"
+        args:
+          - { name: "size", type: usize }
+        return: { type: "?ptr" }
+      - symbol: "maml_free"
+        args:
+          - { name: "ptr", type: "?ptr" }
+        return: { type: unit }
+
+  # --- Vectors ---
+  - module: "vec"
+    definitions:
+      - symbol: "maml_vec_grow"
+        args:
+          - { name: "buffer", type: ptr }
+          - { name: "cap", type: u32, by_reference: true, mut: true }
+          - { name: "elem_size", type: u32 }
+        return: { type: ptr }
+      - symbol: "maml_vec_create"
+        args:
+          - { name: "elem_size", type: u32 }
+        return: { type: Vector }
+      - symbol: "maml_vec_push"
+        args:
+          - { name: "vec", type: Vector, mut: true }
+          - { name: "element", type: ptr }
+        return: { type: unit }
+      - symbol: "maml_vec_get"
+        args:
+          - { name: "vec", type: Vector }
+          - { name: "index", type: u32 }
+        return: { type: ptr }
+      - symbol: "maml_vec_set"
+        args:
+          - { name: "vec", type: Vector }
+          - { name: "index", type: u32 }
+          - { name: "element", type: ptr }
+        return: { type: unit }
+      - symbol: "maml_vec_len"
+        args:
+          - { name: "vec", type: Vector }
+        return: { type: u32 }
+      - symbol: "maml_vec_clone"
+        args:
+          - { name: "vec", type: Vector }
+          - { name: "elem_size", type: usize }
+        return: { type: Vector }
+      - symbol: "maml_vec_free"
+        args:
+          - { name: "vec", type: Vector }
+        return: { type: unit }
+
+  # --- Map Operations ---
+  - module: "map"
+    definitions:
+      - symbol: "maml_map_create"
+        args:
+          - { name: "val_size", type: u32 }
+          - { name: "is_string_key", type: bool }
+        return: { type: Map }
+      - symbol: "maml_map_put"
+        args:
+          - { name: "m", type: Map, mut: true }
+          - { name: "key_hash", type: u32 }
+          - { name: "key_ptr", type: ptr }
+          - { name: "key_len", type: u32 }
+          - { name: "val_ptr", type: ptr }
+        return: { type: unit }
+      - symbol: "maml_map_get"
+        args:
+          - { name: "m", type: Map }
+          - { name: "key_hash", type: u32 }
+          - { name: "key_ptr", type: ptr }
+          - { name: "key_len", type: u32 }
+        return: { type: "?ptr" }
+      - symbol: "maml_map_delete"
+        args:
+          - { name: "m", type: Map, mut: true }
+          - { name: "key_hash", type: u32 }
+          - { name: "key_ptr", type: ptr }
+          - { name: "key_len", type: u32 }
+        return: { type: unit }
+      - symbol: "maml_map_len"
+        args:
+          - { name: "m", type: Map }
+        return: { type: u32 }
+      - symbol: "maml_map_clone"
+        args:
+          - { name: "m", type: Map }
+        return: { type: Map }
+      - symbol: "maml_map_free"
+        args:
+          - { name: "m", type: Map }
+        return: { type: unit }
+
+  # --- Strings ---
+  - module: "string"
+    definitions:
+      - symbol: "maml_str_hash"
+        args:
+          - { name: "str_ptr", type: "bytes_ptr" }
+          - { name: "len", type: u32 }
+        return: { type: u32 }
+      - symbol: "maml_str_eq"
+        args:
+          - { name: "a_ptr", type: "bytes_ptr" }
+          - { name: "a_len", type: u32 }
+          - { name: "b_ptr", type: "bytes_ptr" }
+          - { name: "b_len", type: u32 }
+        return: { type: i32 }
+      - symbol: "maml_str_clone"
+        args:
+          - { name: "str_ptr", type: "bytes_ptr" }
+          - { name: "len", type: u32 }
+        return: { type: ptr }
+
+  # --- Coroutine Executor ---
+  - module: "coro"
+    definitions:
+      - symbol: "maml_coro_runtime_init"
+        args: []
+        return: { type: unit }
+      - symbol: "maml_coro_resume_helper"
+        args:
+          - { name: "task", type: Future }
+        return: { type: unit }
+      - symbol: "maml_coro_done_helper"
+        args:
+          - { name: "task", type: Future }
+        return: { type: bool }
+      - symbol: "maml_coro_destroy_helper"
+        args:
+          - { name: "task", type: Future, mut: true }
+        return: { type: unit }
+      - symbol: "maml_spawn_task"
+        args:
+          - { name: "task", type: Future }
+        return: { type: unit }
+      - symbol: "maml_run_executor"
+        args:
+          - { name: "task", type: Future }
+        return: { type: Future }
+      - symbol: "maml_task_await"
+        args:
+          - { name: "current_task", type: Future }
+          - { name: "target_task", type: Future }
+        return: { type: unit }
+      - symbol: "maml_task_release"
+        args:
+          - { name: "task", type: Future, mut: true }
+        return: { type: unit }
+      - symbol: "maml_task_get_result"
+        args:
+          - { name: "task", type: Future }
+        return: { type: unit }
+      - symbol: "maml_yield_now"
+        args:
+          - { name: "task", type: Future }
+        return: { type: unit }
+
+  # --- IO ---
+  - module: "io"
+    definitions:
+      - symbol: "maml_print"
+        args:
+          - { name: "msg_ptr", type: ptr }
+          - { name: "msg_len", type: i32 }
+        return: { type: unit }

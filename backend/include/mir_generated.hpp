@@ -39,10 +39,9 @@ using ValueVariant = std::variant<BoolConstant, IntConstant, Register, StringCon
 struct Value {
     ValueVariant inner;
 };
-struct ArrayInitInst {
+struct AddressOfInst {
     std::string dst;
-    int32_t index;
-    Value value;
+    std::string src;
 };
 struct AssignInst {
     std::string dst;
@@ -53,6 +52,11 @@ struct BinaryOpInst {
     Value left;
     std::string operator_;
     Value right;
+    std::shared_ptr<maml::Type> type;
+};
+struct BitcastPtrInst {
+    std::string dst;
+    Value src;
     std::shared_ptr<maml::Type> type;
 };
 struct CallInst {
@@ -72,16 +76,13 @@ struct CopyInst {
 };
 struct CoroPrologueInst {
 };
-struct DropInst {
-    std::string src;
-};
 struct FieldAddrInst {
     std::string dst;
     int32_t field_index;
     std::string field_name;
-    int32_t field_offset;
+    std::shared_ptr<maml::Type> field_type;
     Value object;
-    std::shared_ptr<maml::Type> type;
+    std::shared_ptr<maml::Type> object_type;
     std::vector<std::shared_ptr<maml::Type>> variant_layout;
 };
 struct IndexAddrInst {
@@ -100,30 +101,10 @@ struct MoveInst {
     std::string dst;
     std::string src;
 };
-struct SliceInst {
-    std::shared_ptr<maml::Type> container_type;
-    std::string dst;
-    Value high;
-    Value left;
-    Value low;
-    std::shared_ptr<maml::Type> result_type;
-};
 struct StoreInst {
     std::string dst_ptr;
     std::shared_ptr<maml::Type> type;
     Value value;
-};
-struct StructInitInst {
-    std::string dst;
-    int32_t field_index;
-    std::string field_name;
-    int32_t field_offset;
-    Value value;
-    std::vector<std::shared_ptr<maml::Type>> variant_layout;
-};
-struct TempDeclInst {
-    std::string name;
-    std::shared_ptr<maml::Type> type;
 };
 struct UnaryOpInst {
     std::string dst;
@@ -131,27 +112,8 @@ struct UnaryOpInst {
     std::string operator_;
     std::shared_ptr<maml::Type> type;
 };
-struct VariantDiscriminantInst {
-    std::string dst;
-    Value object;
-    std::shared_ptr<maml::Type> type;
-};
-struct VariantInitInst {
-    int32_t discriminant;
-    std::string dst;
-    std::vector<Value> payloads;
-    std::shared_ptr<maml::Type> type;
-    std::string variant_name;
-};
-struct VariantReadInst {
-    std::string dst;
-    Value object;
-    int32_t payload_index;
-    std::shared_ptr<maml::Type> type;
-    std::string variant_name;
-};
 
-using InstVariant = std::variant<ArrayInitInst, AssignInst, BinaryOpInst, CallInst, CastInst, CopyInst, CoroPrologueInst, DropInst, FieldAddrInst, IndexAddrInst, LoadPtrInst, MoveInst, SliceInst, StoreInst, StructInitInst, TempDeclInst, UnaryOpInst, VariantDiscriminantInst, VariantInitInst, VariantReadInst
+using InstVariant = std::variant<AddressOfInst, AssignInst, BinaryOpInst, BitcastPtrInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldAddrInst, IndexAddrInst, LoadPtrInst, MoveInst, StoreInst, UnaryOpInst
 >;
 
 struct Instruction {
@@ -205,6 +167,7 @@ struct Function {
     bool is_extern;
     std::string entry_block;
     std::vector<BasicBlock> blocks;
+    std::unordered_map<std::string, std::shared_ptr<maml::Type>> locals;
 };
 
 struct Program {
@@ -218,26 +181,20 @@ void from_json(const nlohmann::json& j, BoolConstant& t);
 void from_json(const nlohmann::json& j, IntConstant& t);
 void from_json(const nlohmann::json& j, Register& t);
 void from_json(const nlohmann::json& j, StringConstant& t);
-void from_json(const nlohmann::json& j, ArrayInitInst& t);
+void from_json(const nlohmann::json& j, AddressOfInst& t);
 void from_json(const nlohmann::json& j, AssignInst& t);
 void from_json(const nlohmann::json& j, BinaryOpInst& t);
+void from_json(const nlohmann::json& j, BitcastPtrInst& t);
 void from_json(const nlohmann::json& j, CallInst& t);
 void from_json(const nlohmann::json& j, CastInst& t);
 void from_json(const nlohmann::json& j, CopyInst& t);
 void from_json(const nlohmann::json& j, CoroPrologueInst& t);
-void from_json(const nlohmann::json& j, DropInst& t);
 void from_json(const nlohmann::json& j, FieldAddrInst& t);
 void from_json(const nlohmann::json& j, IndexAddrInst& t);
 void from_json(const nlohmann::json& j, LoadPtrInst& t);
 void from_json(const nlohmann::json& j, MoveInst& t);
-void from_json(const nlohmann::json& j, SliceInst& t);
 void from_json(const nlohmann::json& j, StoreInst& t);
-void from_json(const nlohmann::json& j, StructInitInst& t);
-void from_json(const nlohmann::json& j, TempDeclInst& t);
 void from_json(const nlohmann::json& j, UnaryOpInst& t);
-void from_json(const nlohmann::json& j, VariantDiscriminantInst& t);
-void from_json(const nlohmann::json& j, VariantInitInst& t);
-void from_json(const nlohmann::json& j, VariantReadInst& t);
 void from_json(const nlohmann::json& j, BranchTerminator& t);
 void from_json(const nlohmann::json& j, CoroSuspendTerminator& t);
 void from_json(const nlohmann::json& j, CoroYieldTerminator& t);
@@ -288,15 +245,12 @@ inline void from_json(const nlohmann::json& j, StringConstant& t) {
         j.at("value").get_to(t.value);
     }
 }
-inline void from_json(const nlohmann::json& j, ArrayInitInst& t) {
+inline void from_json(const nlohmann::json& j, AddressOfInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
     }
-    if (j.contains("index") && !j.at("index").is_null()) {
-        j.at("index").get_to(t.index);
-    }
-    if (j.contains("value") && !j.at("value").is_null()) {
-        j.at("value").get_to(t.value);
+    if (j.contains("src") && !j.at("src").is_null()) {
+        j.at("src").get_to(t.src);
     }
 }
 inline void from_json(const nlohmann::json& j, AssignInst& t) {
@@ -319,6 +273,17 @@ inline void from_json(const nlohmann::json& j, BinaryOpInst& t) {
     }
     if (j.contains("right") && !j.at("right").is_null()) {
         j.at("right").get_to(t.right);
+    }
+    if (j.contains("type") && !j.at("type").is_null()) {
+        j.at("type").get_to(t.type);
+    }
+}
+inline void from_json(const nlohmann::json& j, BitcastPtrInst& t) {
+    if (j.contains("dst") && !j.at("dst").is_null()) {
+        j.at("dst").get_to(t.dst);
+    }
+    if (j.contains("src") && !j.at("src").is_null()) {
+        j.at("src").get_to(t.src);
     }
     if (j.contains("type") && !j.at("type").is_null()) {
         j.at("type").get_to(t.type);
@@ -359,11 +324,6 @@ inline void from_json(const nlohmann::json& j, CopyInst& t) {
 }
 inline void from_json(const nlohmann::json& j, CoroPrologueInst& t) {
 }
-inline void from_json(const nlohmann::json& j, DropInst& t) {
-    if (j.contains("src") && !j.at("src").is_null()) {
-        j.at("src").get_to(t.src);
-    }
-}
 inline void from_json(const nlohmann::json& j, FieldAddrInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
         j.at("dst").get_to(t.dst);
@@ -374,14 +334,14 @@ inline void from_json(const nlohmann::json& j, FieldAddrInst& t) {
     if (j.contains("field_name") && !j.at("field_name").is_null()) {
         j.at("field_name").get_to(t.field_name);
     }
-    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
-        j.at("field_offset").get_to(t.field_offset);
+    if (j.contains("field_type") && !j.at("field_type").is_null()) {
+        j.at("field_type").get_to(t.field_type);
     }
     if (j.contains("object") && !j.at("object").is_null()) {
         j.at("object").get_to(t.object);
     }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
+    if (j.contains("object_type") && !j.at("object_type").is_null()) {
+        j.at("object_type").get_to(t.object_type);
     }
     if (j.contains("variant_layout") && !j.at("variant_layout").is_null()) {
         j.at("variant_layout").get_to(t.variant_layout);
@@ -423,26 +383,6 @@ inline void from_json(const nlohmann::json& j, MoveInst& t) {
         j.at("src").get_to(t.src);
     }
 }
-inline void from_json(const nlohmann::json& j, SliceInst& t) {
-    if (j.contains("container_type") && !j.at("container_type").is_null()) {
-        j.at("container_type").get_to(t.container_type);
-    }
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("high") && !j.at("high").is_null()) {
-        j.at("high").get_to(t.high);
-    }
-    if (j.contains("left") && !j.at("left").is_null()) {
-        j.at("left").get_to(t.left);
-    }
-    if (j.contains("low") && !j.at("low").is_null()) {
-        j.at("low").get_to(t.low);
-    }
-    if (j.contains("result_type") && !j.at("result_type").is_null()) {
-        j.at("result_type").get_to(t.result_type);
-    }
-}
 inline void from_json(const nlohmann::json& j, StoreInst& t) {
     if (j.contains("dst_ptr") && !j.at("dst_ptr").is_null()) {
         j.at("dst_ptr").get_to(t.dst_ptr);
@@ -452,34 +392,6 @@ inline void from_json(const nlohmann::json& j, StoreInst& t) {
     }
     if (j.contains("value") && !j.at("value").is_null()) {
         j.at("value").get_to(t.value);
-    }
-}
-inline void from_json(const nlohmann::json& j, StructInitInst& t) {
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("field_index") && !j.at("field_index").is_null()) {
-        j.at("field_index").get_to(t.field_index);
-    }
-    if (j.contains("field_name") && !j.at("field_name").is_null()) {
-        j.at("field_name").get_to(t.field_name);
-    }
-    if (j.contains("field_offset") && !j.at("field_offset").is_null()) {
-        j.at("field_offset").get_to(t.field_offset);
-    }
-    if (j.contains("value") && !j.at("value").is_null()) {
-        j.at("value").get_to(t.value);
-    }
-    if (j.contains("variant_layout") && !j.at("variant_layout").is_null()) {
-        j.at("variant_layout").get_to(t.variant_layout);
-    }
-}
-inline void from_json(const nlohmann::json& j, TempDeclInst& t) {
-    if (j.contains("name") && !j.at("name").is_null()) {
-        j.at("name").get_to(t.name);
-    }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
     }
 }
 inline void from_json(const nlohmann::json& j, UnaryOpInst& t) {
@@ -494,51 +406,6 @@ inline void from_json(const nlohmann::json& j, UnaryOpInst& t) {
     }
     if (j.contains("type") && !j.at("type").is_null()) {
         j.at("type").get_to(t.type);
-    }
-}
-inline void from_json(const nlohmann::json& j, VariantDiscriminantInst& t) {
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("object") && !j.at("object").is_null()) {
-        j.at("object").get_to(t.object);
-    }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
-    }
-}
-inline void from_json(const nlohmann::json& j, VariantInitInst& t) {
-    if (j.contains("discriminant") && !j.at("discriminant").is_null()) {
-        j.at("discriminant").get_to(t.discriminant);
-    }
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("payloads") && !j.at("payloads").is_null()) {
-        j.at("payloads").get_to(t.payloads);
-    }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
-    }
-    if (j.contains("variant_name") && !j.at("variant_name").is_null()) {
-        j.at("variant_name").get_to(t.variant_name);
-    }
-}
-inline void from_json(const nlohmann::json& j, VariantReadInst& t) {
-    if (j.contains("dst") && !j.at("dst").is_null()) {
-        j.at("dst").get_to(t.dst);
-    }
-    if (j.contains("object") && !j.at("object").is_null()) {
-        j.at("object").get_to(t.object);
-    }
-    if (j.contains("payload_index") && !j.at("payload_index").is_null()) {
-        j.at("payload_index").get_to(t.payload_index);
-    }
-    if (j.contains("type") && !j.at("type").is_null()) {
-        j.at("type").get_to(t.type);
-    }
-    if (j.contains("variant_name") && !j.at("variant_name").is_null()) {
-        j.at("variant_name").get_to(t.variant_name);
     }
 }
 inline void from_json(const nlohmann::json& j, BranchTerminator& t) {
@@ -598,6 +465,7 @@ inline void from_json(const nlohmann::json& j, Function& t) {
     if (j.contains("is_extern")) j.at("is_extern").get_to(t.is_extern);
     if (j.contains("entry_block")) j.at("entry_block").get_to(t.entry_block);
     if (j.contains("blocks")) j.at("blocks").get_to(t.blocks);
+    if (j.contains("locals")) j.at("locals").get_to(t.locals);
 }
 
 inline void from_json(const nlohmann::json& j, Program& t) {
@@ -617,26 +485,20 @@ inline void from_json(const nlohmann::json& j, Value& v) {
 
 inline void from_json(const nlohmann::json& j, Instruction& inst) {
     auto op = j.at("op").get<std::string>();
-    if (op == "array_init") { inst.inner = j.get<ArrayInitInst>(); return; }
+    if (op == "address_of") { inst.inner = j.get<AddressOfInst>(); return; }
     if (op == "assign") { inst.inner = j.get<AssignInst>(); return; }
     if (op == "binary_op") { inst.inner = j.get<BinaryOpInst>(); return; }
+    if (op == "bitcast") { inst.inner = j.get<BitcastPtrInst>(); return; }
     if (op == "call_inst") { inst.inner = j.get<CallInst>(); return; }
     if (op == "cast") { inst.inner = j.get<CastInst>(); return; }
     if (op == "copy") { inst.inner = j.get<CopyInst>(); return; }
     if (op == "coro_prologue") { inst.inner = j.get<CoroPrologueInst>(); return; }
-    if (op == "drop") { inst.inner = j.get<DropInst>(); return; }
     if (op == "field_addr") { inst.inner = j.get<FieldAddrInst>(); return; }
     if (op == "index_addr") { inst.inner = j.get<IndexAddrInst>(); return; }
     if (op == "load_ptr") { inst.inner = j.get<LoadPtrInst>(); return; }
     if (op == "move") { inst.inner = j.get<MoveInst>(); return; }
-    if (op == "slice_read") { inst.inner = j.get<SliceInst>(); return; }
     if (op == "store") { inst.inner = j.get<StoreInst>(); return; }
-    if (op == "struct_init") { inst.inner = j.get<StructInitInst>(); return; }
-    if (op == "temp_decl") { inst.inner = j.get<TempDeclInst>(); return; }
     if (op == "unary_op") { inst.inner = j.get<UnaryOpInst>(); return; }
-    if (op == "variant_discriminant") { inst.inner = j.get<VariantDiscriminantInst>(); return; }
-    if (op == "variant_init") { inst.inner = j.get<VariantInitInst>(); return; }
-    if (op == "variant_read") { inst.inner = j.get<VariantReadInst>(); return; }
     throw std::runtime_error("Unknown Instruction op: " + op);
 }
 

@@ -15,33 +15,25 @@ var builtinGenerics = map[string]builtinGeneric{
 	"Vec": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return &types.VectorType{
-				Base: args[0],
-			}
+			return types.GetOrInstantiateVec(args[0])
 		},
 	},
 	"Map": {
 		Arity: 2,
 		Build: func(args []types.Type) types.Type {
-			return &types.MapType{
-				Key:   args[0],
-				Value: args[1],
-			}
+			return types.GetOrInstantiateMap(args[0], args[1])
 		},
 	},
 	"Option": {
 		Arity: 1,
 		Build: func(args []types.Type) types.Type {
-			return types.NewOptionType(args[0])
+			return types.GetOrInstantiateOption(args[0])
 		},
 	},
 	"Result": {
 		Arity: 2,
 		Build: func(args []types.Type) types.Type {
-			return types.NewResultType(
-				args[0],
-				args[1],
-			)
+			return types.GetOrInstantiateResult(args[0], args[1])
 		},
 	},
 	"Future": {

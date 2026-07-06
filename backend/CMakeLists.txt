@@ -43,7 +43,6 @@ FetchContent_MakeAvailable(json)
 set(BACKEND_SOURCES
     src/CodegenContext.cpp
     src/CompoundOps.cpp
-    src/ContainerOps.cpp
     src/ControlFlowOps.cpp
     src/ExprCore.cpp
     src/MemoryOps.cpp

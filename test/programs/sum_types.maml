@@ -10,7 +10,7 @@ type Point = { x int, y int }
 // Core Sum Type Inspectors 
 // ============================================================================
 
-fn inspect_status(s Status) int {
+fn inspect_status(ro s Status) int {
     return match s {
         case Loading: { => 1 }
         case Active(level): { => level * 10 }
@@ -18,7 +18,7 @@ fn inspect_status(s Status) int {
     }
 }
 
-fn handle_content(c Content) int {
+fn handle_content(ro c Content) int {
     return match c {
         case Empty: { => 0 }
         case Text(s): { => 100 }
@@ -26,7 +26,7 @@ fn handle_content(c Content) int {
     }
 }
 
-fn process_action(act Action) int {
+fn process_action(ro act Action) int {
     return match act {
         case MarkRead: { => 200 }
         case Delete: { => 404 }
@@ -48,8 +48,8 @@ fn test_option_basic() int {
 }
 
 // Search operation returning None or inferred index context
-fn find(haystack Vec<int>, needle int) Option<int> {
-    for mut i := 0; i < len(haystack); i = i + 1 {
+fn find(ro haystack Vec<int>, needle int) Option<int> {
+    for mut i := 0; i < len(ro haystack); i = i + 1 {
         if haystack[i] == needle {
             return Some(i)
         }
@@ -75,8 +75,8 @@ fn test_result_match() int {
 }
 
 // Vector elements serving as reference variant containers
-fn first(v Vec<int>) Option<int> {
-    if len(v) == 0 {
+fn first(ro v Vec<int>) Option<int> {
+    if len(ro v) == 0 {
         return None
     }
     return Some(v[0])
@@ -103,8 +103,8 @@ fn double_positive(n int) int {
 }
 
 // Track 4.4: Struct payload variants (exposing SizeInBytes layout constraints)
-fn find_origin(points Vec<Point>) Option<Point> {
-    for mut i := 0; i < len(points); i = i + 1 {
+fn find_origin(ro points Vec<Point>) Option<Point> {
+    for mut i := 0; i < len(ro points); i = i + 1 {
         p := points[i]
         if p.x == 0 && p.y == 0 {
             return Some(p)
@@ -130,9 +130,9 @@ fn main() int {
     a1 := MarkRead
     a2 := Archive{folder: "Inbox"}
 
-    base_sum := inspect_status(s1) + inspect_status(s2) + inspect_status(s3) +
-                handle_content(c1) + handle_content(c2) + handle_content(c3) +
-                process_action(a1) + process_action(a2)
+    base_sum := inspect_status(ro s1) + inspect_status(ro s2) + inspect_status(ro s3) +
+                handle_content(ro c1) + handle_content(ro c2) + handle_content(ro c3) +
+                process_action(ro a1) + process_action(ro a2)
 
     // 2. Option and primitive Result validations
     opt_basic := test_option_basic()
@@ -142,12 +142,12 @@ fn main() int {
     // 3. Vector container validations
     v := Vec<int>{10, 20, 30, 42, 50}
     
-    opt_find := match find(v, 42) {
+    opt_find := match find(ro v, 42) {
         case Some(idx): { => idx }
         case None:      { => -1 }
     }
 
-    opt_first := match first(v) {
+    opt_first := match first(ro v) {
         case Some(val): { => val }
         case None:      { => -1 }
     }
@@ -158,13 +158,16 @@ fn main() int {
     p3 := Point{x: 7, y: 8}
     points_vec := Vec<Point>{p1, p2, p3}
 
-    opt_origin := match find_origin(points_vec) {
+    opt_origin := match find_origin(ro points_vec) {
         case Some(pt): { => pt.x + pt.y + 100 }
         case None:     { => 0 }
     }
 
     // Return aggregated computation block score across all runtime branches
     return base_sum + opt_basic + res_match + res_prop + opt_find + opt_first + opt_origin
+    // return inspect_status(ro s3)
+    // return handle_content(ro c3)
+    // return process_action(ro a2)
 
     // ============================================================================
     // EXPECTED EXECUTION VERIFICATION METADATA

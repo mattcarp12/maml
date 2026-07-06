@@ -11,7 +11,6 @@ import (
 
 	"github.com/mattcarp12/maml/frontend"
 	"github.com/mattcarp12/maml/frontend/hir"
-	"github.com/mattcarp12/maml/frontend/layout"
 	"github.com/mattcarp12/maml/frontend/mir"
 )
 
@@ -29,7 +28,7 @@ type Config struct {
 	PrintIR    bool
 	RuntimeLib string
 	Sanitize   bool
-	Target     layout.Target
+	Target     mir.Target
 }
 
 type Pipeline struct {
@@ -40,7 +39,7 @@ func New(cfg Config) *Pipeline {
 	if cfg.RuntimeLib == "" {
 		cfg.RuntimeLib = DefaultRuntimeLib
 	}
-	cfg.Target = *layout.DefaultTarget
+	cfg.Target = *mir.DefaultTarget
 	return &Pipeline{cfg: cfg}
 }
 

@@ -93,6 +93,7 @@ struct Function {
     bool is_extern;
     std::string entry_block;
     std::vector<BasicBlock> blocks;
+    std::unordered_map<std::string, std::shared_ptr<maml::Type>> locals;
 };
 
 struct Program {
@@ -187,6 +188,7 @@ inline void from_json(const nlohmann::json& j, Function& t) {
     if (j.contains("is_extern")) j.at("is_extern").get_to(t.is_extern);
     if (j.contains("entry_block")) j.at("entry_block").get_to(t.entry_block);
     if (j.contains("blocks")) j.at("blocks").get_to(t.blocks);
+    if (j.contains("locals")) j.at("locals").get_to(t.locals);
 }
 
 inline void from_json(const nlohmann::json& j, Program& t) {

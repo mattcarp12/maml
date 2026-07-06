@@ -31,9 +31,8 @@ type Property struct {
 }
 
 type Primitive struct {
-	Name        string `yaml:"name"`
-	CppKind     string `yaml:"cpp_kind"`
-	IsReference bool   `yaml:"is_reference"`
+	Name    string `yaml:"name"`
+	CppKind string `yaml:"cpp_kind"`
 }
 
 type Complex struct {
@@ -42,11 +41,18 @@ type Complex struct {
 	Properties []Property `yaml:"properties"`
 }
 
+type TypeRepr struct {
+	Name    string `yaml:"name"`
+	String  string `yaml:"string"`
+	Mangled string `yaml:"mangled"`
+}
+
 type Schema struct {
 	Primitives []Primitive `yaml:"primitives"`
 	Composites []Complex   `yaml:"composites"`
 	Containers []Complex   `yaml:"containers"`
 	Helpers    []Complex   `yaml:"helpers"`
+	Reprs      []TypeRepr  `yaml:"type_representations"`
 }
 
 func main() {
@@ -65,14 +71,12 @@ func main() {
 	cppOut := flag.String("cppOut", "backend/include/", "output directory for types_generated.hpp")
 	flag.Parse()
 
-	// Generate Go
 	goOutFile := path.Join(*goOut, "types_generated.go")
 	if err := generate(goTemplate, goOutFile, schema, funcs, true); err != nil {
 		fmt.Fprintf(os.Stderr, "Go Gen Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Generate C++
 	cppOutFile := path.Join(*cppOut, "types_generated.hpp")
 	if err := generate(cppTemplate, cppOutFile, schema, funcs, false); err != nil {
 		fmt.Fprintf(os.Stderr, "C++ Gen Error: %v\n", err)
