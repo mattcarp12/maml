@@ -2,6 +2,7 @@ runtime/.zig-cache
 runtime/zig-out
 runtime/zig-pkg
 build
+build-debug
 bin
 .cache
 lm_files

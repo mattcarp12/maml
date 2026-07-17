@@ -182,7 +182,7 @@ func (e *Exporter) MapCallInst(i *CallInst) map[string]any {
 	for _, arg := range i.Arguments {
 		args = append(args, buildValueDTO(arg, e.target))
 	}
-	return map[string]any{"op": "call_inst", "dst": i.Dst, "function": buildValueDTO(i.Function, e.target), "arguments": args, "type": lowerType(i.Type, e.target)}
+	return map[string]any{"op": "call_inst", "dst": i.Dst, "function": buildValueDTO(i.Function, e.target), "arguments": args, "type": lowerType(i.Type, e.target), "arg_consumed": []any{}}
 }
 func (e *Exporter) MapFieldAddrInst(i *FieldAddrInst) map[string]any {
 	m := map[string]any{
@@ -230,7 +230,7 @@ func (e *Exporter) MapLoadPtrInst(i *LoadPtrInst) map[string]any {
 	return map[string]any{"op": "load_ptr", "dst": i.Dst, "ptr": buildValueDTO(i.Ptr, e.target), "type": lowerType(i.Type, e.target)}
 }
 func (e *Exporter) MapStoreInst(i *StoreInst) map[string]any {
-	return map[string]any{"op": "store", "dst_ptr": i.DstPtr, "value": buildValueDTO(i.Value, e.target), "type": lowerType(i.Type, e.target)}
+	return map[string]any{"op": "store", "dst_ptr": buildValueDTO(i.DstPtr, e.target), "value": buildValueDTO(i.Value, e.target), "type": lowerType(i.Type, e.target)}
 }
 func (e *Exporter) MapCopyInst(i *CopyInst) map[string]any {
 	return map[string]any{"op": "copy", "dst": i.Dst, "src": i.Src}
@@ -272,6 +272,25 @@ func (e *Exporter) MapCoroSuspendTerminator(t *CoroSuspendTerminator) map[string
 }
 func (e *Exporter) MapCoroYieldTerminator(t *CoroYieldTerminator) map[string]any {
 	return map[string]any{"op": "coro_yield"}
+}
+func (e *Exporter) MapCoroPromisePtrInst(i *CoroPromisePtrInst) map[string]any {
+	return map[string]any{
+		"op":     "coro_promise_ptr",
+		"dst":    i.Dst,
+		"handle": buildValueDTO(i.Handle, e.target),
+		"type":   lowerType(i.Type, e.target),
+	}
+}
+func (e *Exporter) MapCoroFinalSuspendTerminator(t *CoroFinalSuspendTerminator) map[string]any {
+	m := map[string]any{
+		"op":            "coro_final_suspend",
+		"suspend_block": fmt.Sprintf("%d", t.SuspendBlock),
+		"cleanup_block": fmt.Sprintf("%d", t.CleanupBlock),
+	}
+	if t.Value != nil {
+		m["value"] = buildValueDTO(t.Value, e.target)
+	}
+	return m
 }
 
 func lowerType(t types.Type, target *Target) any {

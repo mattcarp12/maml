@@ -4,14 +4,14 @@ package hir
 import "github.com/mattcarp12/maml/frontend/tast"
 
 // Ensure Lowerer satisfies the TAST Mapper interface at compile time.
-var _ tast.Mapper[Node] = (*Lowerer)(nil)
+var _ tast.Mapper[Node] = (*TASTLowerer)(nil)
 
 // =============================================================================
 // Generated node lowering methods (Implementing tast.Mapper[hir.Node])
 // =============================================================================
 
 {{- range .Nodes }}{{- if .Lower }}
-func (l *Lowerer) Map{{ .Name }}(s *tast.{{ .Name }}) Node {
+func (l *TASTLowerer) Map{{ .Name }}(s *tast.{{ .Name }}) Node {
 	if s == nil {
 		return nil
 	}
@@ -51,7 +51,7 @@ func (l *Lowerer) Map{{ .Name }}(s *tast.{{ .Name }}) Node {
 // =============================================================================
 
 {{- range .Helpers }}{{- if .Lower }}
-func lowerTAST{{ .Name }}(l *Lowerer, h tast.{{ .Name }}) {{ .Name }} {
+func lowerTAST{{ .Name }}(l *TASTLowerer, h tast.{{ .Name }}) {{ .Name }} {
 	return {{ .Name }}{
 		Pos_: h.Pos_,
 		End_: h.End_,

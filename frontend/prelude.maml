@@ -1,0 +1,23 @@
+// I/O Functions
+extern fn maml_print(x string)
+extern fn maml_file_open(filename string) i32
+extern fn maml_file_close(fd i32)
+extern fn maml_file_read_str(fd i32) string
+extern fn maml_file_write_str(fd i32, msg string)
+
+fn print(x string) {
+    maml_print(x)
+}
+
+// Net 
+extern fn maml_socket(domain i32, typ i32, protocol i32) i32
+extern fn maml_bind(fd i32, port i32) i32
+extern fn maml_listen(fd i32, backlog i32) i32
+extern fn maml_accept(fd i32) i32
+extern fn maml_socket_read(fd i32, max_bytes i32) string
+
+// Built-in Functions
+extern fn len(ro x any) int
+extern fn delete(mut m Map<any,any>, ro v any)
+extern fn run_executor(own f Future<any>) any
+extern fn yield_now()

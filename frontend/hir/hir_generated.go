@@ -625,129 +625,129 @@ type Visitor interface {
 // Generic Mapper & Dispatcher
 // =============================================================================
 
-type Mapper[R any] interface {
-	MapAliasDecl(n *AliasDecl) R
-	MapArrayLiteral(n *ArrayLiteral) R
-	MapAssignStmt(n *AssignStmt) R
-	MapAwaitExpr(n *AwaitExpr) R
-	MapBlockStmt(n *BlockStmt) R
-	MapBoolLiteral(n *BoolLiteral) R
-	MapBreakStmt(n *BreakStmt) R
-	MapCallExpr(n *CallExpr) R
-	MapContinueStmt(n *ContinueStmt) R
-	MapDeclareStmt(n *DeclareStmt) R
-	MapExprStmt(n *ExprStmt) R
-	MapFieldAccess(n *FieldAccess) R
-	MapFnDecl(n *FnDecl) R
-	MapIdentifier(n *Identifier) R
-	MapIfExpr(n *IfExpr) R
-	MapIndexExpr(n *IndexExpr) R
-	MapInfixExpr(n *InfixExpr) R
-	MapIntLiteral(n *IntLiteral) R
-	MapLoopStmt(n *LoopStmt) R
-	MapMapInsertStmt(n *MapInsertStmt) R
-	MapMapLiteral(n *MapLiteral) R
-	MapMapReadExpr(n *MapReadExpr) R
-	MapPrefixExpr(n *PrefixExpr) R
-	MapProgram(n *Program) R
-	MapReturnStmt(n *ReturnStmt) R
-	MapSliceExpr(n *SliceExpr) R
-	MapSpawnExpr(n *SpawnExpr) R
-	MapStringLiteral(n *StringLiteral) R
-	MapStructLiteral(n *StructLiteral) R
-	MapTypeDecl(n *TypeDecl) R
-	MapVariantDiscriminantExpr(n *VariantDiscriminantExpr) R
-	MapVariantLiteral(n *VariantLiteral) R
-	MapVariantReadExpr(n *VariantReadExpr) R
-	MapVecLiteral(n *VecLiteral) R
-	MapVecPushStmt(n *VecPushStmt) R
-	MapVecReadExpr(n *VecReadExpr) R
-	MapVecWriteStmt(n *VecWriteStmt) R
-	MapYieldStmt(n *YieldStmt) R
+type Lowerer[R any] interface {
+	LowerAliasDecl(n *AliasDecl) R
+	LowerArrayLiteral(n *ArrayLiteral) R
+	LowerAssignStmt(n *AssignStmt) R
+	LowerAwaitExpr(n *AwaitExpr) R
+	LowerBlockStmt(n *BlockStmt) R
+	LowerBoolLiteral(n *BoolLiteral) R
+	LowerBreakStmt(n *BreakStmt) R
+	LowerCallExpr(n *CallExpr) R
+	LowerContinueStmt(n *ContinueStmt) R
+	LowerDeclareStmt(n *DeclareStmt) R
+	LowerExprStmt(n *ExprStmt) R
+	LowerFieldAccess(n *FieldAccess) R
+	LowerFnDecl(n *FnDecl) R
+	LowerIdentifier(n *Identifier) R
+	LowerIfExpr(n *IfExpr) R
+	LowerIndexExpr(n *IndexExpr) R
+	LowerInfixExpr(n *InfixExpr) R
+	LowerIntLiteral(n *IntLiteral) R
+	LowerLoopStmt(n *LoopStmt) R
+	LowerMapInsertStmt(n *MapInsertStmt) R
+	LowerMapLiteral(n *MapLiteral) R
+	LowerMapReadExpr(n *MapReadExpr) R
+	LowerPrefixExpr(n *PrefixExpr) R
+	LowerProgram(n *Program) R
+	LowerReturnStmt(n *ReturnStmt) R
+	LowerSliceExpr(n *SliceExpr) R
+	LowerSpawnExpr(n *SpawnExpr) R
+	LowerStringLiteral(n *StringLiteral) R
+	LowerStructLiteral(n *StructLiteral) R
+	LowerTypeDecl(n *TypeDecl) R
+	LowerVariantDiscriminantExpr(n *VariantDiscriminantExpr) R
+	LowerVariantLiteral(n *VariantLiteral) R
+	LowerVariantReadExpr(n *VariantReadExpr) R
+	LowerVecLiteral(n *VecLiteral) R
+	LowerVecPushStmt(n *VecPushStmt) R
+	LowerVecReadExpr(n *VecReadExpr) R
+	LowerVecWriteStmt(n *VecWriteStmt) R
+	LowerYieldStmt(n *YieldStmt) R
 }
 
-func MapNode[R any](node Node, m Mapper[R]) R {
+func LowerNode[R any](node Node, l Lowerer[R]) R {
 	if node == nil {
 		var zero R
 		return zero
 	}
 	switch n := node.(type) {
 	case *AliasDecl:
-		return m.MapAliasDecl(n)
+		return l.LowerAliasDecl(n)
 	case *ArrayLiteral:
-		return m.MapArrayLiteral(n)
+		return l.LowerArrayLiteral(n)
 	case *AssignStmt:
-		return m.MapAssignStmt(n)
+		return l.LowerAssignStmt(n)
 	case *AwaitExpr:
-		return m.MapAwaitExpr(n)
+		return l.LowerAwaitExpr(n)
 	case *BlockStmt:
-		return m.MapBlockStmt(n)
+		return l.LowerBlockStmt(n)
 	case *BoolLiteral:
-		return m.MapBoolLiteral(n)
+		return l.LowerBoolLiteral(n)
 	case *BreakStmt:
-		return m.MapBreakStmt(n)
+		return l.LowerBreakStmt(n)
 	case *CallExpr:
-		return m.MapCallExpr(n)
+		return l.LowerCallExpr(n)
 	case *ContinueStmt:
-		return m.MapContinueStmt(n)
+		return l.LowerContinueStmt(n)
 	case *DeclareStmt:
-		return m.MapDeclareStmt(n)
+		return l.LowerDeclareStmt(n)
 	case *ExprStmt:
-		return m.MapExprStmt(n)
+		return l.LowerExprStmt(n)
 	case *FieldAccess:
-		return m.MapFieldAccess(n)
+		return l.LowerFieldAccess(n)
 	case *FnDecl:
-		return m.MapFnDecl(n)
+		return l.LowerFnDecl(n)
 	case *Identifier:
-		return m.MapIdentifier(n)
+		return l.LowerIdentifier(n)
 	case *IfExpr:
-		return m.MapIfExpr(n)
+		return l.LowerIfExpr(n)
 	case *IndexExpr:
-		return m.MapIndexExpr(n)
+		return l.LowerIndexExpr(n)
 	case *InfixExpr:
-		return m.MapInfixExpr(n)
+		return l.LowerInfixExpr(n)
 	case *IntLiteral:
-		return m.MapIntLiteral(n)
+		return l.LowerIntLiteral(n)
 	case *LoopStmt:
-		return m.MapLoopStmt(n)
+		return l.LowerLoopStmt(n)
 	case *MapInsertStmt:
-		return m.MapMapInsertStmt(n)
+		return l.LowerMapInsertStmt(n)
 	case *MapLiteral:
-		return m.MapMapLiteral(n)
+		return l.LowerMapLiteral(n)
 	case *MapReadExpr:
-		return m.MapMapReadExpr(n)
+		return l.LowerMapReadExpr(n)
 	case *PrefixExpr:
-		return m.MapPrefixExpr(n)
+		return l.LowerPrefixExpr(n)
 	case *Program:
-		return m.MapProgram(n)
+		return l.LowerProgram(n)
 	case *ReturnStmt:
-		return m.MapReturnStmt(n)
+		return l.LowerReturnStmt(n)
 	case *SliceExpr:
-		return m.MapSliceExpr(n)
+		return l.LowerSliceExpr(n)
 	case *SpawnExpr:
-		return m.MapSpawnExpr(n)
+		return l.LowerSpawnExpr(n)
 	case *StringLiteral:
-		return m.MapStringLiteral(n)
+		return l.LowerStringLiteral(n)
 	case *StructLiteral:
-		return m.MapStructLiteral(n)
+		return l.LowerStructLiteral(n)
 	case *TypeDecl:
-		return m.MapTypeDecl(n)
+		return l.LowerTypeDecl(n)
 	case *VariantDiscriminantExpr:
-		return m.MapVariantDiscriminantExpr(n)
+		return l.LowerVariantDiscriminantExpr(n)
 	case *VariantLiteral:
-		return m.MapVariantLiteral(n)
+		return l.LowerVariantLiteral(n)
 	case *VariantReadExpr:
-		return m.MapVariantReadExpr(n)
+		return l.LowerVariantReadExpr(n)
 	case *VecLiteral:
-		return m.MapVecLiteral(n)
+		return l.LowerVecLiteral(n)
 	case *VecPushStmt:
-		return m.MapVecPushStmt(n)
+		return l.LowerVecPushStmt(n)
 	case *VecReadExpr:
-		return m.MapVecReadExpr(n)
+		return l.LowerVecReadExpr(n)
 	case *VecWriteStmt:
-		return m.MapVecWriteStmt(n)
+		return l.LowerVecWriteStmt(n)
 	case *YieldStmt:
-		return m.MapYieldStmt(n)
+		return l.LowerYieldStmt(n)
 	default:
 		panic("HIR Mapper Error: Unhandled node type in MapNode")
 	}

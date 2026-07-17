@@ -80,10 +80,11 @@ type BranchTerminator struct {
 func (*BranchTerminator) isTerminator() {}
 
 type CallInst struct {
-	Arguments []Value
-	Dst       string
-	Function  Value
-	Type      types.Type
+	ArgConsumed []bool
+	Arguments   []Value
+	Dst         string
+	Function    Value
+	Type        types.Type
 }
 
 func (*CallInst) isInstruction() {}
@@ -103,10 +104,26 @@ type CopyInst struct {
 
 func (*CopyInst) isInstruction() {}
 
+type CoroFinalSuspendTerminator struct {
+	CleanupBlock BlockID
+	SuspendBlock BlockID
+	Value        Value
+}
+
+func (*CoroFinalSuspendTerminator) isTerminator() {}
+
 type CoroPrologueInst struct {
 }
 
 func (*CoroPrologueInst) isInstruction() {}
+
+type CoroPromisePtrInst struct {
+	Dst    string
+	Handle Value
+	Type   types.Type
+}
+
+func (*CoroPromisePtrInst) isInstruction() {}
 
 type CoroSuspendTerminator struct {
 	CleanupBlock BlockID
@@ -191,7 +208,7 @@ type ReturnTerminator struct {
 func (*ReturnTerminator) isTerminator() {}
 
 type StoreInst struct {
-	DstPtr string
+	DstPtr Value
 	Type   types.Type
 	Value  Value
 }
@@ -234,7 +251,9 @@ type Mapper[R any] interface {
 	MapCallInst(n *CallInst) R
 	MapCastInst(n *CastInst) R
 	MapCopyInst(n *CopyInst) R
+	MapCoroFinalSuspendTerminator(n *CoroFinalSuspendTerminator) R
 	MapCoroPrologueInst(n *CoroPrologueInst) R
+	MapCoroPromisePtrInst(n *CoroPromisePtrInst) R
 	MapCoroSuspendTerminator(n *CoroSuspendTerminator) R
 	MapCoroYieldTerminator(n *CoroYieldTerminator) R
 	MapFieldAddrInst(n *FieldAddrInst) R
@@ -278,8 +297,12 @@ func MapNode[R any](node any, m Mapper[R]) R {
 		return m.MapCastInst(n)
 	case *CopyInst:
 		return m.MapCopyInst(n)
+	case *CoroFinalSuspendTerminator:
+		return m.MapCoroFinalSuspendTerminator(n)
 	case *CoroPrologueInst:
 		return m.MapCoroPrologueInst(n)
+	case *CoroPromisePtrInst:
+		return m.MapCoroPromisePtrInst(n)
 	case *CoroSuspendTerminator:
 		return m.MapCoroSuspendTerminator(n)
 	case *CoroYieldTerminator:

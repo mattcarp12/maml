@@ -81,13 +81,13 @@ type Visitor interface {
 // Generic Mapper & Dispatcher
 // =============================================================================
 
-type Mapper[R any] interface {
+type Lowerer[R any] interface {
 {{- range .Nodes }}
-	Map{{ .Name }}(n *{{ .Name }}) R
+	Lower{{ .Name }}(n *{{ .Name }}) R
 {{- end }}
 }
 
-func MapNode[R any](node Node, m Mapper[R]) R {
+func LowerNode[R any](node Node, l Lowerer[R]) R {
 	if node == nil {
 		var zero R
 		return zero
@@ -95,7 +95,7 @@ func MapNode[R any](node Node, m Mapper[R]) R {
 	switch n := node.(type) {
 {{- range .Nodes }}
 	case *{{ .Name }}:
-		return m.Map{{ .Name }}(n)
+		return l.Lower{{ .Name }}(n)
 {{- end }}
 	default:
 		panic("HIR Mapper Error: Unhandled node type in MapNode")

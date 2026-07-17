@@ -56,6 +56,9 @@ primitives:
   - name: unit
     kind: void
     size: 0
+  - name: Future
+    kind: pointer
+    size: 8
 
 # ----------------------------------------------------------------------------
 # 2. Compound Structures (Semantic Layouts & Memory Classes)
@@ -119,16 +122,14 @@ types:
       - name: "is_string_key"
         type: "bool"
 
-  - name: "Future"
-    passing_convention: by_reference
-    allocation: heap
-    is_borrow: false
-    is_copyable: false
-    fields:
-      - name: "state"
-        type: "ptr"
-      - name: "ready"
-        type: "bool"
+  # - name: "Future"
+  #   passing_convention: by_reference
+  #   allocation: heap
+  #   is_borrow: false
+  #   is_copyable: false
+  #   fields:
+  #     - name: "state"
+  #       type: "ptr"
 
   - name: "Ref"
     passing_convention: by_value
@@ -156,20 +157,20 @@ modules:
         args:
           - { name: "ptr", type: "?ptr" }
         return: { type: unit }
+      - symbol: "maml_realloc"
+        args:
+          - { name: "ptr", type: "ptr" }
+          - { name: "size", type: usize }
+        return: { type: "ptr" }
+      - symbol: "maml_calloc"
+        args:
+          - { name: "nmemb", type: usize }
+          - { name: "size", type: usize }
+        return: { type: "ptr" }
 
   # --- Vectors ---
   - module: "vec"
     definitions:
-      - symbol: "maml_vec_grow"
-        args:
-          - { name: "buffer", type: ptr }
-          - { name: "cap", type: u32, by_reference: true, mut: true }
-          - { name: "elem_size", type: u32 }
-        return: { type: ptr }
-      - symbol: "maml_vec_create"
-        args:
-          - { name: "elem_size", type: u32 }
-        return: { type: Vector }
       - symbol: "maml_vec_push"
         args:
           - { name: "vec", type: Vector, mut: true }
@@ -193,7 +194,6 @@ modules:
       - symbol: "maml_vec_clone"
         args:
           - { name: "vec", type: Vector }
-          - { name: "elem_size", type: usize }
         return: { type: Vector }
       - symbol: "maml_vec_free"
         args:
@@ -203,11 +203,6 @@ modules:
   # --- Map Operations ---
   - module: "map"
     definitions:
-      - symbol: "maml_map_create"
-        args:
-          - { name: "val_size", type: u32 }
-          - { name: "is_string_key", type: bool }
-        return: { type: Map }
       - symbol: "maml_map_put"
         args:
           - { name: "m", type: Map, mut: true }
@@ -263,6 +258,10 @@ modules:
           - { name: "str_ptr", type: "bytes_ptr" }
           - { name: "len", type: u32 }
         return: { type: ptr }
+      - symbol: "maml_str_len"
+        args:
+          - { name: "str", type: String }
+        return: { type: u32 }
 
   # --- Coroutine Executor ---
   - module: "coro"
@@ -272,40 +271,36 @@ modules:
         return: { type: unit }
       - symbol: "maml_coro_resume_helper"
         args:
-          - { name: "task", type: Future }
+          - { name: "task", type: ptr }
         return: { type: unit }
       - symbol: "maml_coro_done_helper"
         args:
-          - { name: "task", type: Future }
+          - { name: "task", type: ptr }
         return: { type: bool }
       - symbol: "maml_coro_destroy_helper"
         args:
-          - { name: "task", type: Future, mut: true }
+          - { name: "task", type: ptr, mut: true }
         return: { type: unit }
       - symbol: "maml_spawn_task"
         args:
-          - { name: "task", type: Future }
+          - { name: "task", type: ptr }
         return: { type: unit }
       - symbol: "maml_run_executor"
         args:
-          - { name: "task", type: Future }
-        return: { type: Future }
+          - { name: "task", type: ptr }
+        return: { type: ptr }
       - symbol: "maml_task_await"
         args:
-          - { name: "current_task", type: Future }
-          - { name: "target_task", type: Future }
+          - { name: "current_task", type: ptr }
+          - { name: "target_task", type: ptr }
         return: { type: unit }
       - symbol: "maml_task_release"
         args:
-          - { name: "task", type: Future, mut: true }
-        return: { type: unit }
-      - symbol: "maml_task_get_result"
-        args:
-          - { name: "task", type: Future }
+          - { name: "task", type: ptr, mut: true }
         return: { type: unit }
       - symbol: "maml_yield_now"
         args:
-          - { name: "task", type: Future }
+          - { name: "task", type: ptr }
         return: { type: unit }
 
   # --- IO ---
@@ -313,6 +308,51 @@ modules:
     definitions:
       - symbol: "maml_print"
         args:
-          - { name: "msg_ptr", type: ptr }
-          - { name: "msg_len", type: i32 }
+          - { name: "msg", type: String }
         return: { type: unit }
+      - symbol: "maml_file_open"
+        args:
+          - { name: filename, type: String }
+          # - { name: mode, type: String } // TODO: implement
+        return: { type: i32 }
+      - symbol: "maml_file_close"
+        args:
+          - { name: fd, type: i32 }
+        return: { type: unit }
+      - symbol: "maml_file_read_str"
+        args:
+          - { name: fd, type: i32 }
+        return: { type: String }
+      - symbol: "maml_file_write_str"
+        args:
+          - { name: fd, type: i32 }
+          - { name: msg, type: String }
+        return: { type: unit }
+
+  - module: "net"
+    definitions:
+      - symbol: "maml_socket"
+        args:
+          - { name: "domain", type: i32 }
+          - { name: "type", type: i32 }
+          - { name: "protocol", type: i32 }
+        return: { type: i32 }
+      - symbol: "maml_bind"
+        args:
+          - { name: "fd", type: i32 }
+          - { name: "port", type: i32 }
+        return: { type: i32 }
+      - symbol: "maml_listen"
+        args:
+          - { name: "fd", type: i32 }
+          - { name: "backlog", type: i32 }
+        return: { type: i32 }
+      - symbol: "maml_accept"
+        args:
+          - { name: "fd", type: i32 }
+        return: { type: i32 }
+      - symbol: "maml_socket_read"
+        args:
+          - { name: "fd", type: i32 }
+          - { name: "max_bytes", type: u32 }
+        return: { type: String }

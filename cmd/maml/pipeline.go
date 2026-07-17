@@ -1,4 +1,4 @@
-package driver
+package main
 
 import (
 	"bytes"
@@ -15,11 +15,11 @@ import (
 )
 
 // DefaultRuntimeLib gracefully handles being run from the CLI or inside tests
-var DefaultRuntimeLib = "./runtime/zig-out/lib/libmamlrt.a"
+var DefaultRuntimeLib = "./build/runtime/lib/libmamlrt.a"
 
 func init() {
 	if root := os.Getenv("MAML_ROOT"); root != "" {
-		DefaultRuntimeLib = filepath.Join(root, "runtime/zig-out/lib/libmamlrt.a")
+		DefaultRuntimeLib = filepath.Join(root, "build/runtime/lib/libmamlrt.a")
 	}
 }
 
@@ -35,7 +35,7 @@ type Pipeline struct {
 	cfg Config
 }
 
-func New(cfg Config) *Pipeline {
+func NewPipeline(cfg Config) *Pipeline {
 	if cfg.RuntimeLib == "" {
 		cfg.RuntimeLib = DefaultRuntimeLib
 	}
@@ -105,17 +105,25 @@ func (p *Pipeline) Build(srcPath string) error {
 
 	// 5. Clang Compilation & Linking
 	args := []string{
-		"-O2",
+		// "-O2",
+		"-Os", // optimize for size instead of speed
+		"--target=x86_64-linux-musl",
+		"-static",
+		"-ffunction-sections",
+		"-fdata-sections",
+		"-fno-rtti",
+		"-fno-exceptions",
+		"-flto",             // enable link-time optimization
+		"-fuse-ld=lld",      // use LLVM's linker for better cross-platform support
+		"-Wl,--gc-sections", // remove unused functions
+		"-Wl,-s",            // strip symbol table
 		"-Wno-override-module",
 		llPath,
 		p.cfg.RuntimeLib,
-		"-Wl,-z,noexecstack",
 		"-o", p.cfg.OutputPath,
-		"-lpthread", "-ldl", "-lm",
 	}
 
 	if p.cfg.Sanitize {
-		// Include -g and -fno-omit-frame-pointer for readable stack traces
 		args = append(args, "-fsanitize=address", "-g", "-fno-omit-frame-pointer")
 	}
 
@@ -156,72 +164,48 @@ func (p *Pipeline) Run(srcPath string) error {
 	return cmd.Run()
 }
 
-// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+// dumpJSON reads a file, compiles it with fn, and returns the JSON-marshalled result.
+func (p *Pipeline) dumpJSON(srcPath string, fn func(string) (any, error)) ([]byte, error) {
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
+	}
+
+	prog, err := fn(string(content))
+	if err != nil {
+		return nil, err
+	}
+
+	jsonBytes, err := json.Marshal(prog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize to JSON: %w", err)
+	}
+	return jsonBytes, nil
+}
+
+// DumpAST parses the target file and returns its JSON AST representation.
 func (p *Pipeline) DumpAST(srcPath string) ([]byte, error) {
-	content, err := os.ReadFile(srcPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
-	}
-
-	comp := frontend.New()
-	astProgram, err := comp.CompileAST(string(content))
-	if err != nil {
-		return nil, err
-	}
-
-	// MarshalIndent formats the JSON neatly for readable snapshot files.
-	// Struct fields marked with `json:"-"` (like Pos_ and End_) are automatically skipped.
-	jsonBytes, err := json.Marshal(astProgram)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
-	}
-
-	return jsonBytes, nil
+	return p.dumpJSON(srcPath, func(src string) (any, error) {
+		return frontend.New().CompileAST(src)
+	})
 }
 
-// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+// DumpTAST parses the target file and returns its JSON TAST representation.
 func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
-	content, err := os.ReadFile(srcPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
-	}
-
-	comp := frontend.New()
-	tastProgram, err := comp.CompileTAST(string(content))
-	if err != nil {
-		return nil, err
-	}
-
-	jsonBytes, err := json.Marshal(tastProgram)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
-	}
-
-	return jsonBytes, nil
+	return p.dumpJSON(srcPath, func(src string) (any, error) {
+		return frontend.New().CompileTAST(src)
+	})
 }
 
-// DumpAST parses the target file and returns its pretty-printed JSON AST representation.
+// DumpHIR parses the target file and returns its JSON HIR representation.
 func (p *Pipeline) DumpHIR(srcPath string) ([]byte, error) {
-	content, err := os.ReadFile(srcPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open source target %s: %w", srcPath, err)
-	}
-
-	comp := frontend.New()
-	tastProgram, err := comp.CompileTAST(string(content))
-	if err != nil {
-		return nil, err
-	}
-
-	hirLowerer := hir.NewLowerer()
-	hirProgram := hirLowerer.LowerProgram(tastProgram)
-
-	jsonBytes, err := json.Marshal(hirProgram)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize AST to JSON: %w", err)
-	}
-
-	return jsonBytes, nil
+	return p.dumpJSON(srcPath, func(src string) (any, error) {
+		tast, err := frontend.New().CompileTAST(src)
+		if err != nil {
+			return nil, err
+		}
+		return hir.NewTASTLowerer().LowerProgram(tast), nil
+	})
 }
 
 // DumpMIR translates the target file and returns its pretty-printed JSON MIR representation.
@@ -231,7 +215,6 @@ func (p *Pipeline) DumpMIR(srcPath string) ([]byte, error) {
 	if res == nil || res.MIR == nil {
 		return nil, err
 	}
-
 	return mir.MarshalProgram(res.MIR, &p.cfg.Target)
 }
 
@@ -279,58 +262,81 @@ func (p *Pipeline) DumpLLVM(srcPath string) ([]byte, error) {
 	return stdoutBuf.Bytes(), nil
 }
 
+// phaseSpec describes a dumpable compiler phase.
+type phaseSpec struct {
+	key   string
+	title string
+	fn    func(*Pipeline, string) ([]byte, error)
+}
+
+// allPhases defines the order and metadata for every dumpable phase.
+var allPhases = []phaseSpec{
+	{"source", "PHASE 0: SOURCE CODE", func(_ *Pipeline, src string) ([]byte, error) { return os.ReadFile(src) }},
+	{"ast", "PHASE 1: ABSTRACT SYNTAX TREE (AST)", (*Pipeline).DumpAST},
+	{"tast", "PHASE 2: TYPED ABSTRACT SYNTAX TREE (TAST)", (*Pipeline).DumpTAST},
+	{"hir", "PHASE 2.5: DESUGARED TAST (DTAST)", (*Pipeline).DumpHIR},
+	{"mir", "PHASE 3: MID-LEVEL IR (MIR)", (*Pipeline).DumpMIR},
+	{"llvm", "PHASE 4: LLVM IR", (*Pipeline).DumpLLVM},
+}
+
+// DumpPhases emits the requested compiler phases.
+// When multiple phases are requested, each is separated by a header banner.
+func (p *Pipeline) DumpPhases(srcPath string, requested []string) ([]byte, error) {
+	phaseMap := make(map[string]phaseSpec, len(allPhases))
+	for _, ph := range allPhases {
+		phaseMap[ph.key] = ph
+	}
+
+	var buf bytes.Buffer
+	multi := len(requested) > 1
+
+	for i, key := range requested {
+		ph, ok := phaseMap[key]
+		if !ok {
+			valid := make([]string, 0, len(phaseMap))
+			for k := range phaseMap {
+				valid = append(valid, k)
+			}
+			return nil, fmt.Errorf("unknown phase %q (valid: %s)", key, strings.Join(valid, ", "))
+		}
+
+		content, err := ph.fn(p, srcPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to dump %s: %w", key, err)
+		}
+
+		if multi {
+			title := ph.title
+			if key == "source" {
+				title = fmt.Sprintf("PHASE 0: SOURCE CODE (%s)", srcPath)
+			}
+			fmt.Fprintf(&buf, "// %s\n", strings.Repeat("=", 76))
+			fmt.Fprintf(&buf, "// %s\n", title)
+			fmt.Fprintf(&buf, "// %s\n\n", strings.Repeat("=", 76))
+		}
+
+		buf.Write(content)
+
+		if multi && i < len(requested)-1 {
+			buf.WriteString("\n\n")
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
 // DumpAll generates all compiler phases and writes them to a single file
 // segregated by clear header comments.
 func (p *Pipeline) DumpAll(srcPath string, outPath string) error {
-	// 1. Fetch all representations
-	srcBytes, err := os.ReadFile(srcPath)
+	keys := make([]string, 0, len(allPhases))
+	for _, ph := range allPhases {
+		keys = append(keys, ph.key)
+	}
+
+	out, err := p.DumpPhases(srcPath, keys)
 	if err != nil {
-		return fmt.Errorf("failed to read source: %w", err)
+		return err
 	}
 
-	astBytes, err := p.DumpAST(srcPath)
-	if err != nil {
-		return fmt.Errorf("failed to dump AST: %w", err)
-	}
-
-	tastBytes, err := p.DumpTAST(srcPath)
-	if err != nil {
-		return fmt.Errorf("failed to dump TAST: %w", err)
-	}
-
-	dtastBytes, err := p.DumpHIR(srcPath)
-	if err != nil {
-		return fmt.Errorf("failed to dump DTAST: %w", err)
-	}
-
-	mirBytes, err := p.DumpMIR(srcPath)
-	if err != nil {
-		return fmt.Errorf("failed to dump MIR: %w", err)
-	}
-
-	llvmBytes, err := p.DumpLLVM(srcPath)
-	if err != nil {
-		return fmt.Errorf("failed to dump LLVM IR: %w", err)
-	}
-
-	// 2. Format the output with segregation headers
-	var buf bytes.Buffer
-
-	writeSection := func(title string, content []byte) {
-		fmt.Fprintf(&buf, "// %s\n", strings.Repeat("=", 76))
-		fmt.Fprintf(&buf, "// %s\n", title)
-		fmt.Fprintf(&buf, "// %s\n\n", strings.Repeat("=", 76))
-		buf.Write(content)
-		buf.WriteString("\n\n")
-	}
-
-	writeSection(fmt.Sprintf("PHASE 0: SOURCE CODE (%s)", srcPath), srcBytes)
-	writeSection("PHASE 1: ABSTRACT SYNTAX TREE (AST)", astBytes)
-	writeSection("PHASE 2: TYPED ABSTRACT SYNTAX TREE (TAST)", tastBytes)
-	writeSection("PHASE 2.5: DESUGARED TAST (DTAST)", dtastBytes)
-	writeSection("PHASE 3: MID-LEVEL IR (MIR)", mirBytes)
-	writeSection("PHASE 4: LLVM IR", llvmBytes)
-
-	// 3. Write to the target file
-	return os.WriteFile(outPath, buf.Bytes(), 0644)
+	return os.WriteFile(outPath, out, 0644)
 }

@@ -42,12 +42,6 @@ namespace Map {
         IS_STRING_KEY
     };
 }
-namespace Future {
-    enum class Field : unsigned {
-        STATE,
-        READY
-    };
-}
 namespace Ref {
     enum class Field : unsigned {
         PTR,
@@ -74,10 +68,6 @@ inline llvm::StructType* getMapType(llvm::LLVMContext &C) {
     return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C)
     });
 }
-inline llvm::StructType* getFutureType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt1Ty(C)
-    });
-}
 inline llvm::StructType* getRefType(llvm::LLVMContext &C) {
     return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::PointerType::getUnqual(C)
     });
@@ -94,11 +84,11 @@ inline void declareRuntimeFunctions(CodegenContext &ctx) {
     M->getOrInsertFunction("maml_free",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
-    M->getOrInsertFunction("maml_vec_grow",
-        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+    M->getOrInsertFunction("maml_realloc",
+        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt64Ty(ctx.Context)
         }, false));
-    M->getOrInsertFunction("maml_vec_create",
-        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context)
+    M->getOrInsertFunction("maml_calloc",
+        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::Type::getInt64Ty(ctx.Context), llvm::Type::getInt64Ty(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_vec_push",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::PointerType::getUnqual(ctx.Context)
@@ -113,13 +103,10 @@ inline void declareRuntimeFunctions(CodegenContext &ctx) {
         llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_vec_clone",
-        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt64Ty(ctx.Context)
+        llvm::FunctionType::get(rt::getVectorType(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_vec_free",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
-        }, false));
-    M->getOrInsertFunction("maml_map_create",
-        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt1Ty(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_map_put",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context), llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context), llvm::PointerType::getUnqual(ctx.Context)
@@ -134,7 +121,7 @@ inline void declareRuntimeFunctions(CodegenContext &ctx) {
         llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_map_clone",
-        llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
+        llvm::FunctionType::get(rt::getMapType(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_map_free",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
@@ -147,6 +134,9 @@ inline void declareRuntimeFunctions(CodegenContext &ctx) {
         }, false));
     M->getOrInsertFunction("maml_str_clone",
         llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_str_len",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {rt::getStringType(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_coro_runtime_init",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {
@@ -172,14 +162,38 @@ inline void declareRuntimeFunctions(CodegenContext &ctx) {
     M->getOrInsertFunction("maml_task_release",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
-    M->getOrInsertFunction("maml_task_get_result",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
-        }, false));
     M->getOrInsertFunction("maml_yield_now",
         llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context)
         }, false));
     M->getOrInsertFunction("maml_print",
-        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {rt::getStringType(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_file_open",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {rt::getStringType(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_file_close",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_file_read_str",
+        llvm::FunctionType::get(rt::getStringType(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_file_write_str",
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), rt::getStringType(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_socket",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_bind",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_listen",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_accept",
+        llvm::FunctionType::get(llvm::Type::getInt32Ty(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context)
+        }, false));
+    M->getOrInsertFunction("maml_socket_read",
+        llvm::FunctionType::get(rt::getStringType(ctx.Context), {llvm::Type::getInt32Ty(ctx.Context), llvm::Type::getInt32Ty(ctx.Context)
         }, false));
 }
 

@@ -133,6 +133,7 @@
         "Dst": "string",
         "Function": "Value",
         "Arguments": "[]Value",
+        "ArgConsumed": "[]bool",
         "Type": "types.Type"
       }
     },
@@ -164,7 +165,7 @@
       ],
       "opcode": "store",
       "fields": {
-        "DstPtr": "string",
+        "DstPtr": "Value",
         "Value": "Value",
         "Type": "types.Type"
       }
@@ -207,6 +208,17 @@
       ],
       "opcode": "coro_prologue",
       "fields": {}
+    },
+    "CoroPromisePtrInst": {
+      "interfaces": [
+        "Instruction"
+      ],
+      "opcode": "coro_promise_ptr",
+      "fields": {
+        "Dst": "string",
+        "Handle": "Value",
+        "Type": "types.Type"
+      }
     },
     "KeepAliveInst": {
       "interfaces": [
@@ -270,6 +282,17 @@
         "Terminator"
       ],
       "opcode": "coro_yield"
+    },
+    "CoroFinalSuspendTerminator": {
+      "interfaces": [
+        "Terminator"
+      ],
+      "opcode": "coro_final_suspend",
+      "fields": {
+        "Value": "Value",
+        "SuspendBlock": "BlockID",
+        "CleanupBlock": "BlockID"
+      }
     }
   },
   "helpers": {}

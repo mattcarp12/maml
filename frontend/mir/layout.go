@@ -17,6 +17,12 @@ var DefaultTarget = &Target{
 	IntSize:      8,
 }
 
+// TODO - Figure out better place to put these.
+const (
+	FUTURE_SIZE  = 8
+	FUTURE_ALIGN = 8
+)
+
 // ============================================================================
 // Public Layout API
 // ============================================================================
@@ -225,13 +231,6 @@ func FieldOffsetBuiltin(t types.Type, fieldName string) int {
 			return MAP_VAL_SIZE_OFFSET
 		case "is_string_key":
 			return MAP_IS_STRING_KEY_OFFSET
-		}
-	case *types.FutureType:
-		switch fieldName {
-		case "state":
-			return FUTURE_STATE_OFFSET
-		case "ready":
-			return FUTURE_READY_OFFSET
 		}
 	case *types.RefType:
 		switch fieldName {

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mattcarp12/maml/driver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +25,16 @@ func TestEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, matches)
 
-	d := driver.New(driver.Config{})
+	// Resolve the maml binary path using the Makefile's environment variable
+	mamlRoot := os.Getenv("MAML_ROOT")
+	if mamlRoot == "" {
+		mamlRoot = "../.." // Fallback if run directly via go test outside of make
+	}
+	mamlBin := filepath.Join(mamlRoot, "bin", "maml")
+
+	// Ensure the binary exists before running tests
+	_, err = os.Stat(mamlBin)
+	require.NoError(t, err, "maml binary not found at %s. Run 'make frontend' first.", mamlBin)
 
 	for _, srcPath := range matches {
 		testName := strings.TrimSuffix(filepath.Base(srcPath), ".maml")
@@ -40,16 +48,21 @@ func TestEndToEnd(t *testing.T) {
 			expectedOut := parseExpectedOutput(src)
 			expectedErr := parseExpectedError(src)
 
-			binPath, compileErr := d.BuildTemporary(srcPath)
+			// Use t.TempDir() for automatic cleanup instead of manual defer os.Remove
+			tempDir := t.TempDir()
+			binPath := filepath.Join(tempDir, "maml_bin_tmp")
+
+			// Execute the CLI binary to build the temporary executable
+			cmd := exec.Command(mamlBin, "build", srcPath, "--out", binPath)
+			compileOutput, compileErr := cmd.CombinedOutput()
 
 			if expectedErr != "" {
-				require.Error(t, compileErr)
-				assert.Contains(t, compileErr.Error(), strings.TrimSpace(expectedErr))
+				require.Error(t, compileErr, "expected compilation to fail, but it succeeded")
+				assert.Contains(t, string(compileOutput), strings.TrimSpace(expectedErr))
 				return
 			}
 
-			require.NoError(t, compileErr)
-			defer os.Remove(binPath)
+			require.NoError(t, compileErr, "unexpected compilation error:\n%s", string(compileOutput))
 
 			actualExit, actualOut := runBinary(t, binPath)
 

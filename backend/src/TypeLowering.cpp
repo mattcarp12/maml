@@ -38,6 +38,8 @@ struct TypeVisitor {
   llvm::Type* operator()(const AnyType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const PtrType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const CharType&) { return llvm::Type::getInt32Ty(ctx.Context); }
+  llvm::Type* operator()(const FutureType&) { return llvm::PointerType::getUnqual(ctx.Context); }
+
   llvm::Type* operator()(const UnknownType&) {
     ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
     return nullptr;
@@ -45,36 +47,10 @@ struct TypeVisitor {
 
   // --- Runtime compound types now use the generated, schema‑driven builders ---
   llvm::Type* operator()(const StringType&) { return rt::getStringType(ctx.Context); }
-
   llvm::Type* operator()(const ViewType&) { return rt::getViewType(ctx.Context); }
-
-  llvm::Type* operator()(const VectorType&) {
-    // Full Vector struct: { buffer, cap, len, elem_size }
-    // return rt::getVectorType(ctx.Context);
-
-    // The runtime allocates the Vector header on the heap and returns a pointer.
-    // Therefore, the local variable should just be a pointer to that header.
-    return llvm::PointerType::getUnqual(ctx.Context);
-  }
-
-  llvm::Type* operator()(const MapType&) {
-    // // Full Map struct: { entries, count, tombstone_count, cap, val_size, is_string_key }
-    // return rt::getMapType(ctx.Context);
-
-    // The runtime allocates the Vector header on the heap and returns a pointer.
-    // Therefore, the local variable should just be a pointer to that header.
-    return llvm::PointerType::getUnqual(ctx.Context);
-  }
-
-  llvm::Type* operator()(const FutureType&) {
-    // Future struct: { state, ready }
-    return rt::getFutureType(ctx.Context);
-  }
-
-  llvm::Type* operator()(const RefType&) {
-    // Ref struct: { ptr, refcount }
-    return rt::getRefType(ctx.Context);
-  }
+  llvm::Type* operator()(const VectorType&) { return rt::getVectorType(ctx.Context); }
+  llvm::Type* operator()(const MapType&) { return rt::getMapType(ctx.Context); }
+  llvm::Type* operator()(const RefType&) { return rt::getRefType(ctx.Context); }
 
   // --- Composites ---
   llvm::Type* operator()(const StructType& t) {
@@ -151,7 +127,6 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const std::shared_ptr<maml::Type>& 
   return llvmTypeForVariant(ctx, *type);
 }
 
-// 1. Add this function alongside your existing llvmTypeFor
 llvm::Type* llvmLayoutTypeFor(CodegenContext& ctx, const std::shared_ptr<maml::Type>& type) {
   if (!type) {
     ctx.Error.fatal("llvmLayoutTypeFor: null type");
@@ -167,9 +142,6 @@ llvm::Type* llvmLayoutTypeFor(CodegenContext& ctx, const std::shared_ptr<maml::T
   }
   if (std::holds_alternative<maml::ViewType>(type->inner)) {
     return rt::getViewType(ctx.Context);
-  }
-  if (std::holds_alternative<maml::FutureType>(type->inner)) {
-    return rt::getFutureType(ctx.Context);
   }
   if (std::holds_alternative<maml::RefType>(type->inner)) {
     return rt::getRefType(ctx.Context);

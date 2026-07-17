@@ -7,15 +7,15 @@ import (
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
-type Lowerer struct{}
+type TASTLowerer struct{}
 
-func NewLowerer() *Lowerer { return &Lowerer{} }
+func NewTASTLowerer() *TASTLowerer { return &TASTLowerer{} }
 
 // =============================================================================
 // Strongly-Typed Entry Points & Wrappers
 // =============================================================================
 
-func (l *Lowerer) LowerProgram(prog *tast.Program) *Program {
+func (l *TASTLowerer) LowerProgram(prog *tast.Program) *Program {
 	if prog == nil {
 		return nil
 	}
@@ -30,28 +30,28 @@ func (l *Lowerer) LowerProgram(prog *tast.Program) *Program {
 
 // These wrappers use the generated generic dispatcher to cast the returned Node
 // to the specific HIR interface required by the structs.
-func (l *Lowerer) lowerDecl(decl tast.Decl) Decl {
+func (l *TASTLowerer) lowerDecl(decl tast.Decl) Decl {
 	if res := tast.MapNode(decl, l); res != nil {
 		return res.(Decl)
 	}
 	return nil
 }
 
-func (l *Lowerer) lowerStmt(stmt tast.Stmt) Stmt {
+func (l *TASTLowerer) lowerStmt(stmt tast.Stmt) Stmt {
 	if res := tast.MapNode(stmt, l); res != nil {
 		return res.(Stmt)
 	}
 	return nil
 }
 
-func (l *Lowerer) lowerExpr(expr tast.Expr) Expr {
+func (l *TASTLowerer) lowerExpr(expr tast.Expr) Expr {
 	if res := tast.MapNode(expr, l); res != nil {
 		return res.(Expr)
 	}
 	return nil
 }
 
-func (l *Lowerer) lowerBlockStmt(s *tast.BlockStmt) *BlockStmt {
+func (l *TASTLowerer) lowerBlockStmt(s *tast.BlockStmt) *BlockStmt {
 	// Catch the typed nil before it hits the generic dispatcher!
 	if s == nil {
 		return nil
@@ -62,7 +62,7 @@ func (l *Lowerer) lowerBlockStmt(s *tast.BlockStmt) *BlockStmt {
 	return nil
 }
 
-func (l *Lowerer) lowerIdentifier(ident *tast.Identifier) *Identifier {
+func (l *TASTLowerer) lowerIdentifier(ident *tast.Identifier) *Identifier {
 	if ident == nil {
 		return nil
 	}
@@ -76,7 +76,7 @@ func (l *Lowerer) lowerIdentifier(ident *tast.Identifier) *Identifier {
 // Manual Mappers (Implementing tast.Mapper[Node])
 // =============================================================================
 
-func (l *Lowerer) MapFnDecl(fn *tast.FnDecl) Node {
+func (l *TASTLowerer) MapFnDecl(fn *tast.FnDecl) Node {
 	hirParams := make([]*Param, len(fn.Params))
 	for i, p := range fn.Params {
 		hirParams[i] = &Param{
@@ -99,7 +99,7 @@ func (l *Lowerer) MapFnDecl(fn *tast.FnDecl) Node {
 	return hirFn
 }
 
-func (l *Lowerer) MapTypeDecl(td *tast.TypeDecl) Node {
+func (l *TASTLowerer) MapTypeDecl(td *tast.TypeDecl) Node {
 	var hirIdent *Identifier
 	if td.Name != nil {
 		hirIdent = l.lowerIdentifier(td.Name)
@@ -109,7 +109,7 @@ func (l *Lowerer) MapTypeDecl(td *tast.TypeDecl) Node {
 	}
 }
 
-func (l *Lowerer) MapBlockStmt(block *tast.BlockStmt) Node {
+func (l *TASTLowerer) MapBlockStmt(block *tast.BlockStmt) Node {
 	// Defensive guard just in case!
 	if block == nil {
 		return nil
@@ -123,7 +123,7 @@ func (l *Lowerer) MapBlockStmt(block *tast.BlockStmt) Node {
 	return &BlockStmt{Pos_: block.Pos_, End_: block.End_, Statements: hirStmts}
 }
 
-func (l *Lowerer) MapAssignStmt(s *tast.AssignStmt) Node {
+func (l *TASTLowerer) MapAssignStmt(s *tast.AssignStmt) Node {
 	hirLValue := l.lowerExpr(s.LValue)
 	hirRValue := l.lowerExpr(s.RValue)
 
@@ -138,11 +138,11 @@ func (l *Lowerer) MapAssignStmt(s *tast.AssignStmt) Node {
 	return &AssignStmt{Pos_: s.Pos_, LValue: hirLValue, RValue: hirRValue, Operator: s.Operator}
 }
 
-func (l *Lowerer) MapVecPushStmt(s *tast.VecPushStmt) Node {
+func (l *TASTLowerer) MapVecPushStmt(s *tast.VecPushStmt) Node {
 	return &VecPushStmt{Pos_: s.Pos_, Vec: l.lowerExpr(s.LValue), Value: l.lowerExpr(s.RValue)}
 }
 
-func (l *Lowerer) MapExprStmt(s *tast.ExprStmt) Node {
+func (l *TASTLowerer) MapExprStmt(s *tast.ExprStmt) Node {
 	loweredExpr := l.lowerExpr(s.Value)
 	if stmtLike, isStmt := loweredExpr.(Stmt); isStmt {
 		return stmtLike
@@ -150,7 +150,7 @@ func (l *Lowerer) MapExprStmt(s *tast.ExprStmt) Node {
 	return &ExprStmt{Pos_: s.Pos_, Value: loweredExpr}
 }
 
-func (l *Lowerer) MapForStmt(s *tast.ForStmt) Node {
+func (l *TASTLowerer) MapForStmt(s *tast.ForStmt) Node {
 	var hirInit Stmt
 	if s.Init != nil {
 		hirInit = l.lowerStmt(s.Init)
@@ -167,7 +167,7 @@ func (l *Lowerer) MapForStmt(s *tast.ForStmt) Node {
 	return &BlockStmt{Pos_: s.Pos_, End_: s.Body.End(), Statements: []Stmt{hirInit, loop}}
 }
 
-func (l *Lowerer) MapInfixExpr(e *tast.InfixExpr) Node {
+func (l *TASTLowerer) MapInfixExpr(e *tast.InfixExpr) Node {
 	left := l.lowerExpr(e.Left)
 	right := l.lowerExpr(e.Right)
 
@@ -187,7 +187,7 @@ func (l *Lowerer) MapInfixExpr(e *tast.InfixExpr) Node {
 	return &InfixExpr{Pos_: e.Pos_, Operator: e.Operator, Left: left, Right: right, Type: e.Type}
 }
 
-func (l *Lowerer) MapCallExpr(e *tast.CallExpr) Node {
+func (l *TASTLowerer) MapCallExpr(e *tast.CallExpr) Node {
 	hirArgs := make([]CallArg, len(e.Arguments))
 	for i, arg := range e.Arguments {
 		hirArgs[i] = CallArg{
@@ -205,7 +205,7 @@ func (l *Lowerer) MapCallExpr(e *tast.CallExpr) Node {
 	}
 }
 
-func (l *Lowerer) MapIndexExpr(idx *tast.IndexExpr) Node {
+func (l *TASTLowerer) MapIndexExpr(idx *tast.IndexExpr) Node {
 	left := l.lowerExpr(idx.Left)
 	index := l.lowerExpr(idx.Index)
 	switch tast.TypeOf(idx.Left).(type) {
@@ -218,11 +218,11 @@ func (l *Lowerer) MapIndexExpr(idx *tast.IndexExpr) Node {
 	}
 }
 
-func (l *Lowerer) MapFieldAccess(e *tast.FieldAccess) Node {
+func (l *TASTLowerer) MapFieldAccess(e *tast.FieldAccess) Node {
 	return &FieldAccess{Pos_: e.Pos_, Object: l.lowerExpr(e.Object), Field: l.lowerIdentifier(e.Field), Type: e.Type}
 }
 
-func (l *Lowerer) MapStructLiteral(e *tast.StructLiteral) Node {
+func (l *TASTLowerer) MapStructLiteral(e *tast.StructLiteral) Node {
 	fields := make([]StructField, len(e.Fields))
 	for i, f := range e.Fields {
 		fields[i] = StructField{Pos_: f.Pos_, Key: l.lowerIdentifier(f.Key.(*tast.Identifier)), Value: l.lowerExpr(f.Value)}
@@ -230,7 +230,7 @@ func (l *Lowerer) MapStructLiteral(e *tast.StructLiteral) Node {
 	return &StructLiteral{Pos_: e.Pos_, End_: e.End_, Fields: fields, Type: e.Type}
 }
 
-func (l *Lowerer) MapMapLiteral(e *tast.MapLiteral) Node {
+func (l *TASTLowerer) MapMapLiteral(e *tast.MapLiteral) Node {
 	elements := make([]MapElement, len(e.Elements))
 	for i, el := range e.Elements {
 		elements[i] = lowerTASTMapElement(l, el)
@@ -238,7 +238,7 @@ func (l *Lowerer) MapMapLiteral(e *tast.MapLiteral) Node {
 	return &MapLiteral{Pos_: e.Pos_, End_: e.End_, Elements: elements, Type: e.Type}
 }
 
-func (l *Lowerer) MapVariantLiteral(e *tast.VariantLiteral) Node {
+func (l *TASTLowerer) MapVariantLiteral(e *tast.VariantLiteral) Node {
 	args := make([]Expr, len(e.Arguments))
 	for i, arg := range e.Arguments {
 		args[i] = l.lowerExpr(arg)
@@ -250,7 +250,7 @@ func (l *Lowerer) MapVariantLiteral(e *tast.VariantLiteral) Node {
 	return &VariantLiteral{Pos_: e.Pos_, End_: e.End_, Variant: e.Variant, Arguments: args, Fields: fields, Type: e.Type}
 }
 
-func (l *Lowerer) MapMatchExpr(e *tast.MatchExpr) Node {
+func (l *TASTLowerer) MapMatchExpr(e *tast.MatchExpr) Node {
 	if e == nil {
 		return nil
 	}
@@ -271,7 +271,7 @@ func (l *Lowerer) MapMatchExpr(e *tast.MatchExpr) Node {
 	return outerBlock
 }
 
-func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifier, subjectType types.Type) (Expr, []Stmt) {
+func (l *TASTLowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifier, subjectType types.Type) (Expr, []Stmt) {
 	var bodyStmts []Stmt
 
 	loweredBodyExpr := l.lowerExpr(arm.Body)
@@ -352,7 +352,7 @@ func (l *Lowerer) lowerMatchArmPattern(arm tast.MatchArm, subjectIdent *Identifi
 	return condition, bodyStmts
 }
 
-func (l *Lowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt, next Expr, exprType types.Type) Expr {
+func (l *TASTLowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt, next Expr, exprType types.Type) Expr {
 	if next == nil {
 		return conseq
 	}
@@ -368,7 +368,7 @@ func (l *Lowerer) chainIfCascade(arm tast.MatchArm, cond Expr, conseq *BlockStmt
 	return &IfExpr{Pos_: arm.Pos_, Condition: cond, Consequence: conseq, Alternative: altBlock, Type: exprType}
 }
 
-func (l *Lowerer) hoistMatchSubject(subject tast.Expr, subjectType types.Type, outerBlock *BlockStmt) *Identifier {
+func (l *TASTLowerer) hoistMatchSubject(subject tast.Expr, subjectType types.Type, outerBlock *BlockStmt) *Identifier {
 	sym := &types.Symbol{Kind: types.VarSymbol, Name: "$match_subject", Type: subjectType, Mutable: false}
 	ident := &Identifier{Pos_: subject.Pos(), End_: subject.End(), Value: "$match_subject", Type: subjectType, Symbol: sym}
 	outerBlock.Statements = append(outerBlock.Statements, &DeclareStmt{Pos_: subject.Pos(), Value: l.lowerExpr(subject), Symbol: sym})
@@ -379,9 +379,9 @@ func (l *Lowerer) hoistMatchSubject(subject tast.Expr, subjectType types.Type, o
 // Interface Satisfiers for Non-Dispatched Nodes
 // =============================================================================
 // These nodes are evaluated contextually, not via generic dispatch.
-func (l *Lowerer) MapProgram(p *tast.Program) Node                     { return nil }
-func (l *Lowerer) MapWildcardPattern(p *tast.WildcardPattern) Node     { return nil }
-func (l *Lowerer) MapIdentifierPattern(p *tast.IdentifierPattern) Node { return nil }
-func (l *Lowerer) MapLiteralPattern(p *tast.LiteralPattern) Node       { return nil }
-func (l *Lowerer) MapCompositePattern(p *tast.CompositePattern) Node   { return nil }
-func (l *Lowerer) MapVariantPattern(p *tast.VariantPattern) Node       { return nil }
+func (l *TASTLowerer) MapProgram(p *tast.Program) Node                     { return nil }
+func (l *TASTLowerer) MapWildcardPattern(p *tast.WildcardPattern) Node     { return nil }
+func (l *TASTLowerer) MapIdentifierPattern(p *tast.IdentifierPattern) Node { return nil }
+func (l *TASTLowerer) MapLiteralPattern(p *tast.LiteralPattern) Node       { return nil }
+func (l *TASTLowerer) MapCompositePattern(p *tast.CompositePattern) Node   { return nil }
+func (l *TASTLowerer) MapVariantPattern(p *tast.VariantPattern) Node       { return nil }

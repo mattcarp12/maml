@@ -60,6 +60,7 @@ struct BitcastPtrInst {
     std::shared_ptr<maml::Type> type;
 };
 struct CallInst {
+    std::vector<bool> arg_consumed;
     std::vector<Value> arguments;
     std::string dst;
     Value function;
@@ -75,6 +76,11 @@ struct CopyInst {
     std::string src;
 };
 struct CoroPrologueInst {
+};
+struct CoroPromisePtrInst {
+    std::string dst;
+    Value handle;
+    std::shared_ptr<maml::Type> type;
 };
 struct FieldAddrInst {
     std::string dst;
@@ -102,7 +108,7 @@ struct MoveInst {
     std::string src;
 };
 struct StoreInst {
-    std::string dst_ptr;
+    Value dst_ptr;
     std::shared_ptr<maml::Type> type;
     Value value;
 };
@@ -113,7 +119,7 @@ struct UnaryOpInst {
     std::shared_ptr<maml::Type> type;
 };
 
-using InstVariant = std::variant<AddressOfInst, AssignInst, BinaryOpInst, BitcastPtrInst, CallInst, CastInst, CopyInst, CoroPrologueInst, FieldAddrInst, IndexAddrInst, LoadPtrInst, MoveInst, StoreInst, UnaryOpInst
+using InstVariant = std::variant<AddressOfInst, AssignInst, BinaryOpInst, BitcastPtrInst, CallInst, CastInst, CopyInst, CoroPrologueInst, CoroPromisePtrInst, FieldAddrInst, IndexAddrInst, LoadPtrInst, MoveInst, StoreInst, UnaryOpInst
 >;
 
 struct Instruction {
@@ -123,6 +129,11 @@ struct BranchTerminator {
     Value condition;
     std::string false_target;
     std::string true_target;
+};
+struct CoroFinalSuspendTerminator {
+    std::string cleanup_block;
+    std::string suspend_block;
+    Value value;
 };
 struct CoroSuspendTerminator {
     std::string cleanup_block;
@@ -140,7 +151,7 @@ struct ReturnTerminator {
 struct UnreachableTerminator {
 };
 
-using TermVariant = std::variant<BranchTerminator, CoroSuspendTerminator, CoroYieldTerminator, JumpTerminator, ReturnTerminator, UnreachableTerminator
+using TermVariant = std::variant<BranchTerminator, CoroFinalSuspendTerminator, CoroSuspendTerminator, CoroYieldTerminator, JumpTerminator, ReturnTerminator, UnreachableTerminator
 >;
 
 struct Terminator {
@@ -189,6 +200,7 @@ void from_json(const nlohmann::json& j, CallInst& t);
 void from_json(const nlohmann::json& j, CastInst& t);
 void from_json(const nlohmann::json& j, CopyInst& t);
 void from_json(const nlohmann::json& j, CoroPrologueInst& t);
+void from_json(const nlohmann::json& j, CoroPromisePtrInst& t);
 void from_json(const nlohmann::json& j, FieldAddrInst& t);
 void from_json(const nlohmann::json& j, IndexAddrInst& t);
 void from_json(const nlohmann::json& j, LoadPtrInst& t);
@@ -196,6 +208,7 @@ void from_json(const nlohmann::json& j, MoveInst& t);
 void from_json(const nlohmann::json& j, StoreInst& t);
 void from_json(const nlohmann::json& j, UnaryOpInst& t);
 void from_json(const nlohmann::json& j, BranchTerminator& t);
+void from_json(const nlohmann::json& j, CoroFinalSuspendTerminator& t);
 void from_json(const nlohmann::json& j, CoroSuspendTerminator& t);
 void from_json(const nlohmann::json& j, CoroYieldTerminator& t);
 void from_json(const nlohmann::json& j, JumpTerminator& t);
@@ -290,6 +303,9 @@ inline void from_json(const nlohmann::json& j, BitcastPtrInst& t) {
     }
 }
 inline void from_json(const nlohmann::json& j, CallInst& t) {
+    if (j.contains("arg_consumed") && !j.at("arg_consumed").is_null()) {
+        j.at("arg_consumed").get_to(t.arg_consumed);
+    }
     if (j.contains("arguments") && !j.at("arguments").is_null()) {
         j.at("arguments").get_to(t.arguments);
     }
@@ -323,6 +339,17 @@ inline void from_json(const nlohmann::json& j, CopyInst& t) {
     }
 }
 inline void from_json(const nlohmann::json& j, CoroPrologueInst& t) {
+}
+inline void from_json(const nlohmann::json& j, CoroPromisePtrInst& t) {
+    if (j.contains("dst") && !j.at("dst").is_null()) {
+        j.at("dst").get_to(t.dst);
+    }
+    if (j.contains("handle") && !j.at("handle").is_null()) {
+        j.at("handle").get_to(t.handle);
+    }
+    if (j.contains("type") && !j.at("type").is_null()) {
+        j.at("type").get_to(t.type);
+    }
 }
 inline void from_json(const nlohmann::json& j, FieldAddrInst& t) {
     if (j.contains("dst") && !j.at("dst").is_null()) {
@@ -419,6 +446,17 @@ inline void from_json(const nlohmann::json& j, BranchTerminator& t) {
         j.at("true_target").get_to(t.true_target);
     }
 }
+inline void from_json(const nlohmann::json& j, CoroFinalSuspendTerminator& t) {
+    if (j.contains("cleanup_block") && !j.at("cleanup_block").is_null()) {
+        j.at("cleanup_block").get_to(t.cleanup_block);
+    }
+    if (j.contains("suspend_block") && !j.at("suspend_block").is_null()) {
+        j.at("suspend_block").get_to(t.suspend_block);
+    }
+    if (j.contains("value") && !j.at("value").is_null()) {
+        j.at("value").get_to(t.value);
+    }
+}
 inline void from_json(const nlohmann::json& j, CoroSuspendTerminator& t) {
     if (j.contains("cleanup_block") && !j.at("cleanup_block").is_null()) {
         j.at("cleanup_block").get_to(t.cleanup_block);
@@ -493,6 +531,7 @@ inline void from_json(const nlohmann::json& j, Instruction& inst) {
     if (op == "cast") { inst.inner = j.get<CastInst>(); return; }
     if (op == "copy") { inst.inner = j.get<CopyInst>(); return; }
     if (op == "coro_prologue") { inst.inner = j.get<CoroPrologueInst>(); return; }
+    if (op == "coro_promise_ptr") { inst.inner = j.get<CoroPromisePtrInst>(); return; }
     if (op == "field_addr") { inst.inner = j.get<FieldAddrInst>(); return; }
     if (op == "index_addr") { inst.inner = j.get<IndexAddrInst>(); return; }
     if (op == "load_ptr") { inst.inner = j.get<LoadPtrInst>(); return; }
@@ -506,6 +545,7 @@ inline void from_json(const nlohmann::json& j, Terminator& term) {
     if (j.is_null()) return;
     auto op = j.at("op").get<std::string>();
     if (op == "cond_br") { term.inner = j.get<BranchTerminator>(); return; }
+    if (op == "coro_final_suspend") { term.inner = j.get<CoroFinalSuspendTerminator>(); return; }
     if (op == "coro_suspend") { term.inner = j.get<CoroSuspendTerminator>(); return; }
     if (op == "coro_yield") { term.inner = j.get<CoroYieldTerminator>(); return; }
     if (op == "br") { term.inner = j.get<JumpTerminator>(); return; }

@@ -4,9 +4,6 @@
 namespace maml {
 namespace rt {
 
-constexpr const char* TASK_AWAIT = "maml_task_await";
-constexpr const char* YIELD_NOW = "maml_yield_now";
-constexpr const char* TASK_GET_RESULT = "maml_task_get_result";
 constexpr const char* CORO_RESUME_HELPER = "maml_coro_resume_helper";
 constexpr const char* CORO_DONE_HELPER = "maml_coro_done_helper";
 constexpr const char* CORO_DESTROY_HELPER = "maml_coro_destroy_helper";

@@ -75,12 +75,15 @@ void handle(CodegenContext &ctx, const mir::LoadPtrInst &inst) {
 
 void handle(CodegenContext &ctx, const mir::StoreInst &inst) {
   llvm::Value *val = evaluateValue(ctx, inst.value);
-  llvm::Value *dstPtr = ctx.resolveSymbol(inst.dst_ptr);
+  llvm::Value *dstPtr = evaluateValue(ctx, inst.dst_ptr);
   if (!dstPtr) {
-    ctx.Error.fatal("store: destination pointer not found: " + inst.dst_ptr);
+    ctx.Error.fatal("store: failed to evaluate destination pointer");
     return;
   }
-  ctx.Builder->CreateStore(val, dstPtr);
+  if (dstPtr->getType()->isPointerTy()) {
+    ctx.Builder->CreateStore(val, dstPtr);
+  }
+  // ctx.Builder->CreateStore(val, dstPtr);
 }
 
 void handle(CodegenContext &ctx, const mir::CastInst &inst) {
@@ -118,7 +121,7 @@ void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {
   ctx.PromiseSlot = Builder->CreateAlloca(promiseTy, nullptr, "promise");
 
   // 2. Pass the Promise into coro.id so LLVM tracks its offset in the frame
-  llvm::Function *coroIdFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_id);
+  llvm::Function *coroIdFn = llvm::Intrinsic::getOrInsertDeclaration(Module, llvm::Intrinsic::coro_id);
   llvm::Value *nullPtr = llvm::ConstantPointerNull::get(llvm::PointerType::getUnqual(Context));
   llvm::Value *promisePtr = Builder->CreatePointerCast(ctx.PromiseSlot, llvm::PointerType::getUnqual(Context));
 
@@ -127,19 +130,23 @@ void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {
 
   // 3. Size and Alloc
   llvm::Function *coroSizeFn =
-      llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_size, {llvm::Type::getInt64Ty(Context)});
+      llvm::Intrinsic::getOrInsertDeclaration(Module, llvm::Intrinsic::coro_size, {llvm::Type::getInt64Ty(Context)});
   llvm::Value *coroSize = Builder->CreateCall(coroSizeFn, {}, "coro.size");
   llvm::Function *allocFn = Module->getFunction("maml_alloc");
   llvm::Value *framePtr = Builder->CreateCall(allocFn, {coroSize}, "coro.frame.alloc");
 
   // 4. Begin
-  llvm::Function *coroBeginFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_begin);
+  llvm::Function *coroBeginFn = llvm::Intrinsic::getOrInsertDeclaration(Module, llvm::Intrinsic::coro_begin);
   ctx.CurrentCoroHandle = Builder->CreateCall(coroBeginFn, {ctx.CoroId, framePtr}, "coro.handle");
 
+  if (llvm::Value *handleAlloca = ctx.resolveSymbol("__coro_handle")) {
+    ctx.Builder->CreateStore(ctx.CurrentCoroHandle, handleAlloca);
+  }
+
   // Initial suspend
-  llvm::Function *coroSaveFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_save);
+  llvm::Function *coroSaveFn = llvm::Intrinsic::getOrInsertDeclaration(Module, llvm::Intrinsic::coro_save);
   llvm::Value *initSaveToken = Builder->CreateCall(coroSaveFn, {ctx.CurrentCoroHandle}, "init.save");
-  llvm::Function *coroSuspendFn = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_suspend);
+  llvm::Function *coroSuspendFn = llvm::Intrinsic::getOrInsertDeclaration(Module, llvm::Intrinsic::coro_suspend);
   llvm::Value *suspendResult =
       Builder->CreateCall(coroSuspendFn, {initSaveToken, Builder->getInt1(false)}, "init.suspend");
 
@@ -149,10 +156,18 @@ void handle(CodegenContext &ctx, const mir::CoroPrologueInst &inst) {
   llvm::SwitchInst *sw = Builder->CreateSwitch(suspendResult, ctx.CoroSuspendBlock, 2);
   sw->addCase(Builder->getInt8(0), mirEntryBB);
   sw->addCase(Builder->getInt8(1), ctx.CoroCleanupBlock);
+}
 
-  // allocBB is now terminated. Point builder at bb0 for the
-  // second-pass instruction emission that's about to happen.
-  // Builder->SetInsertPoint(mirEntryBB);
+void handle(CodegenContext &ctx, const mir::CoroPromisePtrInst &inst) {
+  llvm::Value *hdl = evaluateValue(ctx, inst.handle);
+
+  llvm::Function *promiseFn = llvm::Intrinsic::getOrInsertDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
+  llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
+  llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
+
+  llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from}, inst.dst + "_promise");
+
+  ctx.SymbolEnv.back()[inst.dst] = promisePtr;
 }
 
 }  // namespace maml

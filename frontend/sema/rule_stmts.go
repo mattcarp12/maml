@@ -104,8 +104,8 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 	}
 
 	if node.Operator != "" {
-		isExpectedInt := isIntegerType(expectedType)
-		isRvalInt := isIntegerType(rvalType)
+		isExpectedInt := types.IsIntegerType(expectedType)
+		isRvalInt := types.IsIntegerType(rvalType)
 
 		if !isExpectedInt || !isRvalInt {
 			return []Violation{violation(node.Pos_,
@@ -116,15 +116,6 @@ func (r AssignmentTypeCompatibility) Check(node *tast.AssignStmt, ctx *RuleConte
 	}
 
 	return nil
-}
-
-func isIntegerType(t types.Type) bool {
-	switch t.(type) {
-	case types.I8Type, types.I16Type, types.I32Type, types.I64Type, types.I128Type,
-		types.U8Type, types.U16Type, types.U32Type, types.U64Type, types.U128Type:
-		return true
-	}
-	return false
 }
 
 // =============================================================================

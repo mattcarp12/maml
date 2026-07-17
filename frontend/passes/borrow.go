@@ -113,8 +113,9 @@ func (b *BlockState) clone() *BlockState {
 // =============================================================================
 
 type Analyzer struct {
-	errors   []ast.CompileError
-	varTypes map[string]types.Type
+	errors       []ast.CompileError
+	varTypes     map[string]types.Type
+	reportErrors bool
 }
 
 func New() *Analyzer {
@@ -140,11 +141,9 @@ func (a *Analyzer) isRef(name string) bool {
 
 func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *LivenessResult) []ast.CompileError {
 	// 1. Initialize type registry from Function-level Locals
-	// Add function parameters
 	for _, p := range g.Params {
 		a.varTypes[p.Name] = p.Type
 	}
-	// Add function locals
 	for name, t := range locals {
 		a.varTypes[name] = t
 	}
@@ -166,6 +165,9 @@ func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *Liv
 		inWorklist[block.ID] = true
 	}
 
+	// --- PASS 1: fixed-point convergence, no diagnostics -------------------
+	a.reportErrors = false
+
 	for len(worklist) > 0 {
 		id := worklist[0]
 		worklist = worklist[1:]
@@ -175,44 +177,9 @@ func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *Liv
 		mergedIn := a.mergePredecessors(g, block, stateOut, visited)
 		stateIn[block.ID] = mergedIn
 		currentState := mergedIn.clone()
+
 		stmtLiveness := AnalyzeStatementLiveness(block, live.LiveOut[block.ID], live.Aliases)
-		for i, inst := range block.Statements {
-			a.analyzeInstruction(inst, currentState)
-			for _, binding := range currentState.Bindings {
-				if binding.MutLockedBy != "" {
-					if !stmtLiveness.LiveOut[i][binding.MutLockedBy] {
-						binding.MutLockedBy = ""
-					}
-				}
-			}
-		}
-
-		a.analyzeTerminator(block.Terminator, currentState, live.LiveOut[block.ID])
-		for _, binding := range currentState.Bindings {
-			if binding.MutLockedBy != "" {
-				if !live.LiveOut[block.ID][binding.MutLockedBy] {
-					binding.MutLockedBy = ""
-				}
-			}
-		}
-
-		var invalidateDeadProvenance func(b *BindingState)
-		invalidateDeadProvenance = func(b *BindingState) {
-			if b == nil {
-				return
-			}
-			if b.DependsOn != "" {
-				if !live.LiveOut[block.ID][b.DependsOn] {
-					b.State = Invalidated
-				}
-			}
-			for _, f := range b.Fields {
-				invalidateDeadProvenance(f)
-			}
-		}
-		for _, binding := range currentState.Bindings {
-			invalidateDeadProvenance(binding)
-		}
+		a.runBlock(block, currentState, stmtLiveness, live)
 
 		visited[block.ID] = true
 
@@ -227,8 +194,63 @@ func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *Liv
 		}
 	}
 
+	// --- PASS 2: converged state, diagnostics enabled, each block once -----
+	a.reportErrors = true
+
+	for _, block := range g.SortedBlocks() {
+		mergedIn := stateIn[block.ID]
+		currentState := mergedIn.clone()
+		stmtLiveness := AnalyzeStatementLiveness(block, live.LiveOut[block.ID], live.Aliases)
+		a.runBlock(block, currentState, stmtLiveness, live)
+	}
+
 	a.validateScopeExit(g, stateOut)
 	return a.errors
+}
+
+// runBlock is the per-block transfer function shared by both passes: it
+// mutates `currentState` in place by walking the block's instructions and
+// terminator. Diagnostics are emitted only when a.reportErrors is true
+// (checked inside a.errorf), so this same code path is safe to run
+// speculatively during convergence.
+func (a *Analyzer) runBlock(block *mir.BasicBlock, currentState *BlockState, stmtLiveness *BlockStatementLiveness, live *LivenessResult) {
+	for i, inst := range block.Statements {
+		a.analyzeInstruction(inst, currentState)
+		for _, binding := range currentState.Bindings {
+			if binding.MutLockedBy != "" {
+				if !stmtLiveness.LiveOut[i][binding.MutLockedBy] {
+					binding.MutLockedBy = ""
+				}
+			}
+		}
+	}
+
+	a.analyzeTerminator(block.Terminator, currentState, live.LiveOut[block.ID])
+	for _, binding := range currentState.Bindings {
+		if binding.MutLockedBy != "" {
+			if !live.LiveOut[block.ID][binding.MutLockedBy] {
+				binding.MutLockedBy = ""
+			}
+		}
+	}
+
+	var invalidateDeadProvenance func(b *BindingState)
+	invalidateDeadProvenance = func(b *BindingState) {
+		if b == nil {
+			return
+		}
+		if b.DependsOn != "" {
+			if !live.LiveOut[block.ID][b.DependsOn] {
+				b.State = Invalidated
+			}
+		}
+		for _, f := range b.Fields {
+			invalidateDeadProvenance(f)
+		}
+	}
+	for _, binding := range currentState.Bindings {
+		invalidateDeadProvenance(binding)
+	}
 }
 
 func (a *Analyzer) mergePredecessors(g *mir.Graph, block *mir.BasicBlock, stateOut map[mir.BlockID]*BlockState, visited map[mir.BlockID]bool) *BlockState {
@@ -487,13 +509,13 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 				binding.State = SharedRead
 			} else {
 				newBinding.AliasOf = ""
+				binding.State = Invalidated
 			}
-			// Note: We no longer invalidate `binding.State` here!
-			// Explicit invalidation is strictly delegated to `*mir.OwnInst`.
 			state.Bindings[i.Dst] = newBinding
 		} else {
 			initOrRevive(i.Dst)
 		}
+
 	case *mir.BorrowInst:
 		a.checkStringAccess(i.Src, state, pos)
 		releaseLocksHeldBy(i.Dst)
@@ -621,7 +643,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 		initOrRevive(i.Dst)
 
 	case *mir.StoreInst:
-		a.checkStringAccess(i.DstPtr, state, pos)
+		a.checkOperandAccess(i.DstPtr, state, pos)
 		a.checkOperandAccess(i.Value, state, pos)
 
 		// Inside analyzeInstruction, after the existing cases:
@@ -711,6 +733,9 @@ func (a *Analyzer) checkStringAccess(name string, state *BlockState, pos ast.Pos
 }
 
 func (a *Analyzer) errorf(pos ast.Position, format string, args ...interface{}) {
+	if !a.reportErrors {
+		return
+	}
 	a.errors = append(a.errors, ast.CompileError{
 		Stage: "Ownership",
 		Pos:   pos,

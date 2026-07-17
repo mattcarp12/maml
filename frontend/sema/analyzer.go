@@ -140,34 +140,40 @@ func (a *Analyzer) registerFunctions(program *ast.Program) {
 }
 
 func (a *Analyzer) registerFunction(v *ast.FnDecl) {
-	paramTypes := make([]types.Type, len(v.Params))
-	caps := make([]types.Cap, len(v.Params)) // Using strings instead of ParamModes
+    paramTypes := make([]types.Type, len(v.Params))
+    caps := make([]types.Cap, len(v.Params))
 
-	for i, p := range v.Params {
-		paramTypes[i] = a.resolveAstType(p.Type)
-		caps[i] = types.Cap(p.Cap) // Map the unified capability string directly!
-	}
+    for i, p := range v.Params {
+        paramTypes[i] = a.resolveAstType(p.Type)
+        
+        // INJECT DEFAULT CAPABILITY HERE
+        cap := types.Cap(p.Cap)
+        if cap == types.CapNone || cap == "" {
+            cap = types.CapRo
+        }
+        caps[i] = cap
+    }
 
-	var returnType types.Type = types.UnitType{}
-	if v.ReturnType != nil {
-		returnType = a.resolveAstType(v.ReturnType)
-	}
+    var returnType types.Type = types.UnitType{}
+    if v.ReturnType != nil {
+        returnType = a.resolveAstType(v.ReturnType)
+    }
 
-	if v.IsAsync {
-		returnType = &types.FutureType{Base: returnType}
-	}
+    if v.IsAsync {
+        returnType = &types.FutureType{Base: returnType}
+    }
 
-	fnType := &types.FunctionType{
-		Params: paramTypes,
-		Caps:   caps, // Inject the capabilities into the type signature
-		Return: returnType,
-	}
+    fnType := &types.FunctionType{
+        Params: paramTypes,
+        Caps:   caps,
+        Return: returnType,
+    }
 
-	sym := &types.Symbol{
-		Kind: types.FuncSymbol,
-		Name: v.Name,
-		Type: fnType,
-	}
+    sym := &types.Symbol{
+        Kind: types.FuncSymbol,
+        Name: v.Name,
+        Type: fnType,
+    }
 
-	a.scope.symbols[v.Name] = sym
+    a.scope.symbols[v.Name] = sym
 }

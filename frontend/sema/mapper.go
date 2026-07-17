@@ -154,15 +154,21 @@ func (a *Analyzer) MapFnDecl(v *ast.FnDecl) tast.Node {
 
 	tastParams := make([]*tast.Param, len(v.Params))
 	for i, p := range v.Params {
+		// INJECT DEFAULT CAPABILITY HERE
+		cap := types.Cap(p.Cap)
+		if cap == types.CapNone || cap == "" {
+			cap = types.CapRo
+		}
+
 		paramSym := &types.Symbol{
 			Kind: types.ParamSymbol,
 			Name: p.Name,
 			Type: fnType.Params[i],
-			Cap:  types.Cap(p.Cap),
+			Cap:  cap,
 		}
 		a.scope.symbols[p.Name] = paramSym
 		tastParams[i] = &tast.Param{
-			Pos_: p.Pos_, End_: p.End_, Name: p.Name, Type: fnType.Params[i], Symbol: paramSym, Cap: types.Cap(p.Cap),
+			Pos_: p.Pos_, End_: p.End_, Name: p.Name, Type: fnType.Params[i], Symbol: paramSym, Cap: cap,
 		}
 	}
 
@@ -343,7 +349,25 @@ func (a *Analyzer) MapIdentifier(e *ast.Identifier) tast.Node {
 func (a *Analyzer) MapInfixExpr(e *ast.InfixExpr) tast.Node {
 	left := a.mapExpr(e.Left)
 	right := a.mapExpr(e.Right)
-	resultType := inferInfixType(e.Operator, tast.TypeOf(left), tast.TypeOf(right))
+
+	leftType := tast.TypeOf(left)
+	rightType := tast.TypeOf(right)
+
+	// --- Coerce integer literals BEFORE type inference ---
+	if intLit, ok := left.(*tast.IntLiteral); ok && types.IsIntegerType(rightType) {
+		if types.CanRepresentInt(intLit.Value, rightType) {
+			intLit.Type = rightType
+			leftType = rightType
+		}
+	}
+	if intLit, ok := right.(*tast.IntLiteral); ok && types.IsIntegerType(leftType) {
+		if types.CanRepresentInt(intLit.Value, leftType) {
+			intLit.Type = leftType
+			rightType = leftType
+		}
+	}
+
+	resultType := inferInfixType(e.Operator, leftType, rightType)
 
 	node := &tast.InfixExpr{Pos_: e.Pos_, Left: left, Operator: e.Operator, Right: right, Type: resultType}
 	a.drainViolations(a.registry.Check(node, a.ctx()))
@@ -386,8 +410,14 @@ func (a *Analyzer) MapCallExpr(e *ast.CallExpr) tast.Node {
 	fnNode := a.mapExpr(e.Function)
 	var tastArgs []tast.CallArg
 	for _, arg := range e.Arguments {
+		// INJECT DEFAULT CAPABILITY HERE
+		cap := types.Cap(arg.Cap)
+		if cap == types.CapNone || cap == "" {
+			cap = types.CapRo
+		}
+
 		tastArgs = append(tastArgs, tast.CallArg{
-			Cap:      types.Cap(arg.Cap),
+			Cap:      cap,
 			Argument: a.mapExpr(arg.Argument),
 			Pos_:     arg.Pos_,
 			End_:     arg.End_,
@@ -955,8 +985,8 @@ func inferInfixType(op string, left, right types.Type) types.Type {
 	}
 	switch op {
 	case "+", "-", "*", "/", "%":
-		if left.Equals(types.I64Type{}) {
-			return types.I64Type{}
+		if types.IsIntegerType(left) {
+			return left
 		}
 	case "==", "!=", "<", "<=", ">", ">=":
 		return types.BoolType{}

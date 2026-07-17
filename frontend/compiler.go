@@ -16,6 +16,9 @@ import (
 	"github.com/mattcarp12/maml/frontend/tast"
 )
 
+//go:embed prelude.maml
+var preludeSource string
+
 type Compiler struct{}
 
 func New() *Compiler {
@@ -30,6 +33,8 @@ type FrontendResult struct {
 }
 
 func (c *Compiler) parse(src string) (*ast.Program, error) {
+	// append the prelude to the source code
+	src = src + "\n" + preludeSource
 	l := lexer.New(src)
 	p := parser.New(l)
 	astProgram := p.ParseProgram()
@@ -61,7 +66,7 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 	// --------------------------------------------------------------------------
 	// Desugar pass (Modify in-place)
 	// --------------------------------------------------------------------------
-	hirLowerer := hir.NewLowerer()
+	hirLowerer := hir.NewTASTLowerer()
 	hirProgram := hirLowerer.LowerProgram(tastProgram)
 
 	// --------------------------------------------------------------------------

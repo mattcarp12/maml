@@ -161,6 +161,8 @@ func mapCppType(goType string) string {
 		return "std::string"
 	case "[]string":
 		return "std::vector<std::string>"
+	case "[]bool":
+		return "std::vector<bool>"
 	case "int", "int32":
 		return "int32_t"
 	case "int64":

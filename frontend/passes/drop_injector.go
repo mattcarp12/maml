@@ -36,7 +36,24 @@ func InjectDrops(g *mir.Graph, locals map[string]types.Type, globalLiveness *Liv
 				if !stmtLiveness.LiveOut[i][v] && !views[v] {
 					// Check if any alias of v is still live; if so, skip dropping v
 					if !hasLiveAlias(v, stmtLiveness.LiveOut[i], revAliases) {
-						dying = append(dying, v)
+
+						// NEW: Suppress drop if consumed by a CallInst
+						consumedByCall := false
+						if callInst, ok := inst.(*mir.CallInst); ok {
+							for argIdx, argVal := range callInst.Arguments {
+								if argReg, isReg := argVal.(*mir.Register); isReg && argReg.Name == v {
+									// Ensure we don't go out of bounds if intrinsics lack the array
+									if argIdx < len(callInst.ArgConsumed) && callInst.ArgConsumed[argIdx] {
+										consumedByCall = true
+										break
+									}
+								}
+							}
+						}
+
+						if !consumedByCall {
+							dying = append(dying, v)
+						}
 					}
 				}
 			}
@@ -121,7 +138,14 @@ func hasLiveAlias(v string, liveSet map[string]bool, revAliases map[string][]str
 	return dfs(v)
 }
 
-func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.Instruction, newTemp func() string, locals map[string]types.Type) {
+func buildRecursiveDrop(
+	vName string,
+	t types.Type,
+	isAddr bool,
+	stmts *[]mir.Instruction,
+	newTemp func() string,
+	locals map[string]types.Type,
+) {
 	if !needsDrop(t) {
 		return
 	}
@@ -165,45 +189,30 @@ func buildRecursiveDrop(vName string, t types.Type, isAddr bool, stmts *[]mir.In
 
 	symbol := lookupDestructorSymbol(t)
 	if symbol != "" {
-		var callArgName = vName
-		var callArgType types.Type = t
+		var callArgName string
 
-		if _, isFuture := t.(*types.FutureType); isFuture {
-			if isAddr {
-				callArgType = types.PtrType{}
-			} else {
-				ptrTmp := newTemp()
-				locals[ptrTmp] = types.PtrType{} // Register the new temporary
-
-				*stmts = append(*stmts, &mir.BorrowInst{
-					Dst: ptrTmp,
-					Src: vName,
-				})
-
-				callArgName = ptrTmp
-				callArgType = types.PtrType{}
-			}
+		if isAddr {
+			callArgName = vName
 		} else {
-			if isAddr {
-				loadTmp := newTemp()
-				locals[loadTmp] = t // Register the new temporary
-
-				*stmts = append(*stmts, &mir.LoadPtrInst{
-					Dst:  loadTmp,
-					Ptr:  &mir.Register{Name: vName, Type: types.PtrType{}},
-					Type: t,
-				})
-				callArgName = loadTmp
-			}
+			// We have the value itself – take its address.
+			ptrTmp := newTemp()
+			locals[ptrTmp] = types.PtrType{}
+			*stmts = append(*stmts, &mir.BorrowInst{
+				Dst:   ptrTmp,
+				Src:   vName,
+				IsMut: false,
+			})
+			callArgName = ptrTmp
 		}
 
 		*stmts = append(*stmts, &mir.CallInst{
 			Dst:       "_",
 			Function:  &mir.Register{Name: symbol, Type: types.PtrType{}},
-			Arguments: []mir.Value{&mir.Register{Name: callArgName, Type: callArgType}},
+			Arguments: []mir.Value{&mir.Register{Name: callArgName, Type: types.PtrType{}}},
 			Type:      types.UnitType{},
 		})
 	}
+
 }
 
 func lookupDestructorSymbol(t types.Type) string {

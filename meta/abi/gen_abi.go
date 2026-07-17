@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"go/format"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,79 +27,82 @@ var schemaData []byte
 //go:embed runtime_go.tmpl
 var goTemplateStr string
 
-//go:embed runtime_cpp.tmpl
-var cppTemplateStr string
+//go:embed runtime_llvm.tmpl
+var llvmTemplateStr string
 
-//go:embed runtime_zig.tmpl
-var zigTemplateStr string
+//go:embed runtime_cpp_header.tmpl
+var cppHeaderTemplateStr string
 
 // =============================================================================
-// 2. Language-Specific Type Mappings
+// 2. Single Source of Truth for Primitive Types
 // =============================================================================
-
-var goPrimitiveMap = map[string]string{
-	"i8":        "types.I8Type{}",
-	"i16":       "types.I16Type{}",
-	"i32":       "types.I32Type{}",
-	"i64":       "types.I64Type{}",
-	"i128":      "types.I128Type{}",
-	"u8":        "types.U8Type{}",
-	"u16":       "types.U16Type{}",
-	"u32":       "types.U32Type{}",
-	"u64":       "types.U64Type{}",
-	"u128":      "types.U128Type{}",
-	"usize":     "types.U64Type{}",
-	"bool":      "types.BoolType{}",
-	"ptr":       "types.PtrType{}",
-	"?ptr":      "types.PtrType{}",
-	"bytes_ptr": "types.PtrType{}",
-	"unit":      "types.UnitType{}",
+type PrimitiveInfo struct {
+	Size     int    // byte size
+	Align    int    // byte alignment
+	GoType   string // Go AST type constructor, e.g. "types.I32Type{}"
+	CppType  string // C-ABI storage type, e.g. "int32_t", "void*"
+	LLVMKind string // one of: i1, i8, i16, i32, i64, i128, ptr, void
 }
 
-var zigPrimitiveMap = map[string]string{
-	"i8":        "i8",
-	"i16":       "i16",
-	"i32":       "i32",
-	"i64":       "i64",
-	"i128":      "i128",
-	"u8":        "u8",
-	"u16":       "u16",
-	"u32":       "u32",
-	"u64":       "u64",
-	"u128":      "u128",
-	"usize":     "usize",
-	"bool":      "bool",
-	"ptr":       "*anyopaque",
-	"?ptr":      "?*anyopaque",
-	"unit":      "void",
-	"bytes_ptr": "[*]const u8",
+var primitiveTable = map[string]PrimitiveInfo{
+	"i8":        {1, 1, "types.I8Type{}", "int8_t", "i8"},
+	"i16":       {2, 2, "types.I16Type{}", "int16_t", "i16"},
+	"i32":       {4, 4, "types.I32Type{}", "int32_t", "i32"},
+	"i64":       {8, 8, "types.I64Type{}", "int64_t", "i64"},
+	"i128":      {16, 16, "types.I128Type{}", "__int128_t", "i128"},
+	"u8":        {1, 1, "types.U8Type{}", "uint8_t", "i8"},
+	"u16":       {2, 2, "types.U16Type{}", "uint16_t", "i16"},
+	"u32":       {4, 4, "types.U32Type{}", "uint32_t", "i32"},
+	"u64":       {8, 8, "types.U64Type{}", "uint64_t", "i64"},
+	"u128":      {16, 16, "types.U128Type{}", "__uint128_t", "i128"},
+	"usize":     {8, 8, "types.U64Type{}", "size_t", "i64"},
+	"bool":      {1, 1, "types.BoolType{}", "bool", "i1"},
+	"ptr":       {8, 8, "types.PtrType{}", "void*", "ptr"},
+	"?ptr":      {8, 8, "types.PtrType{}", "void*", "ptr"},
+	"bytes_ptr": {8, 8, "types.PtrType{}", "const char*", "ptr"},
+	"unit":      {0, 1, "types.UnitType{}", "void", "void"},
+	"Future":    {8, 8, "types.PtrType{}", "void*", "ptr"},
 }
 
-var llvmPrimitiveMap = map[string]string{
-	"i8":        "i8",
-	"i16":       "i16",
-	"i32":       "i32",
-	"i64":       "i64",
-	"i128":      "i128",
-	"u8":        "i8",
-	"u16":       "i16",
-	"u32":       "i32",
-	"u64":       "i64",
-	"u128":      "i128",
-	"usize":     "i64",
-	"bool":      "i1",
-	"ptr":       "ptr",
-	"?ptr":      "ptr",
-	"unit":      "void",
-	"bytes_ptr": "ptr",
+func mustPrimitive(name string) PrimitiveInfo {
+	info, ok := primitiveTable[name]
+	if !ok {
+		log.Fatalf("gen_abi: unknown primitive type %q -- add it to primitiveTable in gen_abi.go", name)
+	}
+	return info
 }
 
-var primLayouts = map[string]struct{ Size, Align int }{
-	"i8": {1, 1}, "u8": {1, 1}, "bool": {1, 1},
-	"i16": {2, 2}, "u16": {2, 2},
-	"i32": {4, 4}, "u32": {4, 4},
-	"i64": {8, 8}, "u64": {8, 8}, "usize": {8, 8},
-	"ptr": {8, 8}, "unit": {0, 1},
+func llvmTypeExprFor(kind, ctxVar string) string {
+	switch kind {
+	case "ptr":
+		return fmt.Sprintf("llvm::PointerType::getUnqual(%s)", ctxVar)
+	case "void":
+		return fmt.Sprintf("llvm::Type::getVoidTy(%s)", ctxVar)
+	case "i1":
+		return fmt.Sprintf("llvm::Type::getInt1Ty(%s)", ctxVar)
+	case "i8", "i16", "i32", "i64", "i128":
+		return fmt.Sprintf("llvm::Type::getInt%sTy(%s)", strings.TrimPrefix(kind, "i"), ctxVar)
+	default:
+		log.Fatalf("gen_abi: unhandled LLVMKind %q in llvmTypeExprFor", kind)
+		return ""
+	}
+}
+
+func validatePrimitiveTable(yamlPrimitives []YamlPrimitive) {
+	var errs []string
+	for _, yp := range yamlPrimitives {
+		info, ok := primitiveTable[yp.Name]
+		if !ok {
+			errs = append(errs, fmt.Sprintf("primitive %q is declared in abi_schema.yaml but missing from primitiveTable in gen_abi.go", yp.Name))
+			continue
+		}
+		if info.Size != yp.Size {
+			errs = append(errs, fmt.Sprintf("primitive %q: abi_schema.yaml declares size %d but primitiveTable has size %d", yp.Name, yp.Size, info.Size))
+		}
+	}
+	if len(errs) > 0 {
+		log.Fatalf("gen_abi: primitive table validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
 }
 
 // =============================================================================
@@ -107,7 +111,6 @@ var primLayouts = map[string]struct{ Size, Align int }{
 
 type YamlPrimitive struct {
 	Name string `yaml:"name"`
-	Kind string `yaml:"kind"`
 	Size int    `yaml:"size"`
 }
 
@@ -154,10 +157,11 @@ type YamlSchema struct {
 // =============================================================================
 
 type CtxField struct {
-	Name   string
-	Type   string
-	Offset int
-	Size   int
+	Name       string
+	Type       string
+	SchemaType string
+	Offset     int
+	Size       int
 }
 
 type CtxType struct {
@@ -170,21 +174,21 @@ type CtxType struct {
 }
 
 type CtxArg struct {
-	Name    string
-	ZigType string
-	CppType string
-	GoType  string
-	IsMut   bool
+	Name        string
+	RuntimeType string
+	CppType     string
+	GoType      string
+	IsMut       bool
 }
 
 type CtxFunction struct {
-	Symbol    string
-	CamelName string
-	ZigModule string
-	Args      []CtxArg
-	ReturnZig string
-	ReturnCpp string
-	ReturnGo  string
+	Symbol        string
+	CamelName     string
+	RuntimeModule string
+	Args          []CtxArg
+	ReturnRuntime string
+	ReturnCpp     string
+	ReturnGo      string
 }
 
 type TemplateContext struct {
@@ -198,7 +202,7 @@ type TemplateContext struct {
 
 func main() {
 	goOut := flag.String("goOut", "frontend/mir/abi_generated.go", "output path for Go types")
-	zigOut := flag.String("zigOut", "runtime/src/abi.zig", "output path for Zig assertions")
+	runtimeOut := flag.String("runtimeOut", "runtime/include/mamlrt_abi.h", "output path for C++ runtime ABI header")
 	cppOut := flag.String("cppOut", "backend/include/abi_generated.hpp", "output path for cpp abi helpers")
 	flag.Parse()
 
@@ -208,7 +212,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create a lookup map for compound types to resolve memory classes easily
+	// Fail fast if the hand-maintained primitiveTable has drifted from the
+	// schema, before generating a single file.
+	validatePrimitiveTable(schema.Primitives)
+
 	compoundTypes := make(map[string]YamlType)
 	for _, t := range schema.Types {
 		compoundTypes[t.Name] = t
@@ -223,8 +230,8 @@ func main() {
 	}
 
 	executeTemplate("Go Frontend", goTemplateStr, *goOut, ctx, true)
-	executeTemplate("Zig Runtime", zigTemplateStr, *zigOut, ctx, false)
-	executeTemplate("C++ Backend", cppTemplateStr, *cppOut, ctx, false)
+	executeTemplate("C++ Runtime Header", cppHeaderTemplateStr, *runtimeOut, ctx, false)
+	executeTemplate("LLVM Backend", llvmTemplateStr, *cppOut, ctx, false)
 }
 
 func calculateLayouts(yamlTypes []YamlType) []CtxType {
@@ -236,24 +243,25 @@ func calculateLayouts(yamlTypes []YamlType) []CtxType {
 		var ctxFields []CtxField
 
 		for _, field := range yt.Fields {
-			layout, ok := primLayouts[field.Type]
-			if !ok {
-				layout = primLayouts["ptr"] // Fallback for safety
-			}
+			// No silent fallback: a field type that isn't in primitiveTable
+			// is a schema bug and must stop the build, not default to a
+			// pointer-sized/aligned slot that misrepresents the real layout.
+			info := mustPrimitive(field.Type)
 
-			padding := calculatePadding(currentOffset, layout.Align)
+			padding := calculatePadding(currentOffset, info.Align)
 			currentOffset += padding
 
 			ctxFields = append(ctxFields, CtxField{
-				Name:   field.Name,
-				Type:   field.Type,
-				Offset: currentOffset,
-				Size:   layout.Size,
+				Name:       field.Name,
+				Type:       info.CppType,
+				SchemaType: field.Type,
+				Offset:     currentOffset,
+				Size:       info.Size,
 			})
 
-			currentOffset += layout.Size
-			if layout.Align > maxAlign {
-				maxAlign = layout.Align
+			currentOffset += info.Size
+			if info.Align > maxAlign {
+				maxAlign = info.Align
 			}
 		}
 
@@ -284,19 +292,18 @@ func buildFunctions(modules []YamlModuleGroup, compoundTypes map[string]YamlType
 		for _, fn := range group.Definitions {
 			args := buildFunctionArgs(fn.Args, compoundTypes)
 
-			// Resolve the strong return type using our semantic type solver
-			retZig, retCpp, retGo := resolveType(fn.Return.Type, false, compoundTypes)
+			retRuntime, retCpp, retGo := resolveType(fn.Return.Type, false, true, compoundTypes)
 
 			camelName := toCamelCase(strings.TrimPrefix(fn.Symbol, "maml_"))
 
 			results = append(results, CtxFunction{
-				Symbol:    fn.Symbol,
-				CamelName: camelName,
-				ZigModule: group.Module,
-				Args:      args,
-				ReturnZig: retZig,
-				ReturnCpp: retCpp,
-				ReturnGo:  retGo,
+				Symbol:        fn.Symbol,
+				CamelName:     camelName,
+				RuntimeModule: group.Module,
+				Args:          args,
+				ReturnRuntime: retRuntime,
+				ReturnCpp:     retCpp,
+				ReturnGo:      retGo,
 			})
 		}
 	}
@@ -306,72 +313,44 @@ func buildFunctions(modules []YamlModuleGroup, compoundTypes map[string]YamlType
 func buildFunctionArgs(args []YamlArg, compoundTypes map[string]YamlType) []CtxArg {
 	var result []CtxArg
 	for _, arg := range args {
-		zigTy, cppTy, goTy := resolveType(arg.Type, arg.ByReference, compoundTypes)
+		runtimeTy, cppTy, goTy := resolveType(arg.Type, arg.ByReference, false, compoundTypes)
 
-		// Ensure parameter names are safe for Go identifiers (e.g. avoid 'type')
 		safeName := arg.Name
 		if safeName == "type" {
 			safeName = "typ"
 		}
 
 		result = append(result, CtxArg{
-			Name:    safeName,
-			ZigType: zigTy,
-			CppType: cppTy,
-			GoType:  goTy,
-			IsMut:   arg.Mut,
+			Name:        safeName,
+			RuntimeType: runtimeTy,
+			CppType:     cppTy,
+			GoType:      goTy,
+			IsMut:       arg.Mut,
 		})
 	}
 	return result
 }
 
-// resolveType is the core engine for Phase 2: It guarantees the exact right pointer semantics
-// across Go, C++, and Zig based purely on the yaml `passing_convention`
-func resolveType(typ string, isRefOverride bool, compoundTypes map[string]YamlType) (zigTy, cppTy, goTy string) {
+func resolveType(typ string, isRefOverride bool, isReturn bool, compoundTypes map[string]YamlType) (runtimeTy, cppTy, goTy string) {
 	// 1. Is it a Semantic Compound Type? (e.g., Vector, View)
 	if ct, ok := compoundTypes[typ]; ok {
-		isRef := isRefOverride || ct.PassingConvention == "by_reference"
+		// Only apply 'by_reference' to function arguments, not return types
+		isRef := isRefOverride || (!isReturn && ct.PassingConvention == "by_reference")
+
 		if isRef {
-			return "*" + typ, "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
-		} else {
-			return typ, "rt::get" + typ + "Type(ctx.Context)", "types." + typ + "Type{}"
+			return ct.Name + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
 		}
+		return ct.Name, "rt::get" + typ + "Type(ctx.Context)", "&types." + typ + "Type{}"
 	}
 
-	// 2. It's a primitive
-	zigTy = zigPrimitiveMap[typ]
-	if zigTy == "" {
-		zigTy = "anyopaque"
-	}
+	// 2. It's a primitive -- must be a known one.
+	info := mustPrimitive(typ)
 
 	if isRefOverride {
-		return "*" + zigTy, "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
+		return info.CppType + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
 	}
 
-	cppTy = toCppType(typ)
-	goTy = goPrimitiveMap[typ]
-	if goTy == "" {
-		goTy = "types.UnknownType{}"
-	}
-
-	return zigTy, cppTy, goTy
-}
-
-func toCppType(typ string) string {
-	llvmTy, ok := llvmPrimitiveMap[typ]
-	if !ok || llvmTy == "ptr" {
-		return "llvm::PointerType::getUnqual(ctx.Context)"
-	}
-	if llvmTy == "void" {
-		return "llvm::Type::getVoidTy(ctx.Context)"
-	}
-	if llvmTy == "i1" {
-		return "llvm::Type::getInt1Ty(ctx.Context)"
-	}
-	if strings.HasPrefix(llvmTy, "i") {
-		return fmt.Sprintf("llvm::Type::getInt%sTy(ctx.Context)", strings.TrimPrefix(llvmTy, "i"))
-	}
-	return "llvm::PointerType::getUnqual(ctx.Context)"
+	return info.CppType, llvmTypeExprFor(info.LLVMKind, "ctx.Context"), info.GoType
 }
 
 func toCamelCase(s string) string {
@@ -384,27 +363,9 @@ func toCamelCase(s string) string {
 	return strings.Join(words, "")
 }
 
-func llvmFieldTypeExpr(typ string) string {
-	switch typ {
-	case "ptr", "?ptr", "bytes_ptr":
-		return "llvm::PointerType::getUnqual(C)"
-	case "unit":
-		return "llvm::Type::getVoidTy(C)"
-	case "bool":
-		return "llvm::Type::getInt1Ty(C)"
-	case "u8", "i8":
-		return "llvm::Type::getInt8Ty(C)"
-	case "u16", "i16":
-		return "llvm::Type::getInt16Ty(C)"
-	case "u32", "i32":
-		return "llvm::Type::getInt32Ty(C)"
-	case "u64", "i64", "usize":
-		return "llvm::Type::getInt64Ty(C)"
-	case "u128", "i128":
-		return "llvm::Type::getInt128Ty(C)"
-	default:
-		return "llvm::PointerType::getUnqual(C)"
-	}
+func llvmFieldTypeExpr(schemaType string) string {
+	info := mustPrimitive(schemaType)
+	return llvmTypeExprFor(info.LLVMKind, "C")
 }
 
 func executeTemplate(name, tmplStr, outPath string, data TemplateContext, formatGo bool) {

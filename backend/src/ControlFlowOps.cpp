@@ -1,7 +1,6 @@
 #include <llvm/IR/Intrinsics.h>
 
 #include "ExprGenerator.hpp"
-#include "RuntimeConstants.h"
 #include "TypeLowering.hpp"
 
 namespace maml {
@@ -37,7 +36,7 @@ void handle(CodegenContext &ctx, const mir::BinaryOpInst &inst) {
 
     ctx.Builder->CreateCondBr(isZero, trapBB, contBB);
     ctx.Builder->SetInsertPoint(trapBB);
-    llvm::Function *trapFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::trap);
+    llvm::Function *trapFn = llvm::Intrinsic::getOrInsertDeclaration(ctx.Module.get(), llvm::Intrinsic::trap);
     ctx.Builder->CreateCall(trapFn);
     ctx.Builder->CreateUnreachable();
 
@@ -91,11 +90,6 @@ void handle(CodegenContext &ctx, const mir::UnaryOpInst &inst) {
 static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
   llvm::Value *futurePtr = evaluateValue(ctx, inst.arguments[0]);
 
-  // llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
-  // llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
-  // llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
-  // llvm::Value *promisePtr = ctx.Builder->CreateCall(promiseFn, {hdl, align, from});
-
   // Extract raw coroutine frame pointer from the {ptr, i1} wrapper
   llvm::StructType *futureStructTy = llvm::StructType::get(
       ctx.Context, {llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt1Ty(ctx.Context)});
@@ -103,7 +97,7 @@ static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
   llvm::Value *hdl = ctx.Builder->CreateLoad(llvm::PointerType::getUnqual(ctx.Context), framePtrAddr, "raw_coro_hdl");
 
   // Pass the extracted raw frame pointer to coro.promise
-  llvm::Function *promiseFn = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
+  llvm::Function *promiseFn = llvm::Intrinsic::getOrInsertDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
   llvm::Value *align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
   llvm::Value *from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
 
@@ -112,7 +106,7 @@ static void lowerTaskGetResult(CodegenContext &ctx, const mir::CallInst &inst) {
   llvm::Type *expectedTy = llvmTypeFor(ctx, inst.type);
 
   if (!expectedTy->isVoidTy()) {
-    llvm::Value *typedPromise = ctx.Builder->CreatePointerCast(promisePtr, llvm::PointerType::getUnqual(expectedTy));
+    llvm::Value *typedPromise = ctx.Builder->CreatePointerCast(promisePtr, llvm::PointerType::getUnqual(ctx.Context));
     llvm::Value *res = ctx.Builder->CreateLoad(expectedTy, typedPromise, "coro.result");
 
     if (llvm::Value *existing = ctx.resolveSymbol(inst.dst)) {
@@ -182,13 +176,7 @@ void handle(CodegenContext &ctx, const mir::CallInst &inst) {
   } else if (auto *reg = std::get_if<mir::Register>(&inst.function.inner)) {
     funcName = reg->name;
   }
-
   ctx.CurrentInstructionName = "CallInst (" + funcName + ")";
-
-  if (funcName == maml::rt::TASK_GET_RESULT) {
-    lowerTaskGetResult(ctx, inst);
-    return;
-  }
 
   llvm::FunctionType *FT = nullptr;
   if (auto *F = llvm::dyn_cast<llvm::Function>(callee)) {

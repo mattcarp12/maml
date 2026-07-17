@@ -5,7 +5,7 @@
       "resolved": "ghcr.io/alexdenisov/features/feature-cmake@sha256:b4b7781ddef1dab39f6386d79e8210816c6116baa4fa3b538e591fbedc2e51f1",
       "integrity": "sha256:b4b7781ddef1dab39f6386d79e8210816c6116baa4fa3b538e591fbedc2e51f1"
     },
-    "ghcr.io/devcontainers-community/features/llvm": {
+    "ghcr.io/devcontainers-community/features/llvm:latest": {
       "version": "3.2.0",
       "resolved": "ghcr.io/devcontainers-community/features/llvm@sha256:4f464ab97a59439286a55490b55ba9851616f6f76ac3025e134127ac08ad79e2",
       "integrity": "sha256:4f464ab97a59439286a55490b55ba9851616f6f76ac3025e134127ac08ad79e2"
@@ -19,11 +19,6 @@
       "version": "1.3.4",
       "resolved": "ghcr.io/devcontainers/features/go@sha256:d85e921f91b41340055bb12b325d9d551170ed04b3b832e33530bf42f167c032",
       "integrity": "sha256:d85e921f91b41340055bb12b325d9d551170ed04b3b832e33530bf42f167c032"
-    },
-    "ghcr.io/postfinance/devcontainer-features/zig": {
-      "version": "1.0.0",
-      "resolved": "ghcr.io/postfinance/devcontainer-features/zig@sha256:53805c3400c320b5834ab03460410d47a6231f885924746c15f696ee8fbb3e02",
-      "integrity": "sha256:53805c3400c320b5834ab03460410d47a6231f885924746c15f696ee8fbb3e02"
     }
   }
 }

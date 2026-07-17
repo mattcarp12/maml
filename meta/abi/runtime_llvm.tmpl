@@ -28,7 +28,7 @@ namespace {{ .Name }} {
 {{- range .Types }}
 inline llvm::StructType* get{{ .Name }}Type(llvm::LLVMContext &C) {
     return llvm::StructType::get(C, {
-        {{- range $i, $f := .Fields }}{{ if $i }}, {{ end }}{{ llvmFieldTypeExpr $f.Type }}{{ end }}
+        {{- range $i, $f := .Fields }}{{ if $i }}, {{ end }}{{ llvmFieldTypeExpr $f.SchemaType }}{{ end }}
     });
 }
 {{- end }}

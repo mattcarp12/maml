@@ -4,11 +4,10 @@ package types
 type Cap string
 
 const (
-	CapNone Cap = ""     // Primitives or unannotated
-	CapOwn  Cap = "own"  // Ownership transfer
-	CapMut  Cap = "mut"  // Exclusive mutable borrow
-	CapRo   Cap = "ro"   // Shared read-only borrow
-	CapCopy Cap = "copy" // Independent deep copy
+	CapNone Cap = ""    // Primitives or unannotated (default to CapRo)
+	CapOwn  Cap = "own" // Ownership transfer
+	CapMut  Cap = "mut" // Exclusive mutable borrow
+	CapRo   Cap = "ro"  // Shared read-only borrow
 )
 
 func (t *StructType) GetFieldIndex(name string) int {
@@ -82,4 +81,36 @@ func MergeTypes(t1, t2 Type) Type {
 		return t2
 	}
 	return t1
+}
+
+func IsIntegerType(t Type) bool {
+	switch t.(type) {
+	case I8Type, I16Type, I32Type, I64Type, I128Type,
+		U8Type, U16Type, U32Type, U64Type, U128Type:
+		return true
+	}
+	return false
+}
+
+func CanRepresentInt(value int64, t Type) bool {
+	switch t.(type) {
+	case I8Type:
+		return value >= -128 && value <= 127
+	case I16Type:
+		return value >= -32768 && value <= 32767
+	case I32Type:
+		return value >= -2147483648 && value <= 2147483647
+	case I64Type, I128Type:
+		return true
+	case U8Type:
+		return value >= 0 && value <= 255
+	case U16Type:
+		return value >= 0 && value <= 65535
+	case U32Type:
+		return value >= 0 && value <= 4294967295
+	case U64Type, U128Type:
+		return value >= 0
+	default:
+		return false
+	}
 }

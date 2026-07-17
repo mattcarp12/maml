@@ -88,14 +88,36 @@ func (l *Lexer) readNumber() (string, token.TokenType) {
 
 // readString reads the content inside "...".
 func (l *Lexer) readString() string {
-	position := l.position + 1 // skip the opening quote
+	var out []byte
 	for {
 		l.readChar()
 		if l.ch == '"' || l.ch == 0 {
 			break
 		}
+		if l.ch == '\\' {
+			l.readChar()
+			switch l.ch {
+			case 'n':
+				out = append(out, '\n')
+			case 't':
+				out = append(out, '\t')
+			case 'r':
+				out = append(out, '\r')
+			case '\\':
+				out = append(out, '\\')
+			case '"':
+				out = append(out, '"')
+			case '0':
+				out = append(out, '\x00')
+			default:
+				// Unknown escape: keep both characters literally
+				out = append(out, '\\', l.ch)
+			}
+		} else {
+			out = append(out, l.ch)
+		}
 	}
-	return l.input[position:l.position]
+	return string(out)
 }
 
 func isLetter(ch byte) bool {

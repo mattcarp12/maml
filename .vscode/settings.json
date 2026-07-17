@@ -1,3 +1,8 @@
 {
-    "cmake.sourceDirectory": "/workspaces/maml/backend"
+    "cmake.sourceDirectory": "/workspaces/maml/backend",
+    // "cmake.buildDirectory": "${workspaceFolder}/build/backend",
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "clangd.arguments": [
+        // "--compile-commands-dir=${workspaceFolder}/build/backend"
+    ]
 }

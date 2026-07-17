@@ -1,0 +1,42 @@
+fn main() int {
+
+    server_fd := maml_socket(2, 1, 0)
+    if server_fd < 0 {
+        print("socket() failed")
+        return 0
+    }
+
+    if maml_bind(server_fd, 8080) < 0 {
+        print("bind() failed")
+        return 0
+    }
+
+    if maml_listen(server_fd, 10) < 0 {
+        print("listen() failed")
+        return 0
+    }
+
+    print("Echo server listening on :8080")
+
+    for true {
+        client_fd := maml_accept(server_fd)
+        if client_fd < 0 {
+            print("accept() failed")
+            continue
+        }
+
+        for true {
+            msg := maml_socket_read(client_fd, 1024)
+            if len(msg) == 0 {
+                break
+            }
+            print(msg)
+            print("\n")
+        }
+        maml_file_close(client_fd)
+    }
+
+
+
+    return 0
+}

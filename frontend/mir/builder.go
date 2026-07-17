@@ -144,7 +144,7 @@ type Builder struct {
 	currentFuture Value
 }
 
-var _ hir.Mapper[Value] = (*Builder)(nil)
+var _ hir.Lowerer[Value] = (*Builder)(nil)
 
 // buildFn translates a hierarchical HIR function into a flat MIR Control Flow Graph.
 func buildFn(fn *hir.FnDecl) (*Graph, map[string]types.Type) {
@@ -170,15 +170,28 @@ func buildFn(fn *hir.FnDecl) (*Graph, map[string]types.Type) {
 
 	if fn.IsAsync {
 		entry.Statements = append(entry.Statements, &CoroPrologueInst{})
-		futReg := b.newTemp()
+		futReg := "__coro_handle"
 		b.locals[futReg] = types.PtrType{}
 		b.currentFuture = &Register{Name: futReg, Type: types.PtrType{}}
 	}
 
-	b.MapBlockStmt(fn.Body)
+	b.LowerBlockStmt(fn.Body)
 
 	if b.current != nil && b.current.Terminator == nil {
-		b.current.Terminator = &ReturnTerminator{}
+		if fn.IsAsync {
+			suspendBlock := b.newBlock()
+			cleanupBlock := b.newBlock()
+
+			b.current.Terminator = &CoroFinalSuspendTerminator{
+				Value:        nil,
+				SuspendBlock: suspendBlock.ID,
+				CleanupBlock: cleanupBlock.ID,
+			}
+			cleanupBlock.Terminator = &CoroYieldTerminator{}
+			suspendBlock.Terminator = &UnreachableTerminator{}
+		} else {
+			b.current.Terminator = &ReturnTerminator{}
+		}
 	}
 
 	return b.graph, b.locals
@@ -199,23 +212,23 @@ func (b *Builder) newBlock() *BasicBlock {
 // Top-level / Declaration Mappers
 // =============================================================================
 
-func (b *Builder) MapProgram(n *hir.Program) Value {
+func (b *Builder) LowerProgram(n *hir.Program) Value {
 	return unitValue
 }
 
-func (b *Builder) MapFnDecl(n *hir.FnDecl) Value {
+func (b *Builder) LowerFnDecl(n *hir.FnDecl) Value {
 	return unitValue
 }
 
-func (b *Builder) MapTypeDecl(n *hir.TypeDecl) Value {
+func (b *Builder) LowerTypeDecl(n *hir.TypeDecl) Value {
 	return unitValue
 }
 
 // =============================================================================
-// Statement Mappers
+// Statement Lowerers
 // =============================================================================
 
-func (b *Builder) MapBlockStmt(n *hir.BlockStmt) Value {
+func (b *Builder) LowerBlockStmt(n *hir.BlockStmt) Value {
 	if n == nil || len(n.Statements) == 0 {
 		return unitValue
 	}
@@ -228,28 +241,28 @@ func (b *Builder) MapBlockStmt(n *hir.BlockStmt) Value {
 		if i == len(stmts)-1 {
 			switch s := stmt.(type) {
 			case *hir.YieldStmt:
-				return hir.MapNode(s.Value, b)
+				return hir.LowerNode(s.Value, b)
 			case *hir.ExprStmt:
-				return hir.MapNode(s.Value, b)
+				return hir.LowerNode(s.Value, b)
 			}
 		}
-		hir.MapNode(stmt, b)
+		hir.LowerNode(stmt, b)
 	}
 
 	return unitValue
 }
 
-func (b *Builder) MapExprStmt(n *hir.ExprStmt) Value {
-	hir.MapNode(n.Value, b)
+func (b *Builder) LowerExprStmt(n *hir.ExprStmt) Value {
+	hir.LowerNode(n.Value, b)
 	return unitValue
 }
 
-func (b *Builder) MapYieldStmt(n *hir.YieldStmt) Value {
-	hir.MapNode(n.Value, b)
+func (b *Builder) LowerYieldStmt(n *hir.YieldStmt) Value {
+	hir.LowerNode(n.Value, b)
 	return unitValue
 }
 
-func (b *Builder) MapBreakStmt(n *hir.BreakStmt) Value {
+func (b *Builder) LowerBreakStmt(n *hir.BreakStmt) Value {
 	if len(b.loops) == 0 {
 		return unitValue
 	}
@@ -259,7 +272,7 @@ func (b *Builder) MapBreakStmt(n *hir.BreakStmt) Value {
 	return unitValue
 }
 
-func (b *Builder) MapContinueStmt(n *hir.ContinueStmt) Value {
+func (b *Builder) LowerContinueStmt(n *hir.ContinueStmt) Value {
 	if len(b.loops) == 0 {
 		return unitValue
 	}
@@ -269,22 +282,39 @@ func (b *Builder) MapContinueStmt(n *hir.ContinueStmt) Value {
 	return unitValue
 }
 
-func (b *Builder) MapReturnStmt(n *hir.ReturnStmt) Value {
+func (b *Builder) LowerReturnStmt(n *hir.ReturnStmt) Value {
 	var flatRet Value = nil
 	if n.Value != nil {
-		flatRet = hir.MapNode(n.Value, b)
+		flatRet = hir.LowerNode(n.Value, b)
 		if reg, ok := flatRet.(*Register); ok {
 			if _, isU := reg.Type.(types.UnitType); isU {
 				flatRet = nil
 			}
 		}
 	}
-	b.current.Terminator = &ReturnTerminator{Value: flatRet}
+
+	if b.currentFuture != nil {
+		// Async Function: Emit a final suspend instead of a raw return
+		suspendBlock := b.newBlock()
+		cleanupBlock := b.newBlock()
+
+		b.current.Terminator = &CoroFinalSuspendTerminator{
+			Value:        flatRet,
+			SuspendBlock: suspendBlock.ID,
+			CleanupBlock: cleanupBlock.ID,
+		}
+		cleanupBlock.Terminator = &CoroYieldTerminator{}
+		suspendBlock.Terminator = &UnreachableTerminator{}
+	} else {
+		// Standard Function
+		b.current.Terminator = &ReturnTerminator{Value: flatRet}
+	}
+
 	b.current = nil
 	return unitValue
 }
 
-func (b *Builder) MapLoopStmt(n *hir.LoopStmt) Value {
+func (b *Builder) LowerLoopStmt(n *hir.LoopStmt) Value {
 	condBlock := b.newBlock()
 	bodyBlock := b.newBlock()
 	postBlock := b.newBlock()
@@ -295,7 +325,7 @@ func (b *Builder) MapLoopStmt(n *hir.LoopStmt) Value {
 	var flatCond Value
 	b.current = condBlock
 	if n.Condition != nil {
-		flatCond = hir.MapNode(n.Condition, b)
+		flatCond = hir.LowerNode(n.Condition, b)
 	} else {
 		flatCond = &BoolConstant{Value: true, Type: types.BoolType{}}
 	}
@@ -310,14 +340,14 @@ func (b *Builder) MapLoopStmt(n *hir.LoopStmt) Value {
 	b.loops = append(b.loops, LoopTracker{Header: postBlock.ID, Exit: exitBlock.ID})
 
 	b.current = bodyBlock
-	b.MapBlockStmt(n.Body)
+	b.LowerBlockStmt(n.Body)
 	if b.current != nil && b.current.Terminator == nil {
 		b.current.Terminator = &JumpTerminator{Target: postBlock.ID}
 	}
 
 	b.current = postBlock
 	if n.Post != nil {
-		hir.MapNode(n.Post, b)
+		hir.LowerNode(n.Post, b)
 	}
 	if b.current != nil && b.current.Terminator == nil {
 		b.current.Terminator = &JumpTerminator{Target: condBlock.ID}
@@ -329,8 +359,8 @@ func (b *Builder) MapLoopStmt(n *hir.LoopStmt) Value {
 	return unitValue
 }
 
-func (b *Builder) MapDeclareStmt(n *hir.DeclareStmt) Value {
-	flatRHS := hir.MapNode(n.Value, b)
+func (b *Builder) LowerDeclareStmt(n *hir.DeclareStmt) Value {
+	flatRHS := hir.LowerNode(n.Value, b)
 	uniqueName := b.getSymbolName(n.Symbol)
 	var t types.Type = types.UnknownType{}
 	if n.Symbol != nil {
@@ -341,44 +371,39 @@ func (b *Builder) MapDeclareStmt(n *hir.DeclareStmt) Value {
 	return unitValue
 }
 
-func (b *Builder) MapAliasDecl(n *hir.AliasDecl) Value {
-	flatSrc := hir.MapNode(n.Value, b)
+func (b *Builder) LowerAliasDecl(n *hir.AliasDecl) Value {
+	flatSrc := hir.LowerNode(n.Value, b)
 	aliasName := b.getSymbolName(n.Symbol)
 	b.locals[aliasName] = n.Symbol.Type
 	srcReg, ok := flatSrc.(*Register)
 	if !ok {
 		panic("compiler error: cannot take alias of non-register value")
 	}
-	b.emitCapTransfer(aliasName, srcReg.Name, n.Symbol.Cap, n.Symbol.Type)
+	b.emitCapTransfer(aliasName, srcReg.Name, n.Symbol.Cap)
 	return unitValue
 }
 
-func (b *Builder) MapAssignStmt(n *hir.AssignStmt) Value {
+func (b *Builder) LowerAssignStmt(n *hir.AssignStmt) Value {
 	if n == nil || n.LValue == nil || n.RValue == nil {
 		return unitValue
 	}
 
 	if fa, ok := n.LValue.(*hir.FieldAccess); ok {
-		ptrVal := b.flattenPlace(fa)
+		ptrVal := b.addressOf(fa)
 
 		var writeVal Value
 		if n.Operator != "" {
 			writeVal = b.emitCompoundMath(ptrVal, n.Operator, n.RValue, fa.Type)
 		} else {
-			writeVal = hir.MapNode(n.RValue, b)
+			writeVal = hir.LowerNode(n.RValue, b)
 		}
 
-		ptrReg := ptrVal.(*Register)
-		b.current.Statements = append(b.current.Statements, &StoreInst{
-			DstPtr: ptrReg.Name,
-			Value:  writeVal,
-			Type:   fa.Type,
-		})
+		b.push(&StoreInst{DstPtr: ptrVal, Value: writeVal, Type: fa.Type})
 		return unitValue
 	}
 
 	if idx, ok := n.LValue.(*hir.IndexExpr); ok {
-		ptrVal := b.flattenPlace(idx)
+		ptrVal := b.addressOf(idx)
 
 		elemType := hir.TypeOf(n.LValue)
 		var writeVal Value
@@ -386,25 +411,38 @@ func (b *Builder) MapAssignStmt(n *hir.AssignStmt) Value {
 		if n.Operator != "" {
 			writeVal = b.emitCompoundMath(ptrVal, n.Operator, n.RValue, elemType)
 		} else {
-			writeVal = hir.MapNode(n.RValue, b)
+			writeVal = hir.LowerNode(n.RValue, b)
 		}
 
-		ptrReg := ptrVal.(*Register)
-		b.current.Statements = append(b.current.Statements, &StoreInst{
-			DstPtr: ptrReg.Name,
-			Value:  writeVal,
-			Type:   elemType,
-		})
+		b.push(&StoreInst{DstPtr: ptrVal, Value: writeVal, Type: elemType})
 		return unitValue
 	}
 
 	if ident, ok := n.LValue.(*hir.Identifier); ok {
 		dstName := b.getSymbolName(ident.Symbol)
+
+		// IMPLICIT STORE: If the local is a pointer, mutate the underlying memory.
+		if _, isPtr := b.locals[dstName].(types.PtrType); isPtr {
+			ptrReg := &Register{Name: dstName, Type: types.PtrType{}}
+			var writeVal Value
+
+			if n.Operator != "" {
+				writeVal = b.emitCompoundMath(ptrReg, n.Operator, n.RValue, ident.Type)
+			} else {
+				writeVal = hir.LowerNode(n.RValue, b)
+			}
+
+			// NEW: Pass ptrReg (Value) instead of dstName (string)
+			b.push(&StoreInst{DstPtr: ptrReg, Value: writeVal, Type: ident.Type})
+			return unitValue
+		}
+
+		// Standard assignment fallback for value types
 		b.locals[dstName] = ident.Type
 		var writeVal Value
 		if n.Operator != "" {
-			flatLHS := hir.MapNode(n.LValue, b)
-			flatRHS := hir.MapNode(n.RValue, b)
+			flatLHS := hir.LowerNode(n.LValue, b)
+			flatRHS := hir.LowerNode(n.RValue, b)
 
 			opTmp := b.newTemp()
 			writeVal = b.emit(&BinaryOpInst{
@@ -415,91 +453,18 @@ func (b *Builder) MapAssignStmt(n *hir.AssignStmt) Value {
 				Type:     ident.Type,
 			}, opTmp, ident.Type)
 		} else {
-			writeVal = hir.MapNode(n.RValue, b)
+			writeVal = hir.LowerNode(n.RValue, b)
 		}
 
 		b.emitTransfer(dstName, writeVal)
 		return unitValue
 	}
 
-	flatLHS := hir.MapNode(n.LValue, b)
-	flatRHS := hir.MapNode(n.RValue, b)
+	flatLHS := hir.LowerNode(n.LValue, b)
+	flatRHS := hir.LowerNode(n.RValue, b)
 	if reg, ok := flatLHS.(*Register); ok {
-		b.current.Statements = append(b.current.Statements, &AssignInst{Dst: reg.Name, RValue: flatRHS})
+		b.push(&AssignInst{Dst: reg.Name, RValue: flatRHS})
 	}
-	return unitValue
-}
-
-func (b *Builder) MapMapInsertStmt(n *hir.MapInsertStmt) Value {
-	if n == nil {
-		return unitValue
-	}
-
-	flatMapPtr := hir.MapNode(n.Map, b)
-	hashVal, ptrVal, lenVal := b.lowerMapKey(n.Key)
-
-	var writeVal Value
-	var elemType types.Type
-	if n.Operator != "" {
-		opaquePtr := b.EmitMamlMapGet(flatMapPtr, hashVal, ptrVal, lenVal)
-		elemType = hir.TypeOf(n.Value)
-		writeVal = b.emitCompoundMath(opaquePtr, n.Operator, n.Value, elemType)
-	} else {
-		writeVal = hir.MapNode(n.Value, b)
-		elemType = getValueType(writeVal)
-	}
-
-	boxedVal := b.boxScalar(writeVal, elemType)
-	b.EmitMamlMapPut(flatMapPtr, hashVal, ptrVal, lenVal, boxedVal)
-	return unitValue
-}
-
-func (b *Builder) MapVecWriteStmt(n *hir.VecWriteStmt) Value {
-	if n == nil {
-		return unitValue
-	}
-	flatVecPtr := hir.MapNode(n.Vec, b)
-	flatIdx := hir.MapNode(n.Index, b)
-
-	var writeVal Value
-	var elemType types.Type
-	if n.Operator != "" {
-		opaquePtr := b.EmitMamlVecGet(flatVecPtr, flatIdx)
-		elemType = hir.TypeOf(n.Value)
-		writeVal = b.emitCompoundMath(opaquePtr, n.Operator, n.Value, elemType)
-	} else {
-		writeVal = hir.MapNode(n.Value, b)
-		elemType = getValueType(writeVal)
-	}
-
-	boxedVal := b.boxScalar(writeVal, elemType)
-	b.EmitMamlVecSet(flatVecPtr, flatIdx, boxedVal)
-	return unitValue
-}
-
-func (b *Builder) MapVecPushStmt(n *hir.VecPushStmt) Value {
-	if n == nil {
-		return unitValue
-	}
-	flatVecPtr := hir.MapNode(n.Vec, b)
-	flatVal := hir.MapNode(n.Value, b)
-	elemType := getValueType(flatVal)
-
-	slotTmp := b.newTemp()
-	b.locals[slotTmp] = elemType
-	b.current.Statements = append(b.current.Statements, &StoreInst{
-		DstPtr: slotTmp,
-		Value:  flatVal,
-		Type:   elemType,
-	})
-
-	slotPtr := b.newTemp()
-	b.locals[slotPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst: slotPtr, Src: slotTmp, IsMut: true,
-	})
-
-	b.EmitMamlVecPush(flatVecPtr, &Register{Name: slotPtr, Type: types.PtrType{}})
 	return unitValue
 }
 
@@ -526,8 +491,29 @@ func (b *Builder) getSymbolName(sym *types.Symbol) string {
 }
 
 // =============================================================================
-// Utilities
+// Core Emission Primitives
+//
+// Every instruction that enters the current block should be built through one
+// of the helpers below rather than appending to b.current.Statements by hand.
+// This keeps the "shape" of MIR construction (allocate a temp, register its
+// type, append the instruction, return a Register) in one place instead of
+// re-implemented at each of the ~30 call sites across flatten.go/vec.go/map.go.
 // =============================================================================
+
+// push appends inst to the current block. This is the single place
+// b.current.Statements is mutated; every other emit* helper routes through it.
+func (b *Builder) push(inst Instruction) {
+	b.current.Statements = append(b.current.Statements, inst)
+}
+
+// newPtrTemp allocates a fresh temp registered as a pointer local. This is
+// the overwhelmingly common case (addresses, borrows, bitcasts) so it gets
+// its own helper rather than repeating `newTemp` + `locals[x] = PtrType{}`.
+func (b *Builder) newPtrTemp() string {
+	tmp := b.newTemp()
+	b.locals[tmp] = types.PtrType{}
+	return tmp
+}
 
 func (b *Builder) emitTemp(t types.Type) string {
 	tmp := b.newTemp()
@@ -535,11 +521,59 @@ func (b *Builder) emitTemp(t types.Type) string {
 	return tmp
 }
 
+// emit appends inst, records dst's type, and returns a Register referring
+// to dst. Use this for any instruction that produces a value.
 func (b *Builder) emit(inst Instruction, dst string, t types.Type) Value {
 	b.locals[dst] = t
-	b.current.Statements = append(b.current.Statements, inst)
+	b.push(inst)
 	return &Register{Name: dst, Type: t}
 }
+
+// emitLoad loads the value at ptr into a fresh temp of type t.
+func (b *Builder) emitLoad(ptr Value, t types.Type) Value {
+	tmp := b.emitTemp(t)
+	return b.emit(&LoadPtrInst{Dst: tmp, Ptr: ptr, Type: t}, tmp, t)
+}
+
+// emitFieldAddr computes the address of a named field on obj and returns a
+// pointer Value. This is the single place FieldAddrInst is constructed;
+// storeField/loadField build on it for the common read/write cases.
+func (b *Builder) emitFieldAddr(obj Value, objType types.Type, fieldName string, fieldIdx int, fieldType types.Type) Value {
+	addr := b.newPtrTemp()
+	b.push(&FieldAddrInst{
+		Dst:        addr,
+		Object:     obj,
+		ObjectType: objType,
+		FieldName:  fieldName,
+		FieldIndex: fieldIdx,
+		FieldType:  fieldType,
+	})
+	return &Register{Name: addr, Type: types.PtrType{}}
+}
+
+// storeField writes val into the named field of obj.
+func (b *Builder) storeField(obj Value, objType types.Type, val Value, fieldName string, fieldIdx int, fieldType types.Type) {
+	addr := b.emitFieldAddr(obj, objType, fieldName, fieldIdx, fieldType)
+	b.push(&StoreInst{DstPtr: addr, Value: val, Type: fieldType})
+}
+
+// loadField reads the named field of obj.
+func (b *Builder) loadField(obj Value, objType types.Type, fieldName string, fieldIdx int, fieldType types.Type) Value {
+	addr := b.emitFieldAddr(obj, objType, fieldName, fieldIdx, fieldType)
+	return b.emitLoad(addr, fieldType)
+}
+
+// emitBorrow takes a borrow of src (mutable or read-only) and returns a
+// pointer Value to it.
+func (b *Builder) emitBorrow(src string, isMut bool) Value {
+	dst := b.newPtrTemp()
+	b.push(&BorrowInst{Dst: dst, Src: src, IsMut: isMut})
+	return &Register{Name: dst, Type: types.PtrType{}}
+}
+
+// =============================================================================
+// Utilities
+// =============================================================================
 
 func ownsHeapMemory(t types.Type) bool {
 	if t == nil {
@@ -580,33 +614,36 @@ func (b *Builder) emitTransfer(dst string, val Value) {
 	}
 	if reg, isReg := val.(*Register); isReg && reg != nil {
 		if reg.Type != nil && (reg.Type.IsReferenceType() || ownsHeapMemory(reg.Type)) {
-			b.current.Statements = append(b.current.Statements, &MoveInst{Dst: dst, Src: reg.Name})
+			b.push(&MoveInst{Dst: dst, Src: reg.Name})
 		} else {
-			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: reg.Name})
+			b.push(&CopyInst{Dst: dst, Src: reg.Name})
 		}
 		return
 	}
-	b.current.Statements = append(b.current.Statements, &AssignInst{Dst: dst, RValue: val})
+	b.push(&AssignInst{Dst: dst, RValue: val})
 }
 
-func (b *Builder) emitCapTransfer(dst, src string, cap any, t types.Type) {
+func (b *Builder) emitCapTransfer(dst, src string, cap any) {
+	dstType, ok := b.locals[dst]
+	if !ok {
+		panic("compiler error: emitCapTransfer called before local type was registered")
+	}
+	_, isPtr := dstType.(types.PtrType)
+
 	switch cap {
 	case types.CapMut:
-		if isByRefType(t) {
-			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
-		} else {
-			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: dst, Src: src, IsMut: true})
-		}
+		b.push(&BorrowInst{Dst: dst, Src: src, IsMut: true})
 	case types.CapRo:
-		if isByRefType(t) {
-			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
+		if isPtr {
+			// Passed by reference (heap-owning types or large structs)
+			b.push(&BorrowInst{Dst: dst, Src: src, IsMut: false})
 		} else {
-			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: dst, Src: src, IsMut: false})
+			// Passed by value (primitives, small flat structs)
+			b.push(&CopyInst{Dst: dst, Src: src})
 		}
 	case types.CapOwn:
-		b.current.Statements = append(b.current.Statements, &MoveInst{Dst: dst, Src: src})
-	case types.CapCopy:
-		b.current.Statements = append(b.current.Statements, &CopyInst{Dst: dst, Src: src})
+		// Ownership transfers are always passed by value/move semantics
+		b.push(&MoveInst{Dst: dst, Src: src})
 	}
 }
 
@@ -642,14 +679,8 @@ func getValueType(val Value) types.Type {
 }
 
 func (b *Builder) emitCompoundMath(ptrVal Value, operator string, rhsExpr hir.Expr, elemType types.Type) Value {
-	readTmp := b.newTemp()
-	readVal := b.emit(&LoadPtrInst{
-		Dst:  readTmp,
-		Ptr:  ptrVal,
-		Type: elemType,
-	}, readTmp, elemType)
-
-	flatRHS := hir.MapNode(rhsExpr, b)
+	readVal := b.emitLoad(ptrVal, elemType)
+	flatRHS := hir.LowerNode(rhsExpr, b)
 
 	opTmp := b.newTemp()
 	return b.emit(&BinaryOpInst{
@@ -662,12 +693,14 @@ func (b *Builder) emitCompoundMath(ptrVal Value, operator string, rhsExpr hir.Ex
 }
 
 func lowerParamType(t types.Type, cap types.Cap) types.Type {
-	switch cap {
-	case types.CapMut, types.CapRo:
+	if cap == types.CapMut {
 		return types.PtrType{}
-	default:
-		return t
 	}
+	// Pass heap-owning types by reference even for read-only to avoid deep copies / double frees
+	if cap == types.CapRo && ownsHeapMemory(t) {
+		return types.PtrType{}
+	}
+	return t
 }
 
 // boxScalar allocates a stack temp of type t, stores val into it, and returns
@@ -678,51 +711,35 @@ func lowerParamType(t types.Type, cap types.Cap) types.Type {
 func (b *Builder) boxScalar(val Value, t types.Type) Value {
 	slot := b.newTemp()
 	b.locals[slot] = t
-	b.current.Statements = append(b.current.Statements, &StoreInst{
-		DstPtr: slot,
-		Value:  val,
-		Type:   t,
-	})
-
-	ptr := b.newTemp()
-	b.locals[ptr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   ptr,
-		Src:   slot,
-		IsMut: false,
-	})
-
-	return &Register{Name: ptr, Type: types.PtrType{}}
+	ptrVal := b.emitBorrow(slot, true)
+	b.push(&StoreInst{DstPtr: ptrVal, Value: val, Type: t})
+	return ptrVal
 }
 
-// ==========================================================================
-// Memory Class Helpers
-// ==========================================================================
-
-// isByRefType returns true if the type's memory class is a heap-allocated pointer (by_reference).
-func isByRefType(t types.Type) bool {
-	if t == nil {
-		return false
+// emitRuntimeCall builds a CallInst to the runtime function sym with the
+// given arguments and return type, appends it, and returns the destination
+// Register (or nil for a UnitType return). This is the single implementation
+// of the CallInst/append/return boilerplate shared by every generated
+// EmitMaml* runtime wrapper in abi_generated.go.
+func (b *Builder) emitRuntimeCall(sym string, retType types.Type, args ...Value) Value {
+	dst := ""
+	if _, isUnit := retType.(types.UnitType); !isUnit {
+		dst = b.newTemp()
+		b.locals[dst] = retType
 	}
-	switch t.(type) {
-	case *types.VectorType, *types.MapType, *types.FutureType:
-		return true
-	default:
-		return false
+	b.push(&CallInst{
+		Dst:       dst,
+		Function:  &Register{Name: sym, Type: types.UnknownType{}},
+		Arguments: args,
+		Type:      retType,
+	})
+	if dst == "" {
+		return nil
 	}
+	return &Register{Name: dst, Type: retType}
 }
 
-// resolveBasePtr injects an explicit dereference instruction if the object type is a by_reference memory class.
-func (b *Builder) resolveBasePtr(basePtr Value, objType types.Type) Value {
-	if isByRefType(objType) {
-		heapPtr := b.newTemp()
-		b.locals[heapPtr] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-			Dst:  heapPtr,
-			Ptr:  basePtr,
-			Type: types.PtrType{},
-		})
-		return &Register{Name: heapPtr, Type: types.PtrType{}}
-	}
-	return basePtr
+func (b *Builder) isPointerLocal(name string) bool {
+    _, ok := b.locals[name].(types.PtrType)
+    return ok
 }

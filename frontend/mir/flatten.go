@@ -17,86 +17,80 @@ func (b *Builder) newTemp() string {
 // Expression Mappers
 // =============================================================================
 
-func (b *Builder) MapIdentifier(e *hir.Identifier) Value {
+func (b *Builder) LowerIdentifier(e *hir.Identifier) Value {
 	regName := e.Value
 	if e.Symbol != nil && e.Symbol.Kind == types.VarSymbol {
 		regName = b.getSymbolName(e.Symbol)
 	}
-	return &Register{Name: regName, Type: e.Type}
+
+	// Use the lowered type from locals if available; fallback to e.Type.
+	t := e.Type
+	if localType, ok := b.locals[regName]; ok {
+		t = localType
+	}
+
+	// IMPLICIT LOAD: The MIR tracks a pointer (e.g., mut parameter),
+	// but the AST expects the underlying value type.
+	if _, isPtr := t.(types.PtrType); isPtr && e.Type != nil {
+		ptrReg := &Register{Name: regName, Type: types.PtrType{}}
+		return b.emitLoad(ptrReg, e.Type)
+	}
+
+	return &Register{Name: regName, Type: t}
 }
 
-func (b *Builder) MapIntLiteral(e *hir.IntLiteral) Value {
+func (b *Builder) LowerIntLiteral(e *hir.IntLiteral) Value {
 	return &IntConstant{Value: e.Value, Type: e.Type}
 }
 
-func (b *Builder) MapBoolLiteral(e *hir.BoolLiteral) Value {
+func (b *Builder) LowerBoolLiteral(e *hir.BoolLiteral) Value {
 	return &BoolConstant{Value: e.Value, Type: e.Type}
 }
 
-func (b *Builder) MapStringLiteral(e *hir.StringLiteral) Value {
+func (b *Builder) LowerStringLiteral(e *hir.StringLiteral) Value {
 	tmp := b.newTemp()
 	b.locals[tmp] = e.Type
+	obj := &Register{Name: tmp, Type: e.Type}
 
 	rawStrPtr := &StringConstant{Value: e.Value, Type: types.PtrType{}}
 
-	injectField := func(val Value, fieldName string, fieldIdx int, fieldType types.Type) {
-		addrTmp := b.newTemp()
-		b.locals[addrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-			Dst:        addrTmp,
-			Object:     &Register{Name: tmp, Type: e.Type},
-			ObjectType: e.Type,
-			FieldName:  fieldName,
-			FieldIndex: fieldIdx,
-			FieldType:  fieldType,
-		})
+	b.storeField(obj, e.Type, rawStrPtr, "ptr", 0, types.PtrType{})
+	b.storeField(obj, e.Type, &IntConstant{Value: int64(len(e.Value)), Type: types.I32Type{}}, "len", 1, types.I32Type{})
+	b.storeField(obj, e.Type, &BoolConstant{Value: false, Type: types.BoolType{}}, "is_owned", 2, types.BoolType{})
 
-		b.current.Statements = append(b.current.Statements, &StoreInst{
-			DstPtr: addrTmp,
-			Value:  val,
-			Type:   fieldType,
-		})
-	}
-
-	injectField(rawStrPtr, "ptr", 0, types.PtrType{})
-	injectField(&IntConstant{Value: int64(len(e.Value)), Type: types.I32Type{}}, "len", 1, types.I32Type{})
-	injectField(&BoolConstant{Value: false, Type: types.BoolType{}}, "is_owned", 2, types.BoolType{})
-
-	return &Register{Name: tmp, Type: e.Type}
+	return obj
 }
 
-func (b *Builder) MapInfixExpr(e *hir.InfixExpr) Value {
-	flatLeft := hir.MapNode(e.Left, b)
-	flatRight := hir.MapNode(e.Right, b)
+func (b *Builder) LowerInfixExpr(e *hir.InfixExpr) Value {
+	flatLeft := hir.LowerNode(e.Left, b)
+	flatRight := hir.LowerNode(e.Right, b)
 
 	if hir.TypeOf(e.Left).Equals(types.StringType{}) && (e.Operator == "==" || e.Operator == "!=") {
 		return b.flattenStringEq(e, flatLeft, flatRight)
 	}
-	tmp := b.emitTemp(e.Type)
-	b.current.Statements = append(b.current.Statements, &BinaryOpInst{
+	tmp := b.newTemp()
+	return b.emit(&BinaryOpInst{
 		Dst:      tmp,
 		Operator: e.Operator,
 		Left:     flatLeft,
 		Right:    flatRight,
 		Type:     e.Type,
-	})
-	return &Register{Name: tmp, Type: e.Type}
+	}, tmp, e.Type)
 }
 
-func (b *Builder) MapPrefixExpr(e *hir.PrefixExpr) Value {
-	flatRight := hir.MapNode(e.Right, b)
-	tmp := b.emitTemp(e.Type)
-	b.current.Statements = append(b.current.Statements, &UnaryOpInst{
+func (b *Builder) LowerPrefixExpr(e *hir.PrefixExpr) Value {
+	flatRight := hir.LowerNode(e.Right, b)
+	tmp := b.newTemp()
+	return b.emit(&UnaryOpInst{
 		Dst:      tmp,
 		Operator: e.Operator,
 		Operand:  flatRight,
 		Type:     e.Type,
-	})
-	return &Register{Name: tmp, Type: e.Type}
+	}, tmp, e.Type)
 }
 
-func (b *Builder) MapIndexExpr(e *hir.IndexExpr) Value {
-	ptrVal := b.flattenPlace(e)
+func (b *Builder) LowerIndexExpr(e *hir.IndexExpr) Value {
+	ptrVal := b.addressOf(e)
 
 	isString := false
 	loadType := e.Type
@@ -105,133 +99,41 @@ func (b *Builder) MapIndexExpr(e *hir.IndexExpr) Value {
 		loadType = types.U8Type{}
 	}
 
-	rawTmp := b.newTemp()
-	b.locals[rawTmp] = loadType
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-		Dst:  rawTmp,
-		Ptr:  ptrVal,
-		Type: loadType,
-	})
+	rawVal := b.emitLoad(ptrVal, loadType)
 
 	if isString {
 		castTmp := b.newTemp()
-		b.locals[castTmp] = e.Type
-		b.current.Statements = append(b.current.Statements, &CastInst{
-			Dst:  castTmp,
-			Src:  &Register{Name: rawTmp, Type: loadType},
-			Type: e.Type,
-		})
-		return &Register{Name: castTmp, Type: e.Type}
+		return b.emit(&CastInst{Dst: castTmp, Src: rawVal, Type: e.Type}, castTmp, e.Type)
 	}
 
-	return &Register{Name: rawTmp, Type: e.Type}
+	return rawVal
 }
 
-func (b *Builder) MapAwaitExpr(e *hir.AwaitExpr) Value {
-	flatTask := hir.MapNode(e.Value, b)
-
-	// 1. Borrow the target task to get its memory address
-	ptrTmp := b.newTemp()
-	b.locals[ptrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   ptrTmp,
-		Src:   flatTask.(*Register).Name,
-		IsMut: false,
-	})
-	ptrReg := &Register{Name: ptrTmp, Type: types.PtrType{}}
-
-	// 2. Explicitly pass BOTH pointers (target task and current task)
-	b.EmitMamlTaskAwait(ptrReg, b.currentFuture)
-
-	resumeBlock := b.emitCoroSuspend()
-
-	// 3. Get the result using the pointer
-	tmp := b.newTemp()
-	b.locals[tmp] = e.Type
-	resultVal := b.EmitMamlTaskGetResult(ptrReg)
-
-	resumeBlock.Statements = append(resumeBlock.Statements, &AssignInst{
-		Dst:    tmp,
-		RValue: resultVal,
-	})
-
-	b.current = resumeBlock
-	return &Register{Name: tmp, Type: e.Type}
+func (b *Builder) LowerFieldAccess(e *hir.FieldAccess) Value {
+	ptrVal := b.addressOf(e)
+	return b.emitLoad(ptrVal, e.Type)
 }
 
-func (b *Builder) MapSpawnExpr(e *hir.SpawnExpr) Value {
-	flatFuture := hir.MapNode(e.Value, b)
-	ptrTmp := b.newTemp()
-	b.locals[ptrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   ptrTmp,
-		Src:   flatFuture.(*Register).Name,
-		IsMut: false,
-	})
-	ptrReg := &Register{
-		Name: ptrTmp,
-		Type: types.PtrType{},
-	}
-	b.EmitMamlSpawnTask(ptrReg)
-	return flatFuture
-}
-
-func (b *Builder) MapFieldAccess(e *hir.FieldAccess) Value {
-	ptrVal := b.flattenPlace(e)
-
-	valTmp := b.newTemp()
-	b.locals[valTmp] = e.Type
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-		Dst:  valTmp,
-		Ptr:  ptrVal,
-		Type: e.Type,
-	})
-	return &Register{Name: valTmp, Type: e.Type}
-}
-
-func (b *Builder) MapSliceExpr(e *hir.SliceExpr) Value {
-	basePtr := b.flattenPlace(e.Left)
+func (b *Builder) LowerSliceExpr(e *hir.SliceExpr) Value {
+	basePtr := b.addressOf(e.Left)
 	sourceType := hir.TypeOf(e.Left)
-	basePtr = b.resolveBasePtr(basePtr, sourceType)
 
 	var origPtr Value
 	var origLen Value
 	var elemType types.Type
 
-	extractField := func(fieldName string, fieldIdx int, fieldType types.Type) Value {
-		addrTmp := b.newTemp()
-		b.locals[addrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-			Dst:        addrTmp,
-			Object:     basePtr,
-			ObjectType: sourceType,
-			FieldName:  fieldName,
-			FieldIndex: fieldIdx,
-			FieldType:  fieldType,
-		})
-
-		valTmp := b.newTemp()
-		b.locals[valTmp] = fieldType
-		b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-			Dst:  valTmp,
-			Ptr:  &Register{Name: addrTmp, Type: types.PtrType{}},
-			Type: fieldType,
-		})
-		return &Register{Name: valTmp, Type: fieldType}
-	}
-
 	switch t := sourceType.(type) {
 	case types.StringType:
-		origPtr = extractField("ptr", 0, types.PtrType{})
-		origLen = extractField("len", 1, types.I64Type{})
+		origPtr = b.loadField(basePtr, sourceType, "ptr", 0, types.PtrType{})
+		origLen = b.loadField(basePtr, sourceType, "len", 1, types.I64Type{})
 		elemType = types.U8Type{}
 	case *types.ViewType:
-		origPtr = extractField("ptr", 0, types.PtrType{})
-		origLen = extractField("len", 1, types.I64Type{})
+		origPtr = b.loadField(basePtr, sourceType, "ptr", 0, types.PtrType{})
+		origLen = b.loadField(basePtr, sourceType, "len", 1, types.I64Type{})
 		elemType = t.Base
 	case *types.VectorType:
-		origPtr = extractField("buffer", 0, types.PtrType{})
-		origLen = extractField("len", 2, types.I64Type{})
+		origPtr = b.loadField(basePtr, sourceType, "buffer", 0, types.PtrType{})
+		origLen = b.loadField(basePtr, sourceType, "len", 2, types.I64Type{})
 		elemType = t.Base
 	case *types.ArrayType:
 		origPtr = basePtr
@@ -243,219 +145,75 @@ func (b *Builder) MapSliceExpr(e *hir.SliceExpr) Value {
 
 	var lowVal Value
 	if e.Low != nil {
-		lowVal = hir.MapNode(e.Low, b)
+		lowVal = hir.LowerNode(e.Low, b)
 	} else {
 		lowVal = &IntConstant{Value: 0, Type: types.I64Type{}}
 	}
 
 	var highVal Value
 	if e.High != nil {
-		highVal = hir.MapNode(e.High, b)
+		highVal = hir.LowerNode(e.High, b)
 	} else {
 		highVal = origLen
 	}
 
 	newLenTmp := b.newTemp()
-	b.locals[newLenTmp] = types.I64Type{}
-	b.current.Statements = append(b.current.Statements, &BinaryOpInst{
+	newLen := b.emit(&BinaryOpInst{
 		Dst:      newLenTmp,
 		Left:     highVal,
 		Operator: "-",
 		Right:    lowVal,
 		Type:     types.I64Type{},
-	})
-	newLen := &Register{Name: newLenTmp, Type: types.I64Type{}}
+	}, newLenTmp, types.I64Type{})
 
 	newDataPtrTmp := b.newTemp()
-	b.locals[newDataPtrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &IndexAddrInst{
+	newDataPtr := b.emit(&IndexAddrInst{
 		Dst:        newDataPtrTmp,
 		Source:     origPtr,
 		SourceType: types.PtrType{},
 		Index:      lowVal,
 		Type:       elemType,
-	})
-	newDataPtr := &Register{Name: newDataPtrTmp, Type: types.PtrType{}}
+	}, newDataPtrTmp, types.PtrType{})
 
 	resultTmp := b.newTemp()
 	b.locals[resultTmp] = e.Type
+	result := &Register{Name: resultTmp, Type: e.Type}
 
-	injectField := func(val Value, fieldName string, fieldIdx int, fieldType types.Type) {
-		addrTmp := b.newTemp()
-		b.locals[addrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-			Dst:        addrTmp,
-			Object:     &Register{Name: resultTmp, Type: e.Type},
-			ObjectType: e.Type,
-			FieldName:  fieldName,
-			FieldIndex: fieldIdx,
-			FieldType:  fieldType,
-		})
-
-		b.current.Statements = append(b.current.Statements, &StoreInst{
-			DstPtr: addrTmp,
-			Value:  val,
-			Type:   fieldType,
-		})
-	}
-
-	injectField(newDataPtr, "ptr", 0, types.PtrType{})
-	injectField(newLen, "len", 1, types.I64Type{})
+	b.storeField(result, e.Type, newDataPtr, "ptr", 0, types.PtrType{})
+	b.storeField(result, e.Type, newLen, "len", 1, types.I64Type{})
 
 	if _, isStr := e.Type.(types.StringType); isStr {
-		injectField(&BoolConstant{Value: false, Type: types.BoolType{}}, "is_owned", 2, types.BoolType{})
+		b.storeField(result, e.Type, &BoolConstant{Value: false, Type: types.BoolType{}}, "is_owned", 2, types.BoolType{})
 	}
 
-	return &Register{Name: resultTmp, Type: e.Type}
+	return result
 }
 
-func (b *Builder) MapVariantDiscriminantExpr(e *hir.VariantDiscriminantExpr) Value {
-	basePtr := b.flattenPlace(e.Object)
-	basePtr = b.resolveBasePtr(basePtr, hir.TypeOf(e.Object))
-
-	discrimPtr := b.newTemp()
-	b.locals[discrimPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        discrimPtr,
-		Object:     basePtr,
-		ObjectType: hir.TypeOf(e.Object),
-		FieldName:  "discriminant",
-		FieldIndex: 0,
-		FieldType:  types.I32Type{},
-	})
-
-	discrimVal := b.newTemp()
-	b.locals[discrimVal] = types.I32Type{}
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-		Dst:  discrimVal,
-		Ptr:  &Register{Name: discrimPtr, Type: types.PtrType{}},
-		Type: types.I32Type{},
-	})
-
-	return &Register{Name: discrimVal, Type: types.I32Type{}}
+func (b *Builder) LowerVariantDiscriminantExpr(e *hir.VariantDiscriminantExpr) Value {
+	basePtr := b.addressOf(e.Object)
+	return b.loadField(basePtr, hir.TypeOf(e.Object), "discriminant", 0, types.I32Type{})
 }
 
-func (b *Builder) MapVariantReadExpr(e *hir.VariantReadExpr) Value {
-	basePtr := b.flattenPlace(e.Object)
-	basePtr = b.resolveBasePtr(basePtr, hir.TypeOf(e.Object))
-
-	payloadArrPtr := b.newTemp()
-	b.locals[payloadArrPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        payloadArrPtr,
-		Object:     basePtr,
-		ObjectType: hir.TypeOf(e.Object),
-		FieldName:  "payload",
-		FieldIndex: 1,
-		FieldType:  types.UnknownType{},
-	})
+func (b *Builder) LowerVariantReadExpr(e *hir.VariantReadExpr) Value {
+	basePtr := b.addressOf(e.Object)
+	payloadArrPtr := b.emitFieldAddr(basePtr, hir.TypeOf(e.Object), "payload", 1, types.UnknownType{})
 
 	variantStructTy := b.getVariantPayloadStructType(hir.TypeOf(e.Object), e.VariantName)
 
-	castPtr := b.newTemp()
-	b.locals[castPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BitcastPtrInst{
-		Dst:  castPtr,
-		Src:  &Register{Name: payloadArrPtr, Type: types.PtrType{}},
-		Type: types.PtrType{},
-	})
+	castTmp := b.newPtrTemp()
+	castPtr := b.emit(&BitcastPtrInst{Dst: castTmp, Src: payloadArrPtr, Type: types.PtrType{}}, castTmp, types.PtrType{})
 
-	fieldPtr := b.newTemp()
-	b.locals[fieldPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        fieldPtr,
-		Object:     &Register{Name: castPtr, Type: types.PtrType{}},
-		ObjectType: variantStructTy,
-		FieldName:  fmt.Sprintf("payload_%d", e.FieldIndex),
-		FieldIndex: e.FieldIndex,
-		FieldType:  e.Type,
-	})
-
-	valTmp := b.newTemp()
-	b.locals[valTmp] = e.Type
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-		Dst:  valTmp,
-		Ptr:  &Register{Name: fieldPtr, Type: types.PtrType{}},
-		Type: e.Type,
-	})
-
-	return &Register{Name: valTmp, Type: e.Type}
+	return b.loadField(castPtr, variantStructTy, fmt.Sprintf("payload_%d", e.FieldIndex), e.FieldIndex, e.Type)
 }
 
-func (b *Builder) MapMapReadExpr(e *hir.MapReadExpr) Value {
-	flatMap := hir.MapNode(e.Map, b)
-	hashVal, ptrVal, lenVal := b.lowerMapKey(e.Key)
-
-	opaquePtr := b.EmitMamlMapGet(flatMap, hashVal, ptrVal, lenVal)
-
-	resTmp := b.emitTemp(e.Type)
-	cmpTmp := b.emitTemp(types.BoolType{})
-	b.current.Statements = append(b.current.Statements, &BinaryOpInst{
-		Dst: cmpTmp, Operator: "!=", Left: opaquePtr, Right: &IntConstant{Value: 0, Type: types.I64Type{}}, Type: types.BoolType{},
-	})
-
-	thenBlock := b.newBlock()
-	elseBlock := b.newBlock()
-	mergeBlock := b.newBlock()
-
-	b.current.Terminator = &BranchTerminator{
-		Condition:   &Register{Name: cmpTmp, Type: types.BoolType{}},
-		TrueTarget:  thenBlock.ID,
-		FalseTarget: elseBlock.ID,
-	}
-
-	valTmp := b.newTemp()
-	optType := e.Type.(*types.SumType)
-	valType := optType.TypeArgs[0]
-
-	b.locals[valTmp] = valType
-	thenBlock.Statements = append(thenBlock.Statements, &LoadPtrInst{Dst: valTmp, Ptr: opaquePtr, Type: valType})
-
-	someTmp := b.newTemp()
-	b.locals[someTmp] = e.Type
-	b.emitVariantInit(thenBlock, someTmp, e.Type, "Some", 0, []Value{&Register{Name: valTmp, Type: valType}})
-	thenBlock.Statements = append(thenBlock.Statements, &AssignInst{Dst: resTmp, RValue: &Register{Name: someTmp, Type: e.Type}})
-	thenBlock.Terminator = &JumpTerminator{Target: mergeBlock.ID}
-
-	noneTmp := b.newTemp()
-	b.locals[noneTmp] = e.Type
-
-	b.emitVariantInit(elseBlock, noneTmp, e.Type, "None", 1, nil)
-	elseBlock.Statements = append(elseBlock.Statements, &AssignInst{Dst: resTmp, RValue: &Register{Name: noneTmp, Type: e.Type}})
-	elseBlock.Terminator = &JumpTerminator{Target: mergeBlock.ID}
-
-	if reg, ok := flatMap.(*Register); ok {
-		mergeBlock.Statements = append(mergeBlock.Statements, &KeepAliveInst{Src: reg.Name})
-	}
-
-	b.current = mergeBlock
-	return &Register{Name: resTmp, Type: e.Type}
-}
-
-func (b *Builder) MapVecReadExpr(e *hir.VecReadExpr) Value {
-	flatVecPtr := hir.MapNode(e.Vec, b)
-	flatIdx := hir.MapNode(e.Index, b)
-
-	opaquePtr := b.EmitMamlVecGet(flatVecPtr, flatIdx)
-
-	valTmp := b.newTemp()
-	b.locals[valTmp] = e.Type
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-		Dst:  valTmp,
-		Ptr:  opaquePtr,
-		Type: e.Type,
-	})
-
-	return &Register{Name: valTmp, Type: e.Type}
-}
-
-func (b *Builder) MapStructLiteral(e *hir.StructLiteral) Value {
+func (b *Builder) LowerStructLiteral(e *hir.StructLiteral) Value {
 	if structType, isStruct := e.Type.(*types.StructType); isStruct {
 		tmp := b.newTemp()
 		b.locals[tmp] = structType
+		obj := &Register{Name: tmp, Type: structType}
 
 		for _, field := range e.Fields {
-			flatVal := hir.MapNode(field.Value, b)
+			flatVal := hir.LowerNode(field.Value, b)
 
 			fieldName := field.Key.Value
 			fieldIndex := structType.GetFieldIndex(fieldName)
@@ -464,24 +222,9 @@ func (b *Builder) MapStructLiteral(e *hir.StructLiteral) Value {
 			}
 			fieldType := getValueType(flatVal)
 
-			ptrTmp := b.newTemp()
-			b.locals[ptrTmp] = types.PtrType{}
-			b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-				Dst:        ptrTmp,
-				Object:     &Register{Name: tmp, Type: structType},
-				ObjectType: structType,
-				FieldName:  fieldName,
-				FieldIndex: fieldIndex,
-				FieldType:  fieldType,
-			})
-
-			b.current.Statements = append(b.current.Statements, &StoreInst{
-				DstPtr: ptrTmp,
-				Value:  flatVal,
-				Type:   fieldType,
-			})
+			b.storeField(obj, structType, flatVal, fieldName, fieldIndex, fieldType)
 		}
-		return &Register{Name: tmp, Type: structType}
+		return obj
 	}
 
 	tmp := b.newTemp()
@@ -494,8 +237,8 @@ func (b *Builder) MapStructLiteral(e *hir.StructLiteral) Value {
 	return &Register{Name: tmp, Type: t}
 }
 
-func (b *Builder) MapIfExpr(expr *hir.IfExpr) Value {
-	flatCond := hir.MapNode(expr.Condition, b)
+func (b *Builder) LowerIfExpr(expr *hir.IfExpr) Value {
+	flatCond := hir.LowerNode(expr.Condition, b)
 
 	thenBlock := b.newBlock()
 	mergeBlock := b.newBlock()
@@ -528,7 +271,7 @@ func (b *Builder) MapIfExpr(expr *hir.IfExpr) Value {
 	}
 
 	b.current = thenBlock
-	thenVal := b.MapBlockStmt(expr.Consequence)
+	thenVal := b.LowerBlockStmt(expr.Consequence)
 	thenEnd := b.current
 	if thenEnd != nil {
 		if !isUnit {
@@ -541,7 +284,7 @@ func (b *Builder) MapIfExpr(expr *hir.IfExpr) Value {
 
 	if expr.Alternative != nil {
 		b.current = elseBlock
-		elseVal := b.MapBlockStmt(expr.Alternative)
+		elseVal := b.LowerBlockStmt(expr.Alternative)
 		elseEnd := b.current
 		if elseEnd != nil {
 			if !isUnit {
@@ -557,69 +300,63 @@ func (b *Builder) MapIfExpr(expr *hir.IfExpr) Value {
 	return resultReg
 }
 
-func (b *Builder) MapCallExpr(e *hir.CallExpr) Value {
+func (b *Builder) LowerCallExpr(e *hir.CallExpr) Value {
 	if ident, ok := e.Function.(*hir.Identifier); ok {
 		if handler, exists := intrinsicRegistry[ident.Value]; exists {
 			return handler(b, e)
 		}
 	}
 
-	flatFunc := hir.MapNode(e.Function, b)
+	flatFunc := hir.LowerNode(e.Function, b)
 	var flatArgs []Value
-	for _, arg := range e.Arguments {
-		flatArg := hir.MapNode(arg.Argument, b)
+	var argConsumed []bool
 
+	for _, arg := range e.Arguments {
+		// No capability annotation → pass the evaluated expression directly
 		if arg.Cap == types.CapNone || arg.Cap == "" {
-			flatArgs = append(flatArgs, flatArg)
+			flatArgs = append(flatArgs, hir.LowerNode(arg.Argument, b))
+			argConsumed = append(argConsumed, false)
 			continue
 		}
 
-		argTmp := b.newTemp()
 		argType := hir.TypeOf(arg.Argument)
-
 		resultType := lowerParamType(argType, arg.Cap)
+
+		// Allocate a temporary of the ABI-correct type (PtrType for mut/heap-ro,
+		// or the concrete type for own/small-ro).
+		argTmp := b.newTemp()
 		b.locals[argTmp] = resultType
 
-		srcReg, ok := flatArg.(*Register)
-		if !ok {
-			panic("compiler error: capability applied to non-register value at call site")
-		}
-
-		switch arg.Cap {
-		case types.CapMut:
-			if isByRefType(argType) {
-				// Heap types are already pointers — reuse the value directly.
-				// No new owned temp is created, so no extra free will be inserted.
-				flatArgs = append(flatArgs, srcReg)
-				continue
+		if arg.Cap == types.CapMut {
+			// Mutability always requires indirection: take the address and store it.
+			ptrVal := b.addressOf(arg.Argument)
+			b.push(&AssignInst{Dst: argTmp, RValue: ptrVal})
+		} else {
+			// CapRo or CapOwn: lower the expression and transfer into the temporary.
+			flatArg := hir.LowerNode(arg.Argument, b)
+			if srcReg, ok := flatArg.(*Register); ok {
+				b.emitCapTransfer(argTmp, srcReg.Name, arg.Cap)
+			} else {
+				// Literals / constants
+				b.push(&AssignInst{Dst: argTmp, RValue: flatArg})
 			}
-			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: argTmp, Src: srcReg.Name, IsMut: true})
-		case types.CapRo:
-			if isByRefType(argType) {
-				flatArgs = append(flatArgs, srcReg)
-				continue
-			}
-			b.current.Statements = append(b.current.Statements, &BorrowInst{Dst: argTmp, Src: srcReg.Name, IsMut: false})
-		case types.CapOwn:
-			b.current.Statements = append(b.current.Statements, &MoveInst{Dst: argTmp, Src: srcReg.Name})
-		case types.CapCopy:
-			b.current.Statements = append(b.current.Statements, &CopyInst{Dst: argTmp, Src: srcReg.Name})
 		}
 
 		flatArgs = append(flatArgs, &Register{Name: argTmp, Type: resultType})
+		argConsumed = append(argConsumed, arg.Cap == types.CapOwn)
 	}
 
 	tmp := b.emitTemp(e.Type)
-	b.current.Statements = append(b.current.Statements, &CallInst{
-		Dst:       tmp,
-		Function:  flatFunc,
-		Arguments: flatArgs,
-		Type:      e.Type,
-	})
-	return &Register{Name: tmp, Type: e.Type}
+	return b.emit(&CallInst{
+		Dst:         tmp,
+		Function:    flatFunc,
+		Arguments:   flatArgs,
+		ArgConsumed: argConsumed,
+		Type:        e.Type,
+	}, tmp, e.Type)
 }
 
-func (b *Builder) MapArrayLiteral(e *hir.ArrayLiteral) Value {
+func (b *Builder) LowerArrayLiteral(e *hir.ArrayLiteral) Value {
 	arrayType, ok := e.Type.(*types.ArrayType)
 	if !ok {
 		tmp := b.emitTemp(e.Type)
@@ -628,63 +365,35 @@ func (b *Builder) MapArrayLiteral(e *hir.ArrayLiteral) Value {
 
 	tmp := b.newTemp()
 	b.locals[tmp] = arrayType
+	obj := &Register{Name: tmp, Type: arrayType}
 
 	for i, elem := range e.Elements {
-		flatVal := hir.MapNode(elem, b)
+		flatVal := hir.LowerNode(elem, b)
 		elemType := getValueType(flatVal)
 
-		ptrTmp := b.newTemp()
-		b.locals[ptrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &IndexAddrInst{
+		ptrTmp := b.newPtrTemp()
+		ptr := b.emit(&IndexAddrInst{
 			Dst:        ptrTmp,
-			Source:     &Register{Name: tmp, Type: arrayType},
+			Source:     obj,
 			SourceType: arrayType,
 			Index:      &IntConstant{Value: int64(i), Type: types.I64Type{}},
 			Type:       elemType,
-		})
+		}, ptrTmp, types.PtrType{})
 
-		b.current.Statements = append(b.current.Statements, &StoreInst{
-			DstPtr: ptrTmp,
-			Value:  flatVal,
-			Type:   elemType,
-		})
+		b.push(&StoreInst{DstPtr: ptr, Value: flatVal, Type: elemType})
 	}
 
-	return &Register{Name: tmp, Type: arrayType}
+	return obj
 }
 
-func (b *Builder) MapVariantLiteral(e *hir.VariantLiteral) Value {
+func (b *Builder) LowerVariantLiteral(e *hir.VariantLiteral) Value {
 	tmp := b.newTemp()
 	b.locals[tmp] = e.Type
-
-	basePtr := b.newTemp()
-	b.locals[basePtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   basePtr,
-		Src:   tmp,
-		IsMut: true,
-	})
-
-	discrimPtr := b.newTemp()
-	b.locals[discrimPtr] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        discrimPtr,
-		Object:     &Register{Name: basePtr, Type: types.PtrType{}},
-		ObjectType: e.Type,
-		FieldName:  "discriminant",
-		FieldIndex: 0,
-		FieldType:  types.I32Type{},
-	})
-	b.current.Statements = append(b.current.Statements, &StoreInst{
-		DstPtr: discrimPtr,
-		Value:  &IntConstant{Value: int64(e.Variant.Discriminant), Type: types.I32Type{}},
-		Type:   types.I32Type{},
-	})
 
 	var flatPayloads []Value
 	if len(e.Arguments) > 0 {
 		for _, arg := range e.Arguments {
-			flatPayloads = append(flatPayloads, hir.MapNode(arg, b))
+			flatPayloads = append(flatPayloads, hir.LowerNode(arg, b))
 		}
 	} else if len(e.Fields) > 0 {
 		givenFields := make(map[string]hir.Expr, len(e.Fields))
@@ -693,135 +402,24 @@ func (b *Builder) MapVariantLiteral(e *hir.VariantLiteral) Value {
 		}
 		for _, field := range e.Variant.Fields {
 			if val, exists := givenFields[field.Name]; exists {
-				flatPayloads = append(flatPayloads, hir.MapNode(val, b))
+				flatPayloads = append(flatPayloads, hir.LowerNode(val, b))
 			} else {
 				panic(fmt.Sprintf("Missing field '%s' for variant '%s'", field.Name, e.Variant.Name))
 			}
 		}
 	}
 
-	if len(flatPayloads) > 0 {
-		payloadArrPtr := b.newTemp()
-		b.locals[payloadArrPtr] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-			Dst:        payloadArrPtr,
-			Object:     &Register{Name: basePtr, Type: types.PtrType{}},
-			ObjectType: e.Type,
-			FieldName:  "payload",
-			FieldIndex: 1,
-			FieldType:  types.UnknownType{},
-		})
-
-		variantStructTy := b.getVariantPayloadStructType(e.Type, e.Variant.Name)
-
-		castPtr := b.newTemp()
-		b.locals[castPtr] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &BitcastPtrInst{
-			Dst:  castPtr,
-			Src:  &Register{Name: payloadArrPtr, Type: types.PtrType{}},
-			Type: types.PtrType{},
-		})
-
-		for i, pVal := range flatPayloads {
-			pType := getValueType(pVal)
-
-			fieldPtr := b.newTemp()
-			b.locals[fieldPtr] = types.PtrType{}
-			b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-				Dst:        fieldPtr,
-				Object:     &Register{Name: castPtr, Type: types.PtrType{}},
-				ObjectType: variantStructTy,
-				FieldName:  fmt.Sprintf("payload_%d", i),
-				FieldIndex: i,
-				FieldType:  pType,
-			})
-			b.current.Statements = append(b.current.Statements, &StoreInst{
-				DstPtr: fieldPtr,
-				Value:  pVal,
-				Type:   pType,
-			})
-		}
-	}
+	b.emitVariantInit(b.current, tmp, e.Type, e.Variant.Name, e.Variant.Discriminant, flatPayloads)
 
 	return &Register{Name: tmp, Type: e.Type}
 }
 
-func (b *Builder) MapVecLiteral(e *hir.VecLiteral) Value {
-	tmp := b.newTemp()
-	t := e.Type
-	b.locals[tmp] = t
-	vecPtr := b.EmitMamlVecCreate(&IntConstant{Value: int64(SizeOf(t.Base, b.Target)), Type: types.I64Type{}})
-	b.emitTransfer(tmp, vecPtr)
-
-	for _, elem := range e.Elements {
-		flatElem := hir.MapNode(elem, b)
-		boxedElem := b.boxScalar(flatElem, t.Base)
-		b.EmitMamlVecPush(&Register{Name: tmp, Type: types.PtrType{}}, boxedElem)
-	}
-	return &Register{Name: tmp, Type: t}
-}
-
-func (b *Builder) MapMapLiteral(e *hir.MapLiteral) Value {
-	tmp := b.newTemp()
-	t := e.Type
-	b.locals[tmp] = t
-	isStrKey := false
-	if _, isStr := t.Key.(types.StringType); isStr {
-		isStrKey = true
-	}
-	mapPtr := b.EmitMamlMapCreate(
-		&IntConstant{Value: int64(SizeOf(t.Value, b.Target)), Type: types.I64Type{}},
-		&BoolConstant{Value: isStrKey, Type: types.BoolType{}},
-	)
-	b.emitTransfer(tmp, mapPtr)
-
-	for _, kv := range e.Elements {
-		flatVal := hir.MapNode(kv.Value, b)
-		hashVal, ptrVal, lenVal := b.lowerMapKey(kv.Key)
-		b.EmitMamlMapPut(&Register{Name: tmp, Type: types.PtrType{}}, hashVal, ptrVal, lenVal, flatVal)
-	}
-	return &Register{Name: tmp, Type: t}
-}
-
-func (b *Builder) lowerMapKey(keyExpr hir.Expr) (hash, ptr, length Value) {
-	flatKey := hir.MapNode(keyExpr, b)
-	keyType := hir.TypeOf(keyExpr)
-
-	switch keyType.(type) {
-	case types.I64Type, *types.I64Type:
-		hashTmp := b.newTemp()
-		b.locals[hashTmp] = types.I64Type{}
-		b.current.Statements = append(b.current.Statements, &CastInst{Dst: hashTmp, Src: flatKey, Type: types.I64Type{}})
-		hashVal := &Register{Name: hashTmp, Type: types.I64Type{}}
-		ptrVal := &IntConstant{Value: 0, Type: types.I64Type{}}
-		lenVal := &IntConstant{Value: 0, Type: types.I64Type{}}
-		return hashVal, ptrVal, lenVal
-
-	case types.StringType, *types.StringType:
-		keyTmp := b.newTemp()
-		b.locals[keyTmp] = keyType
-		b.current.Statements = append(b.current.Statements, &AssignInst{Dst: keyTmp, RValue: flatKey})
-		safeKey := &Register{Name: keyTmp, Type: keyType}
-		ptrVal, lenVal := b.emitExtractString(safeKey)
-
-		hashVal := b.EmitMamlStrHash(ptrVal, lenVal)
-		return hashVal, ptrVal, lenVal
-
-	default:
-		return &IntConstant{Value: 0, Type: types.I64Type{}}, &IntConstant{Value: 0, Type: types.I64Type{}}, &IntConstant{Value: 0, Type: types.I64Type{}}
-	}
-}
-
 func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value) Value {
 	leftTmp := b.newTemp()
-	b.locals[leftTmp] = types.StringType{}
-	b.current.Statements = append(b.current.Statements, &AssignInst{Dst: leftTmp, RValue: flatLeft})
-	safeLeft := &Register{Name: leftTmp, Type: types.StringType{}}
+	safeLeft := b.emit(&AssignInst{Dst: leftTmp, RValue: flatLeft}, leftTmp, types.StringType{})
 
 	rightTmp := b.newTemp()
-	b.locals[rightTmp] = types.StringType{}
-	b.current.Statements = append(b.current.Statements, &AssignInst{Dst: rightTmp, RValue: flatRight})
-	safeRight := &Register{Name: rightTmp, Type: types.StringType{}}
+	safeRight := b.emit(&AssignInst{Dst: rightTmp, RValue: flatRight}, rightTmp, types.StringType{})
 
 	leftPtr, leftLen := b.emitExtractString(safeLeft)
 	rightPtr, rightLen := b.emitExtractString(safeRight)
@@ -829,33 +427,30 @@ func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value) V
 	callVal := b.EmitMamlStrEq(leftPtr, leftLen, rightPtr, rightLen)
 
 	boolTmp := b.newTemp()
-	b.locals[boolTmp] = types.BoolType{}
-	b.current.Statements = append(b.current.Statements, &BinaryOpInst{
+	result := b.emit(&BinaryOpInst{
 		Dst:      boolTmp,
 		Operator: "!=",
 		Left:     callVal,
 		Right:    &IntConstant{Value: 0, Type: types.I64Type{}},
 		Type:     types.BoolType{},
-	})
+	}, boolTmp, types.BoolType{})
 
 	if e.Operator == "!=" {
 		notTmp := b.newTemp()
-		b.locals[notTmp] = types.BoolType{}
-		b.current.Statements = append(b.current.Statements, &UnaryOpInst{
+		result = b.emit(&UnaryOpInst{
 			Dst:      notTmp,
 			Operator: "!",
-			Operand:  &Register{Name: boolTmp, Type: types.BoolType{}},
+			Operand:  result,
 			Type:     types.BoolType{},
-		})
-		boolTmp = notTmp
+		}, notTmp, types.BoolType{})
 	}
 
-	return &Register{Name: boolTmp, Type: types.BoolType{}}
+	return result
 }
 
 // Given an expression that can appear on the left-hand side of an assignment,
 // return a pointer to where that object lives.
-func (b *Builder) flattenPlace(expr hir.Expr) Value {
+func (b *Builder) addressOf(expr hir.Expr) Value {
 	switch e := expr.(type) {
 	case *hir.Identifier:
 		regName := e.Value
@@ -865,136 +460,67 @@ func (b *Builder) flattenPlace(expr hir.Expr) Value {
 		if _, isPtr := b.locals[regName].(types.PtrType); isPtr {
 			return &Register{Name: regName, Type: types.PtrType{}}
 		}
-		ptrTmp := b.newTemp()
-		b.locals[ptrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &BorrowInst{
-			Dst:   ptrTmp,
-			Src:   regName,
-			IsMut: true,
-		})
-		return &Register{Name: ptrTmp, Type: types.PtrType{}}
+		return b.emitBorrow(regName, true)
 
 	case *hir.FieldAccess:
-		basePtr := b.flattenPlace(e.Object)
+		basePtr := b.addressOf(e.Object)
 		objType := hir.TypeOf(e.Object)
-		basePtr = b.resolveBasePtr(basePtr, objType)
-
 		fieldIndex := -1
 		if st, ok := objType.(*types.StructType); ok {
 			fieldIndex = st.GetFieldIndex(e.Field.Value)
 		}
-
-		ptrTmp := b.newTemp()
-		b.locals[ptrTmp] = types.PtrType{}
-		b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-			Dst:        ptrTmp,
-			Object:     basePtr,
-			ObjectType: objType,
-			FieldName:  e.Field.Value,
-			FieldIndex: fieldIndex,
-			FieldType:  e.Type,
-		})
-		return &Register{Name: ptrTmp, Type: types.PtrType{}}
+		return b.emitFieldAddr(basePtr, objType, e.Field.Value, fieldIndex, e.Type)
 
 	case *hir.IndexExpr:
-		basePtr := b.flattenPlace(e.Left)
+		basePtr := b.addressOf(e.Left)
 		sourceType := hir.TypeOf(e.Left)
-		basePtr = b.resolveBasePtr(basePtr, sourceType)
-
 		switch sourceType.(type) {
 		case types.StringType, *types.ViewType:
-			ptrFieldAddr := b.newTemp()
-			b.locals[ptrFieldAddr] = types.PtrType{}
-			b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-				Dst:        ptrFieldAddr,
-				Object:     basePtr,
-				ObjectType: sourceType,
-				FieldName:  "ptr",
-				FieldIndex: 0,
-				FieldType:  types.PtrType{},
-			})
-
-			rawDataPtr := b.newTemp()
-			b.locals[rawDataPtr] = types.PtrType{}
-			b.current.Statements = append(b.current.Statements, &LoadPtrInst{
-				Dst:  rawDataPtr,
-				Ptr:  &Register{Name: ptrFieldAddr, Type: types.PtrType{}},
-				Type: types.PtrType{},
-			})
-
-			elemPtr := b.newTemp()
-			b.locals[elemPtr] = types.PtrType{}
+			rawDataPtr := b.loadField(basePtr, sourceType, "ptr", 0, types.PtrType{})
 
 			var elemType types.Type = types.U8Type{}
 			if view, isView := sourceType.(*types.ViewType); isView {
 				elemType = view.Base
 			}
-			idxVal := hir.MapNode(e.Index, b)
-			b.current.Statements = append(b.current.Statements, &IndexAddrInst{
-				Dst:        elemPtr,
-				Source:     &Register{Name: rawDataPtr, Type: types.PtrType{}},
+			idxVal := hir.LowerNode(e.Index, b)
+
+			elemPtrTmp := b.newPtrTemp()
+			return b.emit(&IndexAddrInst{
+				Dst:        elemPtrTmp,
+				Source:     rawDataPtr,
 				SourceType: types.PtrType{},
 				Index:      idxVal,
 				Type:       elemType,
-			})
-			return &Register{Name: elemPtr, Type: types.PtrType{}}
+			}, elemPtrTmp, types.PtrType{})
 		}
 
 		elemType := e.Type
-		ptrTmp := b.newTemp()
-		b.locals[ptrTmp] = types.PtrType{}
-		idxVal := hir.MapNode(e.Index, b)
-		b.current.Statements = append(b.current.Statements, &IndexAddrInst{
+		idxVal := hir.LowerNode(e.Index, b)
+		ptrTmp := b.newPtrTemp()
+		return b.emit(&IndexAddrInst{
 			Dst:        ptrTmp,
 			Source:     basePtr,
 			SourceType: sourceType,
 			Index:      idxVal,
 			Type:       elemType,
-		})
-		return &Register{Name: ptrTmp, Type: types.PtrType{}}
+		}, ptrTmp, types.PtrType{})
 
 	case *hir.VecReadExpr:
-		flatVecPtr := hir.MapNode(e.Vec, b)
-		flatIdx := hir.MapNode(e.Index, b)
-		return b.EmitMamlVecGet(flatVecPtr, flatIdx)
+		vecPtrVal := b.addressOf(e.Vec)
+		flatIdx := hir.LowerNode(e.Index, b)
+		return b.EmitMamlVecGet(vecPtrVal, flatIdx)
 
 	default:
 		panic(fmt.Sprintf("MIR Builder Error: Expression cannot be used as an L-Value: %T", expr))
 	}
 }
 
-func (b *Builder) emitLoad(ptr Value, t types.Type) Value {
-	tmp := b.newTemp()
-	b.locals[tmp] = t
-	b.current.Statements = append(b.current.Statements, &LoadPtrInst{Dst: tmp, Ptr: ptr, Type: t})
-	return &Register{Name: tmp, Type: t}
-}
-
+// emitExtractString reads the ptr/len fields out of a String value, returning
+// each as a loaded Value.
 func (b *Builder) emitExtractString(strReg Value) (ptrVal, lenVal Value) {
-	ptrAddrTmp := b.newTemp()
-	b.locals[ptrAddrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        ptrAddrTmp,
-		Object:     strReg,
-		ObjectType: getValueType(strReg),
-		FieldName:  "ptr",
-		FieldIndex: 0,
-		FieldType:  types.PtrType{},
-	})
-
-	lenAddrTmp := b.newTemp()
-	b.locals[lenAddrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &FieldAddrInst{
-		Dst:        lenAddrTmp,
-		Object:     strReg,
-		ObjectType: getValueType(strReg),
-		FieldName:  "len",
-		FieldIndex: 1,
-		FieldType:  types.U32Type{},
-	})
-
-	ptrVal = b.emitLoad(&Register{Name: ptrAddrTmp, Type: types.PtrType{}}, types.PtrType{})
-	lenVal = b.emitLoad(&Register{Name: lenAddrTmp, Type: types.PtrType{}}, types.U32Type{})
+	strType := getValueType(strReg)
+	ptrVal = b.loadField(strReg, strType, "ptr", 0, types.PtrType{})
+	lenVal = b.loadField(strReg, strType, "len", 1, types.U32Type{})
 	return ptrVal, lenVal
 }
 
@@ -1040,72 +566,34 @@ func (b *Builder) getVariantPayloadStructType(t types.Type, variantName string) 
 	}
 }
 
+// emitVariantInit writes a variant's discriminant and payload fields into the
+// local named dst, on the given block. This is the single implementation of
+// sum-type construction; both MapVariantLiteral (building on b.current) and
+// callers that need to build a variant on an arbitrary block (e.g. the
+// Some/None construction in MapMapReadExpr) route through here so the two
+// don't drift out of sync with each other.
 func (b *Builder) emitVariantInit(block *BasicBlock, dst string, sumType types.Type, variantName string, discriminant int, payloads []Value) {
-	basePtr := b.newTemp()
-	b.locals[basePtr] = types.PtrType{}
-	block.Statements = append(block.Statements, &BorrowInst{
-		Dst:   basePtr,
-		Src:   dst,
-		IsMut: true,
-	})
+	prevCurrent := b.current
+	b.current = block
+	defer func() { b.current = prevCurrent }()
 
-	discrimPtr := b.newTemp()
-	b.locals[discrimPtr] = types.PtrType{}
-	block.Statements = append(block.Statements, &FieldAddrInst{
-		Dst:        discrimPtr,
-		Object:     &Register{Name: basePtr, Type: types.PtrType{}},
-		ObjectType: sumType,
-		FieldName:  "discriminant",
-		FieldIndex: 0,
-		FieldType:  types.I32Type{},
-	})
-	block.Statements = append(block.Statements, &StoreInst{
-		DstPtr: discrimPtr,
-		Value:  &IntConstant{Value: int64(discriminant), Type: types.I32Type{}},
-		Type:   types.I32Type{},
-	})
+	basePtr := b.emitBorrow(dst, true)
 
-	if len(payloads) > 0 {
-		payloadArrPtr := b.newTemp()
-		b.locals[payloadArrPtr] = types.PtrType{}
-		block.Statements = append(block.Statements, &FieldAddrInst{
-			Dst:        payloadArrPtr,
-			Object:     &Register{Name: basePtr, Type: types.PtrType{}},
-			ObjectType: sumType,
-			FieldName:  "payload",
-			FieldIndex: 1,
-			FieldType:  types.UnknownType{},
-		})
+	b.storeField(basePtr, sumType, &IntConstant{Value: int64(discriminant), Type: types.I32Type{}}, "discriminant", 0, types.I32Type{})
 
-		variantStructTy := b.getVariantPayloadStructType(sumType, variantName)
+	if len(payloads) == 0 {
+		return
+	}
 
-		castPtr := b.newTemp()
-		b.locals[castPtr] = types.PtrType{}
-		block.Statements = append(block.Statements, &BitcastPtrInst{
-			Dst:  castPtr,
-			Src:  &Register{Name: payloadArrPtr, Type: types.PtrType{}},
-			Type: types.PtrType{},
-		})
+	payloadArrPtr := b.emitFieldAddr(basePtr, sumType, "payload", 1, types.UnknownType{})
+	variantStructTy := b.getVariantPayloadStructType(sumType, variantName)
 
-		for i, pVal := range payloads {
-			pType := getValueType(pVal)
-			fieldPtr := b.newTemp()
-			b.locals[fieldPtr] = types.PtrType{}
+	castTmp := b.newPtrTemp()
+	castPtr := b.emit(&BitcastPtrInst{Dst: castTmp, Src: payloadArrPtr, Type: types.PtrType{}}, castTmp, types.PtrType{})
 
-			block.Statements = append(block.Statements, &FieldAddrInst{
-				Dst:        fieldPtr,
-				Object:     &Register{Name: castPtr, Type: types.PtrType{}},
-				ObjectType: variantStructTy,
-				FieldName:  fmt.Sprintf("payload_%d", i),
-				FieldIndex: i,
-				FieldType:  pType,
-			})
-			block.Statements = append(block.Statements, &StoreInst{
-				DstPtr: fieldPtr,
-				Value:  pVal,
-				Type:   pType,
-			})
-		}
+	for i, pVal := range payloads {
+		pType := getValueType(pVal)
+		b.storeField(castPtr, variantStructTy, pVal, fmt.Sprintf("payload_%d", i), i, pType)
 	}
 }
 
@@ -1123,72 +611,25 @@ func init() {
 		"run_executor": (*Builder).lowerRunExecutor,
 		"len":          (*Builder).lowerLen,
 		"delete":       (*Builder).lowerDelete,
-		"print":        (*Builder).lowerPrint,
 	}
-}
-
-func (b *Builder) lowerYieldNow(e *hir.CallExpr) Value {
-	// instead of passing b.currentFuture to EmitMamlYieldNow, which is a struct,
-	// we need to pass a pointer to it. So we create a temporary variable to hold the pointer.
-	tmp := b.newTemp()
-	b.locals[tmp] = types.PtrType{}
-	futRegName := b.currentFuture.(*Register).Name
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   tmp,
-		Src:   futRegName,
-		IsMut: false,
-	})
-	b.EmitMamlYieldNow(&Register{Name: tmp, Type: types.PtrType{}})
-	resumeBlock := b.emitCoroSuspend()
-	b.current = resumeBlock
-	return unitValue
-}
-
-func (b *Builder) lowerRunExecutor(e *hir.CallExpr) Value {
-	flatArg := hir.MapNode(e.Arguments[0].Argument, b)
-	ptrTmp := b.newTemp()
-	b.locals[ptrTmp] = types.PtrType{}
-	b.current.Statements = append(b.current.Statements, &BorrowInst{
-		Dst:   ptrTmp,
-		Src:   flatArg.(*Register).Name,
-		IsMut: false,
-	})
-	ptrReg := &Register{Name: ptrTmp, Type: types.PtrType{}}
-	b.EmitMamlRunExecutor(ptrReg)
-	resTmp := b.newTemp()
-	b.locals[resTmp] = e.Type
-	result := b.EmitMamlTaskGetResult(ptrReg)
-	b.emitTransfer(resTmp, result)
-	return &Register{Name: resTmp, Type: e.Type}
 }
 
 func (b *Builder) lowerLen(e *hir.CallExpr) Value {
-	flatArg := hir.MapNode(e.Arguments[0].Argument, b)
+	arg := e.Arguments[0].Argument
+	argType := hir.TypeOf(arg)
 
-	switch hir.TypeOf(e.Arguments[0].Argument).(type) {
+	switch argType.(type) {
 	case *types.VectorType, *types.ViewType:
-		return b.EmitMamlVecLen(flatArg)
+		ptrReg := b.addressOf(arg)
+		return b.EmitMamlVecLen(ptrReg)
 	case *types.MapType:
-		return b.EmitMamlMapLen(flatArg)
+		ptrReg := b.addressOf(arg)
+		return b.EmitMamlMapLen(ptrReg)
+	case types.StringType, *types.StringType:
+		// maml_str_len takes String BY VALUE, not by pointer.
+		strVal := hir.LowerNode(arg, b)
+		return b.EmitMamlStrLen(strVal)
 	default:
 		panic("compiler error: unhandled type passed to intrinsic len()")
 	}
-}
-
-func (b *Builder) lowerDelete(e *hir.CallExpr) Value {
-	flatMapPtr := hir.MapNode(e.Arguments[0].Argument, b)
-	hashVal, ptrVal, lenVal := b.lowerMapKey(e.Arguments[1].Argument)
-	b.EmitMamlMapDelete(flatMapPtr, hashVal, ptrVal, lenVal)
-	return &Register{Name: "_unit", Type: types.UnitType{}}
-}
-
-func (b *Builder) lowerPrint(e *hir.CallExpr) Value {
-	strVal := hir.MapNode(e.Arguments[0].Argument, b)
-	tmpName := b.newTemp()
-	b.locals[tmpName] = types.StringType{}
-	b.current.Statements = append(b.current.Statements, &StoreInst{DstPtr: tmpName, Value: strVal, Type: types.StringType{}})
-	strLVal := &Register{Name: tmpName, Type: types.StringType{}}
-	ptrVal, lenVal := b.emitExtractString(strLVal)
-	b.EmitMamlPrint(ptrVal, lenVal)
-	return &Register{Name: "_unit", Type: types.UnitType{}}
 }

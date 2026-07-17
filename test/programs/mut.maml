@@ -1,5 +1,14 @@
 // EXIT_CODE: 42
-// Tests: Call-site mutability, implicit value semantics, and freeze()
+
+type Config = { retries int }
+
+fn modify_config(mut c Config) {
+    c.retries = 99
+}
+
+fn modify_vec(mut v Vec<int>) {
+    v[0] = 99
+}
 
 type DataBuffer = { id int, values Vec<int> }
 
@@ -32,11 +41,38 @@ fn main() int {
     frozen_buffer := own my_buffer
     
     // NOTE: If we attempted `my_buffer.id = 2` here, the MIR pass 
-    // should block it because the variable has been frozen.
+    // should block it because the variable has been invalidated.
+    // my_buffer.id = 2
 
     // 4. Safe immutable aliasing
     // The underlying Rc (if escaped) or stack buffer can now be safely read.
     result := sum_buffer(ro frozen_buffer)
+
+
+    // ----------------------------------
+    // Phase 2 Checks
+    // ----------------------------------
+
+    // 1. Test Value Semantics (Deep Copy)
+    mut my_config := Config{ retries: 5 }
+    // Because we DO NOT use `own`, standard structs should copy.
+    mut config_copy := my_config 
+    
+    modify_config(mut config_copy)
+    
+    // my_config should remain completely unaffected!
+    if my_config.retries == 99 { return 1 } 
+
+    // 2. Test Reference Semantics
+    mut my_vec := Vec<int>{5}
+    // 'own' by default?
+    mut vec_alias := my_vec 
+    
+    // Can pass the new owner as a mutable parameter
+    modify_vec(mut vec_alias)
+    
+    // Verify it mutated the mutable parameter
+    if vec_alias[0] != 99 { return 2 }
 
     // Expected: 12 + 20 + 30 = 62
     // Return: 62 - 20 = 42

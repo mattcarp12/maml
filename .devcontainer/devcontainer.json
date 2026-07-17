@@ -3,10 +3,7 @@
 	"image": "mcr.microsoft.com/devcontainers/base:bookworm",
 	"features": {
 		"ghcr.io/devcontainers/features/go": {},
-		"ghcr.io/postfinance/devcontainer-features/zig": {},
-		"ghcr.io/devcontainers-community/features/llvm": {
-			"version": "18",
-		},
+		"ghcr.io/devcontainers-community/features/llvm:latest": {},
 		"ghcr.io/devcontainers/features/common-utils": {},
 		"ghcr.io/alexdenisov/features/feature-cmake": {}
 	},
@@ -14,10 +11,12 @@
 		"vscode": {
 			"extensions": [
 				"golang.go",
-				"ziglang.vscode-zig",
 				"llvm-vs-code-extensions.vscode-clangd",
+				// "ms-vscode.cpptools",
 				"ms-vscode.cmake-tools",
-				"redhat.vscode-yaml"
+				"redhat.vscode-yaml",
+				"xaver.clang-format",
+				"vadimcn.vscode-lldb"
 			]
 		}
 	},

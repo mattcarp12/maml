@@ -104,91 +104,36 @@ func computeBlockUseDef(block *mir.BasicBlock, aliases map[string]string) (map[s
 	useSet := make(map[string]bool)
 	defSet := make(map[string]bool)
 
-	// Local helper closures
-	addUse := func(op mir.Value) {
-		if reg, ok := op.(*mir.Register); ok && reg != nil {
-			useSet[reg.Name] = true
+	// Helper to add a use and its resolved alias
+	addUse := func(name string) {
+		useSet[name] = true
+		if root := resolveAlias(name, aliases); root != name {
+			useSet[root] = true
 		}
 	}
 
-	addUseName := func(name string) {
-		if name != "" && name != "_" {
-			useSet[name] = true
-			if root := resolveAlias(name, aliases); root != name {
-				useSet[root] = true
-			}
-		}
-	}
-
-	addDef := func(name string) {
-		if name != "" && name != "_" {
-			defSet[name] = true
-			delete(useSet, name) // A Def kills any upward Use path inside this block!
-		}
-	}
-
-	// --- STEP 1: Process Terminator Uses FIRST (Since they sit at the very bottom) ---
-	switch t := block.Terminator.(type) {
-	case *mir.BranchTerminator:
-		addUse(t.Condition)
-	case *mir.ReturnTerminator:
-		if t.Value != nil {
-			addUse(t.Value)
-		}
+	// --- STEP 1: Process Terminator Uses FIRST ---
+	termUses := getTerminatorUses(block.Terminator)
+	for _, u := range termUses {
+		addUse(u)
 	}
 
 	// --- STEP 2: Traverse Statements BACKWARD (Bottom to Top) ---
 	for i := len(block.Statements) - 1; i >= 0; i-- {
 		inst := block.Statements[i]
-		switch i := inst.(type) {
-		case *mir.AssignInst:
-			addDef(i.Dst)
-			addUse(i.RValue)
-		case *mir.CopyInst:
-			addDef(i.Dst)
-			addUseName(i.Src)
-		case *mir.MoveInst:
-			addDef(i.Dst)
-			addUseName(i.Src)
-		case *mir.CastInst:
-			addDef(i.Dst)
-			addUse(i.Src)
-		case *mir.BinaryOpInst:
-			addDef(i.Dst)
-			addUse(i.Left)
-			addUse(i.Right)
-		case *mir.UnaryOpInst:
-			addDef(i.Dst)
-			addUse(i.Operand)
-		case *mir.LoadPtrInst:
-			addDef(i.Dst)
-			addUse(i.Ptr)
-		case *mir.StoreInst:
-			addUseName(i.DstPtr)
-			addUse(i.Value)
-		case *mir.BitcastPtrInst:
-			addDef(i.Dst)
-			addUse(i.Src)
-		case *mir.CallInst:
-			if i.Dst != "" && i.Dst != "_" {
-				addDef(i.Dst)
-			}
-			addUse(i.Function)
-			for _, arg := range i.Arguments {
-				addUse(arg)
-			}
-		case *mir.BorrowInst:
-			addUseName(i.Src)
-			addDef(i.Dst)
-		case *mir.KeepAliveInst:
-			addUseName(i.Src)
-		case *mir.FieldAddrInst:
-			addDef(i.Dst)
-			addUse(i.Object)
-		case *mir.IndexAddrInst:
-			addDef(i.Dst)
-			addUse(i.Source)
-			addUse(i.Index)
+
+		// Use the single source of truth for instruction use/defs
+		uses, defs := getInstUseDef(inst)
+
+		// A Def kills any upward Use path inside this block
+		for _, d := range defs {
+			defSet[d] = true
+			delete(useSet, d)
+		}
+
+		// Add uses and their aliases
+		for _, u := range uses {
+			addUse(u)
 		}
 	}
 
@@ -320,7 +265,7 @@ func getInstUseDef(inst mir.Instruction) (uses []string, defs []string) {
 		addDef(i.Dst)
 		addUseVal(i.Ptr)
 	case *mir.StoreInst:
-		addUseName(i.DstPtr)
+		addUseVal(i.DstPtr)
 		addUseVal(i.Value)
 	case *mir.IndexAddrInst:
 		addDef(i.Dst)
@@ -388,35 +333,42 @@ func buildAliasMap(g *mir.Graph, locals map[string]types.Type) map[string]string
 						}
 					}
 				}
-
-			// Reborrow propagation through stores — but ONLY when the
-			// destination belongs to a View. Views never own memory, so
-			// this can't create a second owner / double free; it just
-			// lets a View correctly "remember" the buffer it was built
-			// from, for liveness purposes.
+			case *mir.CoroPromisePtrInst:
+				if reg, ok := i.Handle.(*mir.Register); ok {
+					aliases[i.Dst] = reg.Name
+				}
 			case *mir.StoreInst:
 				if srcReg, isReg := i.Value.(*mir.Register); isReg {
-					dstRoot := resolveAlias(i.DstPtr, aliases)
-					if isView(dstRoot) {
-						srcRoot := resolveAlias(srcReg.Name, aliases)
-						if srcRoot != dstRoot {
-							aliases[dstRoot] = srcRoot
+					if dstPtrReg, isPtrReg := i.DstPtr.(*mir.Register); isPtrReg {
+						dstRoot := resolveAlias(dstPtrReg.Name, aliases)
+						if isView(dstRoot) {
+							srcRoot := resolveAlias(srcReg.Name, aliases)
+							if srcRoot != dstRoot {
+								aliases[dstRoot] = srcRoot
+							}
 						}
 					}
 				}
 			}
 
-			// Propagate aliases through moves, but ONLY for View-typed
-			// values. Views own nothing, so re-pointing a view's alias
-			// chain on a move is always safe. We deliberately do NOT do
-			// this for owning types (Vec, Map, String, ...): for those the
-			// move is a genuine ownership transfer, and treating the
-			// destination as "borrowing from" the (now-dead) source temp
-			// wrongly keeps that source temp eligible for its own separate
-			// drop — which is exactly what caused the double frees.
+			// --- NEW: Track alias transfers for Move, Copy, and Assignment ---
 			if mv, ok := inst.(*mir.MoveInst); ok && isView(mv.Dst) {
 				if root := resolveAlias(mv.Src, aliases); root != mv.Src {
 					aliases[mv.Dst] = root
+				}
+			}
+			
+			if cp, ok := inst.(*mir.CopyInst); ok && isView(cp.Dst) {
+				if root := resolveAlias(cp.Src, aliases); root != cp.Src {
+					aliases[cp.Dst] = root
+				}
+			}
+			
+			if as, ok := inst.(*mir.AssignInst); ok && isView(as.Dst) {
+				if reg, ok := as.RValue.(*mir.Register); ok {
+					if root := resolveAlias(reg.Name, aliases); root != reg.Name {
+						aliases[as.Dst] = root
+					}
 				}
 			}
 		}

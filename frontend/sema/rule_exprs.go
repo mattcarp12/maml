@@ -33,6 +33,26 @@ func (r InfixTypeCompatibility) Check(node *tast.InfixExpr, ctx *RuleContext) []
 		return nil
 	}
 
+	// --- Integer Literal Auto-Coercion in Binary Expressions ---
+	// If one side is an integer literal and the other is a concrete integer type,
+	// narrow the literal to match (if the value fits).
+
+	// Coerce left literal to right's type
+	if intLit, ok := node.Left.(*tast.IntLiteral); ok && types.IsIntegerType(right) {
+		if types.CanRepresentInt(intLit.Value, right) {
+			intLit.Type = right
+			left = right
+		}
+	}
+
+	// Coerce right literal to left's type
+	if intLit, ok := node.Right.(*tast.IntLiteral); ok && types.IsIntegerType(left) {
+		if types.CanRepresentInt(intLit.Value, left) {
+			intLit.Type = left
+			right = left
+		}
+	}
+
 	if !left.Equals(right) {
 		return []Violation{violation(node.Pos_,
 			"type mismatch: cannot apply '%s' to '%s' and '%s'",
@@ -43,7 +63,7 @@ func (r InfixTypeCompatibility) Check(node *tast.InfixExpr, ctx *RuleContext) []
 	// Operands are the same type — now check operator compatibility.
 	switch node.Operator {
 	case "+", "-", "*", "/", "%":
-		if !isIntegerType(left) {
+		if !types.IsIntegerType(left) {
 			return []Violation{violation(node.Pos_,
 				"type mismatch: operator '%s' requires integer operands, got '%s'",
 				node.Operator, left.String(),
@@ -88,7 +108,7 @@ func (r PrefixTypeCompatibility) Check(node *tast.PrefixExpr, ctx *RuleContext) 
 			)}
 		}
 	case "-":
-		if !isIntegerType(right) {
+		if !types.IsIntegerType(right) {
 			return []Violation{violation(node.Pos_,
 				"operator '-' expects integer, got '%s'", right.String(),
 			)}
@@ -217,6 +237,16 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 		actualExpr := arg.Argument
 		gotType := tast.TypeOf(actualExpr)
 
+		// --- Integer Literal Auto-Coercion ---
+		// If the user wrote an integer literal, we allow it to implicitly adopt
+		// the expected type (i8, i16, i32, i64, i128) if the value fits.
+		if intLit, isIntLit := actualExpr.(*tast.IntLiteral); isIntLit {
+			if types.CanRepresentInt(intLit.Value, expectedType) {
+				intLit.Type = expectedType
+				gotType = expectedType
+			}
+		}
+
 		// --- Literal Auto-Coercion ---
 		// Identify if the expression is a string literal (or array/struct literal)
 		_, isLiteral := actualExpr.(*tast.StringLiteral)
@@ -243,14 +273,10 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 		}
 
 		// 3. Memory Path Check
-		if actualCap == types.CapMut || actualCap == types.CapOwn || actualCap == types.CapRo {
+		if actualCap == types.CapMut {
 			if !isValidMemoryPath(actualExpr) {
-				// We still need the exception here! Even though we coerced the cap to 'ro',
-				// a literal is still not a valid memory path.
-				if !isLiteral {
-					violations = append(violations, violation(actualExpr.Pos(),
-						"the '%s' capability can only be applied to variables and their fields", actualCap))
-				}
+				violations = append(violations, violation(actualExpr.Pos(),
+					"the 'mut' capability can only be applied to variables and their fields"))
 			}
 		}
 
@@ -258,7 +284,7 @@ func (r CallArgumentTypeCompatibility) Check(node *tast.CallExpr, ctx *RuleConte
 		// (This now PASSES for literals because actualCap is no longer CapNone)
 		if actualCap == types.CapNone && !IsCopyable(gotType) {
 			violations = append(violations, violation(actualExpr.Pos(),
-				"type '%s' is not implicitly copyable. You must pass it with an explicit capability (own, mut, ro, copy)", gotType.String()))
+				"type '%s' is not implicitly copyable. You must pass it with an explicit capability (own, mut, ro)", gotType.String()))
 		}
 	}
 	return violations
@@ -531,10 +557,10 @@ func (r CannotReassignBorrow) Check(node *tast.AssignStmt, ctx *RuleContext) []V
 	// We still allow mutating fields of a borrow (e.g. `y.field = ...`)
 	if ident, ok := node.LValue.(*tast.Identifier); ok {
 		sym := ident.Symbol
-		// If the symbol is a borrow (ro or mut), it cannot be re-bound.
-		if sym != nil && (sym.Cap == types.CapRo || sym.Cap == types.CapMut) {
+		// If the symbol is a borrow (ro), it cannot be re-bound.
+		if sym != nil && (sym.Cap == types.CapRo) {
 			return []Violation{violation(node.Pos_,
-				"cannot reassign borrow '%s'; borrows only permit in-place mutation of fields", sym.Name,
+				"cannot reassign read-only borrow '%s'", sym.Name,
 			)}
 		}
 	}

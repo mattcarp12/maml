@@ -1,225 +1,164 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/mattcarp12/maml/driver"
+	"github.com/spf13/cobra"
 )
 
+var (
+	buildOut      string
+	buildPrintIR  bool
+	buildSanitize bool
+
+	runPrintIR  bool
+	runSanitize bool
+
+	dumpEmit string
+	dumpOut  string
+)
+
+var rootCmd = &cobra.Command{
+	Use:   "maml",
+	Short: "MAML Compiler",
+	Long:  "The MAML compiler toolchain.",
+}
+
+func init() {
+	// build
+	buildCmd := &cobra.Command{
+		Use:   "build <file.maml>",
+		Short: "Compile a .maml file into a native executable",
+		Args:  cobra.ExactArgs(1),
+		RunE:  doBuild,
+	}
+	buildCmd.Flags().StringVarP(&buildOut, "out", "o", "maml_app", "Output executable name")
+	buildCmd.Flags().BoolVar(&buildPrintIR, "printir", false, "Print LLVM IR")
+	buildCmd.Flags().BoolVar(&buildSanitize, "sanitize", false, "Enable AddressSanitizer")
+	rootCmd.AddCommand(buildCmd)
+
+	// run
+	runCmd := &cobra.Command{
+		Use:   "run <file.maml>",
+		Short: "Compile and immediately run a .maml file",
+		Args:  cobra.ExactArgs(1),
+		RunE:  doRun,
+	}
+	runCmd.Flags().BoolVar(&runPrintIR, "printir", false, "Print LLVM IR")
+	runCmd.Flags().BoolVar(&runSanitize, "sanitize", false, "Enable AddressSanitizer")
+	rootCmd.AddCommand(runCmd)
+
+	// check
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "check <file.maml>",
+		Short: "Run syntax and semantic checks",
+		Args:  cobra.ExactArgs(1),
+		RunE:  doCheck,
+	})
+
+	// dump (replaces dump-ast, dump-tast, dump-hir, dump-mir, dump-llvm)
+	dumpCmd := &cobra.Command{
+		Use:   "dump <file.maml>",
+		Short: "Dump compiler IR phases",
+		Long:  "Emit one or more compiler phases. Use --emit to select phases (ast,tast,hir,mir,llvm,all).",
+		Args:  cobra.ExactArgs(1),
+		RunE:  doDump,
+	}
+	dumpCmd.Flags().StringVar(&dumpEmit, "emit", "all", "Comma-separated phases to emit")
+	dumpCmd.Flags().StringVarP(&dumpOut, "out", "o", "", "Write output to file instead of stdout")
+	rootCmd.AddCommand(dumpCmd)
+
+	// dump-all (thin wrapper kept for convenience)
+	dumpAllCmd := &cobra.Command{
+		Use:   "dump-all <file.maml>",
+		Short: "Dump source and all IR phases into a single file",
+		Args:  cobra.ExactArgs(1),
+		RunE:  doDumpAll,
+	}
+	dumpAllCmd.Flags().StringVarP(&dumpOut, "out", "o", "maml_dump.txt", "Output file path")
+	rootCmd.AddCommand(dumpAllCmd)
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	switch os.Args[1] {
-	case "build":
-		buildCmd(os.Args[2:])
-	case "run":
-		runCmd(os.Args[2:])
-	case "check":
-		checkCmd(os.Args[2:])
-	case "dump-ast":
-		dumpAstCmd(os.Args[2:])
-	case "dump-tast":
-		dumpTastCmd(os.Args[2:])
-	case "dump-hir":
-		dumpHIRCmd(os.Args[2:])
-	case "dump-mir":
-		dumpMirCmd(os.Args[2:])
-	case "dump-llvm":
-		dumpLlvmCmd(os.Args[2:])
-	case "dump-all":
-		dumpAllCmd(os.Args[2:])
-	default:
-		fmt.Printf("Unknown command: %s\n", os.Args[1])
-		printUsage()
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func printUsage() {
-	fmt.Println("MAML Compiler")
-	fmt.Println("Usage: maml <command> [options] <file>")
-	fmt.Println("\nCommands:")
-	fmt.Println("  build      Compile a .maml file into a native executable")
-	fmt.Println("  run        Compile and immediately run a .maml file")
-	fmt.Println("  check      Run syntax and semantic checks")
-	fmt.Println("  dump-ast   Parse file and output JSON serialized AST to stdout")
-	fmt.Println("  dump-tast  Parse file and output JSON serialized TAST to stdout")
-	fmt.Println("  dump-hir   Parse file and output JSON serialized HIR to stdout")
-	fmt.Println("  dump-mir   Parse file and output JSON serialized MIR to stdout")
-	fmt.Println("  dump-llvm  Parse file, invoke backend, and output LLVM IR to stdout")
-	fmt.Println("  dump-all    Dump source and all IR phases into a single file")
-}
-
-func buildCmd(args []string) {
-	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	out := fs.String("out", "maml_app", "Output executable name")
-	printIR := fs.Bool("printir", false, "Print LLVM IR")
-	sanitize := fs.Bool("sanitize", false, "Enable AddressSanitizer") // <-- Add flag
-	fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Println("Usage: maml build [options] <file.maml>")
-		os.Exit(1)
-	}
-	file := fs.Arg(0)
-
-	pipeline := driver.New(driver.Config{
-		OutputPath: *out,
-		PrintIR:    *printIR,
-		Sanitize:   *sanitize, // <-- Pass to config
+func doBuild(cmd *cobra.Command, args []string) error {
+	p := NewPipeline(Config{
+		OutputPath: buildOut,
+		PrintIR:    buildPrintIR,
+		Sanitize:   buildSanitize,
 	})
-
-	if err := pipeline.Build(file); err != nil {
-		fmt.Printf("❌ %v\n", err)
-		os.Exit(1)
+	if err := p.Build(args[0]); err != nil {
+		return err
 	}
-
-	absPath, _ := filepath.Abs(*out)
+	absPath, _ := filepath.Abs(buildOut)
 	fmt.Printf("✅ Build successful: %s\n", absPath)
+	return nil
 }
 
-func runCmd(args []string) {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	printIR := fs.Bool("printir", false, "Print LLVM IR")
-	sanitize := fs.Bool("sanitize", false, "Enable AddressSanitizer") // <-- Add flag
-	fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Println("Usage: maml run [options] <file.maml>")
-		os.Exit(1)
-	}
-
-	pipeline := driver.New(driver.Config{
-		PrintIR:  *printIR,
-		Sanitize: *sanitize, // <-- Pass to config
+func doRun(cmd *cobra.Command, args []string) error {
+	p := NewPipeline(Config{
+		PrintIR:  runPrintIR,
+		Sanitize: runSanitize,
 	})
-	if err := pipeline.Run(fs.Arg(0)); err != nil {
-		fmt.Printf("❌ Run failed: %v\n", err)
-		os.Exit(1)
-	}
+	return p.Run(args[0])
 }
-func checkCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml check <file.maml>")
-		os.Exit(1)
-	}
 
-	pipeline := driver.New(driver.Config{})
-	if err := pipeline.Check(args[0]); err != nil {
-		fmt.Printf("❌ Check failed: %v\n", err)
-		os.Exit(1)
+func doCheck(cmd *cobra.Command, args []string) error {
+	if err := NewPipeline(Config{}).Check(args[0]); err != nil {
+		return err
 	}
 	fmt.Println("✅ All checks passed.")
+	return nil
 }
 
-func dumpAstCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-ast <file.maml>")
-		os.Exit(1)
+func doDump(cmd *cobra.Command, args []string) error {
+	srcPath := args[0]
+
+	var requested []string
+	if dumpEmit == "all" {
+		requested = []string{"ast", "tast", "hir", "mir", "llvm"}
+	} else {
+		for _, p := range strings.Split(dumpEmit, ",") {
+			if s := strings.TrimSpace(strings.ToLower(p)); s != "" {
+				requested = append(requested, s)
+			}
+		}
+		if len(requested) == 0 {
+			return fmt.Errorf("no phases specified")
+		}
 	}
 
-	pipeline := driver.New(driver.Config{})
-	jsonBytes, err := pipeline.DumpAST(args[0])
+	out, err := NewPipeline(Config{}).DumpPhases(srcPath, requested)
 	if err != nil {
-		fmt.Printf("❌ AST Generation failed: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	// Print directly to standard output so users can redirect it to a file
-	fmt.Println(string(jsonBytes))
+	if dumpOut != "" {
+		if err := os.WriteFile(dumpOut, out, 0644); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
+		}
+		fmt.Printf("Dump written to %s\n", dumpOut)
+		return nil
+	}
+
+	fmt.Print(string(out))
+	return nil
 }
 
-func dumpTastCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-tast <file.maml>")
-		os.Exit(1)
+func doDumpAll(cmd *cobra.Command, args []string) error {
+	srcPath := args[0]
+	fmt.Printf("Dumping all compiler phases for '%s' to '%s'...\n", srcPath, dumpOut)
+	if err := NewPipeline(Config{}).DumpAll(srcPath, dumpOut); err != nil {
+		return err
 	}
-
-	pipeline := driver.New(driver.Config{})
-	jsonBytes, err := pipeline.DumpTAST(args[0])
-	if err != nil {
-		fmt.Printf("❌ TAST Generation failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Print directly to standard output so users can redirect it to a file
-	fmt.Println(string(jsonBytes))
-}
-
-func dumpHIRCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-hir <file.maml>")
-		os.Exit(1)
-	}
-
-	pipeline := driver.New(driver.Config{})
-	jsonBytes, err := pipeline.DumpHIR(args[0])
-	if err != nil {
-		fmt.Printf("❌ DTAST Generation failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Print directly to standard output so users can redirect it to a file
-	fmt.Println(string(jsonBytes))
-}
-
-func dumpMirCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-mir <file.maml>")
-		os.Exit(1)
-	}
-	p := driver.New(driver.Config{})
-	out, err := p.DumpMIR(args[0])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Compilation failed:\n%v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println(string(out))
-}
-
-func dumpLlvmCmd(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: maml dump-llvm <file.maml>")
-		os.Exit(1)
-	}
-	p := driver.New(driver.Config{})
-	out, err := p.DumpLLVM(args[0])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "LLVM IR Generation failed:\n%v\n", err)
-		os.Exit(1)
-	}
-	// Print directly to standard output so users can inspect it or pipe it to a file
-	fmt.Println(string(out))
-}
-
-func dumpAllCmd(args []string) {
-	fs := flag.NewFlagSet("dump-all", flag.ExitOnError)
-	out := fs.String("out", "maml_dump.txt", "Output file path")
-	fs.Parse(args)
-
-	positionalArgs := fs.Args()
-	if len(positionalArgs) < 1 {
-		fmt.Println("Usage: maml dump-all [options] <file.maml>")
-		fs.PrintDefaults()
-		os.Exit(1)
-	}
-
-	srcPath := positionalArgs[0]
-	p := driver.New(driver.Config{})
-
-	fmt.Printf("Dumping all compiler phases for '%s' to '%s'...\n", srcPath, *out)
-
-	err := p.DumpAll(srcPath, *out)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Dump failed:\n%v\n", err)
-		os.Exit(1)
-	}
-
 	fmt.Println("Success.")
+	return nil
 }

@@ -4,12 +4,12 @@ package hir
 import "github.com/mattcarp12/maml/frontend/tast"
 
 // Ensure Lowerer satisfies the TAST Mapper interface at compile time.
-var _ tast.Mapper[Node] = (*Lowerer)(nil)
+var _ tast.Mapper[Node] = (*TASTLowerer)(nil)
 
 // =============================================================================
 // Generated node lowering methods (Implementing tast.Mapper[hir.Node])
 // =============================================================================
-func (l *Lowerer) MapAliasDecl(s *tast.AliasDecl) Node {
+func (l *TASTLowerer) MapAliasDecl(s *tast.AliasDecl) Node {
 	if s == nil {
 		return nil
 	}
@@ -20,7 +20,7 @@ func (l *Lowerer) MapAliasDecl(s *tast.AliasDecl) Node {
 		Value:  l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapArrayLiteral(s *tast.ArrayLiteral) Node {
+func (l *TASTLowerer) MapArrayLiteral(s *tast.ArrayLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -35,7 +35,7 @@ func (l *Lowerer) MapArrayLiteral(s *tast.ArrayLiteral) Node {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) MapAwaitExpr(s *tast.AwaitExpr) Node {
+func (l *TASTLowerer) MapAwaitExpr(s *tast.AwaitExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -46,7 +46,7 @@ func (l *Lowerer) MapAwaitExpr(s *tast.AwaitExpr) Node {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapBoolLiteral(s *tast.BoolLiteral) Node {
+func (l *TASTLowerer) MapBoolLiteral(s *tast.BoolLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -57,7 +57,7 @@ func (l *Lowerer) MapBoolLiteral(s *tast.BoolLiteral) Node {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) MapBreakStmt(s *tast.BreakStmt) Node {
+func (l *TASTLowerer) MapBreakStmt(s *tast.BreakStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -66,7 +66,7 @@ func (l *Lowerer) MapBreakStmt(s *tast.BreakStmt) Node {
 		End_: s.End_,
 	}
 }
-func (l *Lowerer) MapContinueStmt(s *tast.ContinueStmt) Node {
+func (l *TASTLowerer) MapContinueStmt(s *tast.ContinueStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -75,7 +75,7 @@ func (l *Lowerer) MapContinueStmt(s *tast.ContinueStmt) Node {
 		End_: s.End_,
 	}
 }
-func (l *Lowerer) MapDeclareStmt(s *tast.DeclareStmt) Node {
+func (l *TASTLowerer) MapDeclareStmt(s *tast.DeclareStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -86,7 +86,7 @@ func (l *Lowerer) MapDeclareStmt(s *tast.DeclareStmt) Node {
 		Value:  l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapIdentifier(s *tast.Identifier) Node {
+func (l *TASTLowerer) MapIdentifier(s *tast.Identifier) Node {
 	if s == nil {
 		return nil
 	}
@@ -98,7 +98,7 @@ func (l *Lowerer) MapIdentifier(s *tast.Identifier) Node {
 		Value:  s.Value,
 	}
 }
-func (l *Lowerer) MapIfExpr(s *tast.IfExpr) Node {
+func (l *TASTLowerer) MapIfExpr(s *tast.IfExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -111,7 +111,7 @@ func (l *Lowerer) MapIfExpr(s *tast.IfExpr) Node {
 		Type:        s.Type,
 	}
 }
-func (l *Lowerer) MapIntLiteral(s *tast.IntLiteral) Node {
+func (l *TASTLowerer) MapIntLiteral(s *tast.IntLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -122,7 +122,7 @@ func (l *Lowerer) MapIntLiteral(s *tast.IntLiteral) Node {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) MapPrefixExpr(s *tast.PrefixExpr) Node {
+func (l *TASTLowerer) MapPrefixExpr(s *tast.PrefixExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -134,7 +134,7 @@ func (l *Lowerer) MapPrefixExpr(s *tast.PrefixExpr) Node {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) MapReturnStmt(s *tast.ReturnStmt) Node {
+func (l *TASTLowerer) MapReturnStmt(s *tast.ReturnStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -144,7 +144,7 @@ func (l *Lowerer) MapReturnStmt(s *tast.ReturnStmt) Node {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapSliceExpr(s *tast.SliceExpr) Node {
+func (l *TASTLowerer) MapSliceExpr(s *tast.SliceExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -157,7 +157,7 @@ func (l *Lowerer) MapSliceExpr(s *tast.SliceExpr) Node {
 		Type: s.Type,
 	}
 }
-func (l *Lowerer) MapSpawnExpr(s *tast.SpawnExpr) Node {
+func (l *TASTLowerer) MapSpawnExpr(s *tast.SpawnExpr) Node {
 	if s == nil {
 		return nil
 	}
@@ -168,7 +168,7 @@ func (l *Lowerer) MapSpawnExpr(s *tast.SpawnExpr) Node {
 		Value: l.lowerExpr(s.Value),
 	}
 }
-func (l *Lowerer) MapStringLiteral(s *tast.StringLiteral) Node {
+func (l *TASTLowerer) MapStringLiteral(s *tast.StringLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -179,7 +179,7 @@ func (l *Lowerer) MapStringLiteral(s *tast.StringLiteral) Node {
 		Value: s.Value,
 	}
 }
-func (l *Lowerer) MapVecLiteral(s *tast.VecLiteral) Node {
+func (l *TASTLowerer) MapVecLiteral(s *tast.VecLiteral) Node {
 	if s == nil {
 		return nil
 	}
@@ -194,7 +194,7 @@ func (l *Lowerer) MapVecLiteral(s *tast.VecLiteral) Node {
 		Type:     s.Type,
 	}
 }
-func (l *Lowerer) MapYieldStmt(s *tast.YieldStmt) Node {
+func (l *TASTLowerer) MapYieldStmt(s *tast.YieldStmt) Node {
 	if s == nil {
 		return nil
 	}
@@ -208,7 +208,7 @@ func (l *Lowerer) MapYieldStmt(s *tast.YieldStmt) Node {
 // =============================================================================
 // Generated helper lowering functions
 // =============================================================================
-func lowerTASTCallArg(l *Lowerer, h tast.CallArg) CallArg {
+func lowerTASTCallArg(l *TASTLowerer, h tast.CallArg) CallArg {
 	return CallArg{
 		Pos_:     h.Pos_,
 		End_:     h.End_,
@@ -216,7 +216,7 @@ func lowerTASTCallArg(l *Lowerer, h tast.CallArg) CallArg {
 		Cap:      h.Cap,
 	}
 }
-func lowerTASTMapElement(l *Lowerer, h tast.MapElement) MapElement {
+func lowerTASTMapElement(l *TASTLowerer, h tast.MapElement) MapElement {
 	return MapElement{
 		Pos_:  h.Pos_,
 		End_:  h.End_,
@@ -224,7 +224,7 @@ func lowerTASTMapElement(l *Lowerer, h tast.MapElement) MapElement {
 		Value: l.lowerExpr(h.Value),
 	}
 }
-func lowerTASTParam(l *Lowerer, h tast.Param) Param {
+func lowerTASTParam(l *TASTLowerer, h tast.Param) Param {
 	return Param{
 		Pos_:   h.Pos_,
 		End_:   h.End_,
@@ -233,7 +233,7 @@ func lowerTASTParam(l *Lowerer, h tast.Param) Param {
 		Type:   h.Type,
 	}
 }
-func lowerTASTVariantField(l *Lowerer, h tast.VariantField) VariantField {
+func lowerTASTVariantField(l *TASTLowerer, h tast.VariantField) VariantField {
 	return VariantField{
 		Pos_:  h.Pos_,
 		End_:  h.End_,
