@@ -39,7 +39,7 @@ struct TypeVisitor {
   llvm::Type* operator()(const PtrType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const CharType&) { return llvm::Type::getInt32Ty(ctx.Context); }
   llvm::Type* operator()(const FutureType&) { return llvm::PointerType::getUnqual(ctx.Context); }
-
+  llvm::Type* operator()(const FunctionType&) { return llvm::PointerType::getUnqual(ctx.Context); }
   llvm::Type* operator()(const UnknownType&) {
     ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
     return nullptr;

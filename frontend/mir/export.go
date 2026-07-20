@@ -402,9 +402,6 @@ func lowerType(t types.Type, target *Target) any {
 	case *types.FunctionType:
 		return "ptr"
 	default:
-		if t.IsReferenceType() {
-			return "ptr"
-		}
 		return "void"
 	}
 }

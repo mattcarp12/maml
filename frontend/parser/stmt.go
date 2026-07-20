@@ -3,8 +3,8 @@ package parser
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 func (p *Parser) parseBlockStmt() *ast.BlockStmt {

@@ -7,7 +7,7 @@
 }
 
 void maml_free(void* ptr) {
-    free(ptr);
+    if (ptr) free(ptr);
 }
 
 [[nodiscard]] void* maml_realloc(void* ptr, size_t size) {

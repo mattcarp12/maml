@@ -1,7 +1,7 @@
 package sema
 
 import (
-	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
 	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )

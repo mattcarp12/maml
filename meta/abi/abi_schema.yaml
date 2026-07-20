@@ -65,10 +65,10 @@ primitives:
 # ----------------------------------------------------------------------------
 types:
   - name: "String"
-    passing_convention: by_value
-    allocation: stack
+    passing_convention: by_reference
+    allocation: heap
     is_borrow: false
-    is_copyable: true
+    is_copyable: false
     fields:
       - name: "ptr"
         type: "ptr"
@@ -121,15 +121,6 @@ types:
         type: "u32"
       - name: "is_string_key"
         type: "bool"
-
-  # - name: "Future"
-  #   passing_convention: by_reference
-  #   allocation: heap
-  #   is_borrow: false
-  #   is_copyable: false
-  #   fields:
-  #     - name: "state"
-  #       type: "ptr"
 
   - name: "Ref"
     passing_convention: by_value
@@ -243,15 +234,12 @@ modules:
     definitions:
       - symbol: "maml_str_hash"
         args:
-          - { name: "str_ptr", type: "bytes_ptr" }
-          - { name: "len", type: u32 }
+          - { name: "str", type: String }
         return: { type: u32 }
       - symbol: "maml_str_eq"
         args:
-          - { name: "a_ptr", type: "bytes_ptr" }
-          - { name: "a_len", type: u32 }
-          - { name: "b_ptr", type: "bytes_ptr" }
-          - { name: "b_len", type: u32 }
+          - { name: "a_str", type: String }
+          - { name: "b_str", type: String }
         return: { type: i32 }
       - symbol: "maml_str_clone"
         args:
@@ -262,6 +250,15 @@ modules:
         args:
           - { name: "str", type: String }
         return: { type: u32 }
+      - symbol: "maml_str_free"
+        args:
+          - { name: "str", type: String }
+        return: { type: unit }
+      - symbol: "maml_str_concat"
+        args:
+          - { name: str_a, type: String }
+          - { name: str_b, type: String }
+        return: { type: String }
 
   # --- Coroutine Executor ---
   - module: "coro"
@@ -329,6 +326,7 @@ modules:
           - { name: msg, type: String }
         return: { type: unit }
 
+  # --- NET ---
   - module: "net"
     definitions:
       - symbol: "maml_socket"
@@ -356,3 +354,14 @@ modules:
           - { name: "fd", type: i32 }
           - { name: "max_bytes", type: u32 }
         return: { type: String }
+      - symbol: "maml_socket_write"
+        args:
+          - { name: "fd", type: i32 }
+          - { name: "msg", type: String }
+        return: { type: i32 }
+      - symbol: "maml_connect"
+        args:
+          - { name: fd, type: i32 }
+          - { name: host, type: String }
+          - { name: port, type: i64 }
+        return: { type: i32 }

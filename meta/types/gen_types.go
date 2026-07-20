@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
@@ -33,6 +34,9 @@ type Property struct {
 type Primitive struct {
 	Name    string `yaml:"name"`
 	CppKind string `yaml:"cpp_kind"`
+	IsInt   bool   `yaml:"is_int"`
+	Min     string `yaml:"min"`
+	Max     string `yaml:"max"`
 }
 
 type Complex struct {
@@ -41,18 +45,11 @@ type Complex struct {
 	Properties []Property `yaml:"properties"`
 }
 
-type TypeRepr struct {
-	Name    string `yaml:"name"`
-	String  string `yaml:"string"`
-	Mangled string `yaml:"mangled"`
-}
-
 type Schema struct {
 	Primitives []Primitive `yaml:"primitives"`
 	Composites []Complex   `yaml:"composites"`
 	Containers []Complex   `yaml:"containers"`
 	Helpers    []Complex   `yaml:"helpers"`
-	Reprs      []TypeRepr  `yaml:"type_representations"`
 }
 
 func main() {
@@ -63,8 +60,10 @@ func main() {
 	}
 
 	funcs := template.FuncMap{
-		"toSnake": toSnakeCase,
-		"cppType": mapCppType,
+		"toSnake":    toSnakeCase,
+		"cppType":    mapCppType,
+		"toLower":    strings.ToLower,
+		"trimSuffix": strings.TrimSuffix,
 	}
 
 	goOut := flag.String("goOut", "frontend/types/", "output directory for types_generated.go")
@@ -138,6 +137,10 @@ func mapCppType(goType string) string {
 		return "std::vector<maml::StructField>"
 	case "[]SumVariant":
 		return "std::vector<maml::SumVariant>"
+	case "[]Cap":
+		return "std::vector<std::string>"
+	case "Cap":
+		return "std::string"
 	default:
 		return goType
 	}

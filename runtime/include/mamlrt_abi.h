@@ -110,10 +110,12 @@ void maml_map_delete(Map* m, uint32_t key_hash, void* key_ptr, uint32_t key_len)
 uint32_t maml_map_len(Map* m);
 Map maml_map_clone(Map* m);
 void maml_map_free(Map* m);
-uint32_t maml_str_hash(const char* str_ptr, uint32_t len);
-int32_t maml_str_eq(const char* a_ptr, uint32_t a_len, const char* b_ptr, uint32_t b_len);
+uint32_t maml_str_hash(String* str);
+int32_t maml_str_eq(String* a_str, String* b_str);
 void* maml_str_clone(const char* str_ptr, uint32_t len);
-uint32_t maml_str_len(String str);
+uint32_t maml_str_len(String* str);
+void maml_str_free(String* str);
+String maml_str_concat(String* str_a, String* str_b);
 void maml_coro_runtime_init();
 void maml_coro_resume_helper(void* task);
 bool maml_coro_done_helper(void* task);
@@ -123,15 +125,17 @@ void* maml_run_executor(void* task);
 void maml_task_await(void* current_task, void* target_task);
 void maml_task_release(void* task);
 void maml_yield_now(void* task);
-void maml_print(String msg);
-int32_t maml_file_open(String filename);
+void maml_print(String* msg);
+int32_t maml_file_open(String* filename);
 void maml_file_close(int32_t fd);
 String maml_file_read_str(int32_t fd);
-void maml_file_write_str(int32_t fd, String msg);
+void maml_file_write_str(int32_t fd, String* msg);
 int32_t maml_socket(int32_t domain, int32_t typ, int32_t protocol);
 int32_t maml_bind(int32_t fd, int32_t port);
 int32_t maml_listen(int32_t fd, int32_t backlog);
 int32_t maml_accept(int32_t fd);
 String maml_socket_read(int32_t fd, uint32_t max_bytes);
+int32_t maml_socket_write(int32_t fd, String* msg);
+int32_t maml_connect(int32_t fd, String* host, int64_t port);
 
 } // extern "C"

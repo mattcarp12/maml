@@ -10,7 +10,7 @@ import (
 
 func InjectDrops(g *mir.Graph, locals map[string]types.Type, globalLiveness *LivenessResult) {
 	env := buildTypeEnv(g, locals)
-	views := buildViewSet(g)
+	views := buildViewSet(g, locals)
 
 	// Build reverse alias map: src -> []dst (all variables that alias src)
 	revAliases := make(map[string][]string)
@@ -223,14 +223,30 @@ func lookupDestructorSymbol(t types.Type) string {
 		return "maml_map_free"
 	case *types.FutureType:
 		return "maml_task_release"
+	case types.StringType:
+		return "maml_str_free"
 	default:
 		return "maml_free"
 	}
 }
 
-func buildViewSet(g *mir.Graph) map[string]bool {
+func buildViewSet(g *mir.Graph, locals map[string]types.Type) map[string]bool {
 	views := make(map[string]bool)
 	addrIsDerived := make(map[string]bool)
+
+	// 1. Any local variable that is a pointer type is fundamentally a borrow/reference.
+	// This naturally covers function parameters since they are mapped into locals.
+	for name, t := range locals {
+		if _, isPtr := t.(types.PtrType); isPtr {
+			addrIsDerived[name] = true
+		}
+	}
+
+	for _, p := range g.Params {
+		if _, isPtr := p.Type.(types.PtrType); isPtr {
+			addrIsDerived[p.Name] = true
+		}
+	}
 
 	for _, block := range g.Blocks {
 		for _, inst := range block.Statements {
@@ -239,7 +255,11 @@ func buildViewSet(g *mir.Graph) map[string]bool {
 				addrIsDerived[i.Dst] = true
 			case *mir.IndexAddrInst:
 				addrIsDerived[i.Dst] = true
+			case *mir.BorrowInst:
+				addrIsDerived[i.Dst] = true
 			case *mir.LoadPtrInst:
+				// 2. If we load a concrete struct from a borrowed pointer,
+				// that local struct is just a view and does NOT own the memory.
 				if ptrReg, ok := i.Ptr.(*mir.Register); ok && addrIsDerived[ptrReg.Name] {
 					views[i.Dst] = true
 				}
@@ -281,10 +301,10 @@ func needsDrop(t types.Type) bool {
 	}
 
 	switch ty := t.(type) {
-	case *types.ViewType, types.StringType:
+	case *types.ViewType:
 		return false
 
-	case *types.VectorType, *types.MapType, *types.FutureType:
+	case *types.VectorType, *types.MapType, *types.FutureType, types.StringType:
 		return true
 
 	case *types.StructType:

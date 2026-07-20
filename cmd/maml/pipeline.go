@@ -186,21 +186,21 @@ func (p *Pipeline) dumpJSON(srcPath string, fn func(string) (any, error)) ([]byt
 // DumpAST parses the target file and returns its JSON AST representation.
 func (p *Pipeline) DumpAST(srcPath string) ([]byte, error) {
 	return p.dumpJSON(srcPath, func(src string) (any, error) {
-		return frontend.New().CompileAST(src)
+		return frontend.New().CompileAST(filepath.Base(srcPath), src)
 	})
 }
 
 // DumpTAST parses the target file and returns its JSON TAST representation.
 func (p *Pipeline) DumpTAST(srcPath string) ([]byte, error) {
 	return p.dumpJSON(srcPath, func(src string) (any, error) {
-		return frontend.New().CompileTAST(src)
+		return frontend.New().CompileTAST(filepath.Base(srcPath), src)
 	})
 }
 
 // DumpHIR parses the target file and returns its JSON HIR representation.
 func (p *Pipeline) DumpHIR(srcPath string) ([]byte, error) {
 	return p.dumpJSON(srcPath, func(src string) (any, error) {
-		tast, err := frontend.New().CompileTAST(src)
+		tast, err := frontend.New().CompileTAST(filepath.Base(srcPath), src)
 		if err != nil {
 			return nil, err
 		}

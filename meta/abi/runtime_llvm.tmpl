@@ -9,20 +9,6 @@ namespace maml {
 namespace rt {
 
 // ============================================================================
-// Field Index Enums (Symbolic access to struct members)
-// ============================================================================
-{{- range .Types }}
-namespace {{ .Name }} {
-    enum class Field : unsigned {
-        {{- range $i, $f := .Fields }}
-        {{- if $i }},{{ end }}
-        {{ toUpper $f.Name }}
-        {{- end }}
-    };
-}
-{{- end }}
-
-// ============================================================================
 // Struct Builder Functions (Create correct LLVM struct types)
 // ============================================================================
 {{- range .Types }}
@@ -32,20 +18,6 @@ inline llvm::StructType* get{{ .Name }}Type(llvm::LLVMContext &C) {
     });
 }
 {{- end }}
-
-// ============================================================================
-// Runtime Function Signatures
-// ============================================================================
-inline void declareRuntimeFunctions(CodegenContext &ctx) {
-    auto &M = ctx.Module;
-
-    {{- range .Functions }}
-    M->getOrInsertFunction("{{ .Symbol }}",
-        llvm::FunctionType::get({{ .ReturnCpp }}, {
-            {{- range $i, $a := .Args }}{{ if $i }}, {{ end }}{{ $a.CppType }}{{ end }}
-        }, false));
-    {{- end }}
-}
 
 } // namespace rt
 } // namespace maml

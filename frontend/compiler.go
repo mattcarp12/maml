@@ -4,20 +4,19 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/hir"
-	"github.com/mattcarp12/maml/frontend/lexer"
 	"github.com/mattcarp12/maml/frontend/mir"
 	"github.com/mattcarp12/maml/frontend/parser"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/lexer"
 	"github.com/mattcarp12/maml/frontend/passes"
 	"github.com/mattcarp12/maml/frontend/sema"
 	"github.com/mattcarp12/maml/frontend/tast"
+	"github.com/mattcarp12/maml/stdlib"
 )
-
-//go:embed prelude.maml
-var preludeSource string
 
 type Compiler struct{}
 
@@ -32,24 +31,33 @@ type FrontendResult struct {
 	MIR  *mir.Program
 }
 
-func (c *Compiler) parse(src string) (*ast.Program, error) {
-	// append the prelude to the source code
-	src = src + "\n" + preludeSource
-	l := lexer.New(src)
-	p := parser.New(l)
+func (c *Compiler) parse(filename, src string) (*ast.Program, error) {
+	// Lex the standard library explicitly labeling it as <stdlib>
+	stdlibLexer := lexer.New("<stdlib>", stdlib.Prelude)
+
+	// Lex the user's actual source code
+	userLexer := lexer.New(filename, src)
+
+	// Chain them together
+	multiLexer := lexer.Multi(stdlibLexer, userLexer)
+
+	// The parser is completely unaware that it is reading from two different files
+	p := parser.New(multiLexer)
 	astProgram := p.ParseProgram()
+
 	if len(p.Errors()) > 0 {
 		return nil, fmt.Errorf("parser syntax errors:\n%s", strings.Join(p.Errors(), "\n"))
 	}
+
 	return astProgram, nil
 }
 
 // Frontend executes the canonical frontend pipeline.
-func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
+func (c *Compiler) Frontend(filename, src string) (*FrontendResult, error) {
 	// -------------------------------------------------------------------------
 	// Syntax Analysis -> AST
 	// -------------------------------------------------------------------------
-	astProgram, err := c.parse(src)
+	astProgram, err := c.parse(filename, src)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +97,9 @@ func (c *Compiler) Frontend(src string) (*FrontendResult, error) {
 		}
 	}
 
+	// Strip unused stdlib functions
+	passes.EliminateDeadFunctions(mirProgram)
+
 	return &FrontendResult{
 		AST:  astProgram,
 		TAST: tastProgram,
@@ -102,7 +113,8 @@ func (c *Compiler) CompileFile(path string) (*FrontendResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open source target %s: %w", path, err)
 	}
-	return c.Frontend(string(content))
+	filename := filepath.Base(path)
+	return c.Frontend(filename, string(content))
 }
 
 // formatErrors aggregates compiler errors into a single string.
@@ -115,14 +127,14 @@ func formatErrors(stage string, errs []ast.CompileError) error {
 }
 
 // CompileAST executes only Phase 1 (Syntax Analysis) and returns the raw AST.
-func (c *Compiler) CompileAST(src string) (*ast.Program, error) {
-	return c.parse(src)
+func (c *Compiler) CompileAST(filename, src string) (*ast.Program, error) {
+	return c.parse(filename, src)
 }
 
 // CompileTAST executes Phase 1 (Syntax Analysis) and Phase 2 (Semantic Analysis)
 // and returns the typed AST.
-func (c *Compiler) CompileTAST(src string) (*tast.Program, error) {
-	astProgram, err := c.parse(src)
+func (c *Compiler) CompileTAST(filename, src string) (*tast.Program, error) {
+	astProgram, err := c.parse(filename, src)
 	if err != nil {
 		return nil, err
 	}

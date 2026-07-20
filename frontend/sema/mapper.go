@@ -1,7 +1,7 @@
 package sema
 
 import (
-	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
 	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -147,7 +147,7 @@ func (a *Analyzer) MapFnDecl(v *ast.FnDecl) tast.Node {
 
 	fnSym := a.resolve(v.Name)
 	fnType := fnSym.Type.(*types.FunctionType)
-	a.expectedReturn = fnType.Return
+	a.expectedReturn = fnType.ReturnType
 
 	a.pushScope()
 	defer a.popScope()
@@ -182,7 +182,7 @@ func (a *Analyzer) MapFnDecl(v *ast.FnDecl) tast.Node {
 		End_:       v.End_,
 		Name:       v.Name,
 		Params:     tastParams,
-		ReturnType: fnType.Return,
+		ReturnType: fnType.ReturnType,
 		Body:       tastBody,
 		IsAsync:    v.IsAsync,
 		IsExtern:   v.IsExtern,
@@ -430,8 +430,8 @@ func (a *Analyzer) MapCallExpr(e *ast.CallExpr) tast.Node {
 	isAsync := false
 
 	if ft, ok := fnType.(*types.FunctionType); ok {
-		returnType = ft.Return
-		if _, ok := ft.Return.(*types.FutureType); ok {
+		returnType = ft.ReturnType
+		if _, ok := ft.ReturnType.(*types.FutureType); ok {
 			isAsync = true
 		}
 	}

@@ -3,17 +3,18 @@ package parser
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 // ParseError holds a human-readable message plus the source position where
 // the error was detected. Storing position here means downstream tools
 // (IDEs, error formatters) don't have to re-parse the message string.
 type ParseError struct {
-	Msg  string
-	Line int
-	Col  int
+	Msg      string
+	Line     int
+	Col      int
+	Filename string
 }
 
 func (e ParseError) string() string {
@@ -24,7 +25,7 @@ func (e ParseError) string() string {
 
 // curPos captures the exact line and column of the token currently being parsed.
 func (p *Parser) curPos() ast.Position {
-	return ast.Position{Line: p.curToken.Line, Col: p.curToken.Col}
+	return ast.Position{Line: p.curToken.Pos.Line, Col: p.curToken.Pos.Column, Filename: p.curToken.Pos.Filename}
 }
 
 func (p *Parser) curEndPos() ast.Position {
@@ -33,7 +34,7 @@ func (p *Parser) curEndPos() ast.Position {
 	if length == 0 {
 		length = 1
 	}
-	return ast.Position{Line: p.curToken.Line, Col: p.curToken.Col + length}
+	return ast.Position{Line: p.curToken.Pos.Line, Col: p.curToken.Pos.Column + length, Filename: p.curToken.Pos.Filename}
 }
 
 // --- public error API --------------------------------------------------------
@@ -62,17 +63,19 @@ func (p *Parser) addError(msg string) {
 		// Only add the sentinel once (exactly when we hit the cap).
 		if len(p.parseErrors) == p.maxErrors {
 			p.parseErrors = append(p.parseErrors, ParseError{
-				Msg:  fmt.Sprintf("too many errors (capped at %d); stopping error collection", p.maxErrors),
-				Line: p.curToken.Line,
-				Col:  p.curToken.Col,
+				Msg:      fmt.Sprintf("too many errors (capped at %d); stopping error collection", p.maxErrors),
+				Line:     p.curToken.Pos.Line,
+				Col:      p.curToken.Pos.Column,
+				Filename: p.curToken.Pos.Filename,
 			})
 		}
 		return
 	}
 	p.parseErrors = append(p.parseErrors, ParseError{
-		Msg:  msg,
-		Line: p.curToken.Line,
-		Col:  p.curToken.Col,
+		Msg:      msg,
+		Line:     p.curToken.Pos.Line,
+		Col:      p.curToken.Pos.Column,
+		Filename: p.curToken.Pos.Filename,
 	})
 }
 
@@ -115,8 +118,8 @@ func (p *Parser) peekAhead(distance int) token.Token {
 // --- expectPeek / peekError --------------------------------------------------
 
 func (p *Parser) peekError(t token.TokenType) {
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead at line %d, col %d",
-		t, p.peekToken.Type, p.peekToken.Line, p.peekToken.Col)
+	msg := fmt.Sprintf("expected next token to be %s, got %s instead at %s",
+		t, p.peekToken.Type, p.peekToken.Pos.String())
 	p.addError(msg)
 }
 
@@ -239,8 +242,8 @@ func (p *Parser) expectStatementEnd() {
 		return
 	default:
 		p.addError(fmt.Sprintf(
-			"expected end of statement, got %s at line %d, col %d",
-			p.peekToken.Type, p.peekToken.Line, p.peekToken.Col,
+			"expected end of statement, got %s at %s",
+			p.peekToken.Type, p.peekToken.Pos.String(),
 		))
 		p.nextToken()
 		p.synchronize()

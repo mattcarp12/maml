@@ -41,7 +41,7 @@ type StructSpec struct {
 }
 
 func main() {
-	outDir := flag.String("dir", "frontend/ast/", "output directory for ast_generated.go")
+	outDir := flag.String("dir", "frontend/parser/ast/", "output directory for ast_generated.go")
 	flag.Parse()
 
 	if err := generateAST(*outDir); err != nil {

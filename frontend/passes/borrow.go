@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mattcarp12/maml/frontend/ast"
 	"github.com/mattcarp12/maml/frontend/mir"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 
@@ -167,8 +167,15 @@ func (a *Analyzer) Analyze(g *mir.Graph, locals map[string]types.Type, live *Liv
 
 	// --- PASS 1: fixed-point convergence, no diagnostics -------------------
 	a.reportErrors = false
+	// maxIters := len(g.Blocks) * 4
+	maxIters := 10000
+	iters := 0
 
 	for len(worklist) > 0 {
+		if iters > maxIters {
+			panic(fmt.Sprintf("compiler-internal error: fixed-point solver failed to converge after %d iterations", iters))
+		}
+		iters++
 		id := worklist[0]
 		worklist = worklist[1:]
 		inWorklist[id] = false
@@ -299,66 +306,56 @@ func mergeBindings(b1, b2 *BindingState) *BindingState {
 		return nil
 	}
 
-	s1 := Invalidated
-	if b1 != nil {
-		s1 = b1.State
+	if b1 == nil {
+		return b2.clone()
 	}
-
-	s2 := Invalidated
-	if b2 != nil {
-		s2 = b2.State
+	if b2 == nil {
+		return b1.clone()
 	}
 
 	res := &BindingState{
-		State:  joinStates(s1, s2),
+		State:  joinStates(b1.State, b2.State),
 		Fields: make(map[string]*BindingState),
 	}
 
-	if b1 != nil && b1.MutLockedBy != "" {
+	if b1.MutLockedBy != "" {
 		res.MutLockedBy = b1.MutLockedBy
-	} else if b2 != nil && b2.MutLockedBy != "" {
+	} else if b2.MutLockedBy != "" {
 		res.MutLockedBy = b2.MutLockedBy
 	}
 
-	if b1 != nil && b1.DependsOn != "" {
+	if b1.DependsOn != "" {
 		res.DependsOn = b1.DependsOn
-	} else if b2 != nil && b2.DependsOn != "" {
+	} else if b2.DependsOn != "" {
 		res.DependsOn = b2.DependsOn
 	}
 
 	// Alias inherit
-	if b1 != nil && b1.AliasOf != "" {
+	if b1.AliasOf != "" {
 		res.AliasOf = b1.AliasOf
-	} else if b2 != nil && b2.AliasOf != "" {
+	} else if b2.AliasOf != "" {
 		res.AliasOf = b2.AliasOf
 	}
 
 	allKeys := make(map[string]bool)
-	if b1 != nil {
-		for k := range b1.Fields {
-			allKeys[k] = true
-		}
+	for k := range b1.Fields {
+		allKeys[k] = true
 	}
-	if b2 != nil {
-		for k := range b2.Fields {
-			allKeys[k] = true
-		}
+	for k := range b2.Fields {
+		allKeys[k] = true
 	}
 
 	for k := range allKeys {
-		var f1, f2 *BindingState
-		if b1 != nil {
-			f1 = b1.Fields[k]
-		}
-		if b2 != nil {
-			f2 = b2.Fields[k]
-		}
-		if f1 == nil && b1 != nil {
+		f1 := b1.Fields[k]
+		f2 := b2.Fields[k]
+
+		if f1 == nil {
 			f1 = &BindingState{State: b1.State}
 		}
-		if f2 == nil && b2 != nil {
+		if f2 == nil {
 			f2 = &BindingState{State: b2.State}
 		}
+
 		res.Fields[k] = mergeBindings(f1, f2)
 	}
 	return res
@@ -419,6 +416,9 @@ func bindingsEqual(b1, b2 *BindingState) bool {
 	if b1.State != b2.State || b1.MutLockedBy != b2.MutLockedBy {
 		return false
 	}
+	if b1.DependsOn != b2.DependsOn || b1.AliasOf != b2.AliasOf {
+		return false
+	}
 	if len(b1.Fields) != len(b2.Fields) {
 		return false
 	}
@@ -451,6 +451,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 			binding.State = ExclusiveWrite
 			binding.Fields = make(map[string]*BindingState)
 			binding.AliasOf = ""
+			binding.DependsOn = ""
 		} else {
 			state.Bindings[name] = &BindingState{State: ExclusiveWrite}
 		}
@@ -466,8 +467,8 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 				// Shared Alias Tracking (Ignore compiler temporaries)
 				if a.isRef(reg.Name) && !isCompilerGenerated(reg.Name) {
 					newBinding.AliasOf = reg.Name
-					newBinding.State = SharedRead
-					rBinding.State = SharedRead
+					newBinding.State = joinStates(newBinding.AggregateState(), SharedRead)
+					rBinding.State = joinStates(rBinding.AggregateState(), SharedRead)
 				} else {
 					newBinding.AliasOf = ""
 				}
@@ -487,8 +488,8 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 			// Shared Alias Tracking (Ignore compiler temporaries)
 			if a.isRef(i.Src) && !isCompilerGenerated(i.Src) {
 				newBinding.AliasOf = i.Src
-				newBinding.State = SharedRead
-				sBinding.State = SharedRead
+				newBinding.State = joinStates(newBinding.AggregateState(), SharedRead)
+				sBinding.State = joinStates(sBinding.AggregateState(), SharedRead)
 			} else {
 				newBinding.AliasOf = ""
 			}
@@ -505,8 +506,8 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 			// Shared Alias Tracking (Ignore compiler temporaries)
 			if a.isRef(i.Src) && !isCompilerGenerated(i.Src) {
 				newBinding.AliasOf = i.Src
-				newBinding.State = SharedRead
-				binding.State = SharedRead
+				newBinding.State = joinStates(newBinding.AggregateState(), SharedRead)
+				binding.State = joinStates(binding.AggregateState(), SharedRead)
 			} else {
 				newBinding.AliasOf = ""
 				binding.State = Invalidated
@@ -531,7 +532,7 @@ func (a *Analyzer) analyzeInstruction(inst mir.Instruction, state *BlockState) {
 				binding.MutLockedBy = i.Dst
 			} else {
 				// Shared Read Borrow
-				binding.State = SharedRead
+				binding.State = joinStates(binding.AggregateState(), SharedRead)
 			}
 		}
 		initOrRevive(i.Dst)

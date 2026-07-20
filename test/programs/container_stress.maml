@@ -9,5 +9,5 @@ fn main() int {
         m[i] = i
     }
 
-    return len(ro v) + len(ro m)
+    return len(v) + len(m)
 }

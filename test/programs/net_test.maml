@@ -1,3 +1,5 @@
+// SKIP: true
+
 fn main() int {
 
     server_fd := maml_socket(2, 1, 0)

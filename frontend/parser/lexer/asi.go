@@ -1,6 +1,6 @@
 package lexer
 
-import "github.com/mattcarp12/maml/frontend/token"
+import "github.com/mattcarp12/maml/frontend/parser/token"
 
 // canEndStatement determines if the current token type legally ends a statement.
 func canEndStatement(typ token.TokenType) bool {

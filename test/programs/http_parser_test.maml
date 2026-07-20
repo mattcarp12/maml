@@ -1,0 +1,68 @@
+// EXIT_CODE: 0
+// Tests: HTTP Request Parsing
+
+fn test_valid_request() int {
+    // A standard HTTP POST request simulating a JSON payload
+    raw_payload := "POST /api/login HTTP/1.1\r\nHost: localhost:8080\r\nContent-Length: 18\r\nContent-Type: application/json\r\n\r\n{\"user\":\"admin\"}"
+    
+    match parse_http_request(raw_payload) {
+        case Some(req): {
+            // 1. Verify Request Line
+            if req.method != "POST" { return 1 }
+            if req.path != "/api/login" { return 2 }
+            if req.version != "HTTP/1.1" { return 3 }
+            
+            // 2. Verify Headers
+            match req.headers["Host"] {
+                case Some(val): { if val != "localhost:8080" { return 4 } }
+                case None: { return 5 }
+            }
+            match req.headers["Content-Type"] {
+                case Some(val): { if val != "application/json" { return 6 } }
+                case None: { return 7 }
+            }
+            match req.headers["Content-Length"] {
+                case Some(val): { if val != "18" { return 8 } }
+                case None: { return 9 }
+            }
+
+            // 3. Verify Body
+            if req.body != "{\"user\":\"admin\"}" { return 10 }
+        }
+        case None: {
+            return 11 // Failed to parse entirely
+        }
+    }
+    
+    return 0 // Success
+}
+
+fn test_malformed_request() int {
+    // Missing parts in the request line
+    bad_raw := "INVALID_REQUEST_LINE\r\nHost: localhost\r\n\r\n"
+    
+    match parse_http_request(bad_raw) {
+        case Some(req): { 
+            return 20 // It should have failed to parse
+        }
+        case None: { 
+            // Success: Safely rejected the bad payload
+        }
+    }
+
+    return 0
+}
+
+fn main() int {
+    valid_result := test_valid_request()
+    if valid_result != 0 {
+        return valid_result
+    }
+
+    malformed_result := test_malformed_request()
+    if malformed_result != 0 {
+        return malformed_result
+    }
+
+    return 0
+}

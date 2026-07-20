@@ -357,13 +357,13 @@ func buildAliasMap(g *mir.Graph, locals map[string]types.Type) map[string]string
 					aliases[mv.Dst] = root
 				}
 			}
-			
+
 			if cp, ok := inst.(*mir.CopyInst); ok && isView(cp.Dst) {
 				if root := resolveAlias(cp.Src, aliases); root != cp.Src {
 					aliases[cp.Dst] = root
 				}
 			}
-			
+
 			if as, ok := inst.(*mir.AssignInst); ok && isView(as.Dst) {
 				if reg, ok := as.RValue.(*mir.Register); ok {
 					if root := resolveAlias(reg.Name, aliases); root != reg.Name {
@@ -377,8 +377,26 @@ func buildAliasMap(g *mir.Graph, locals map[string]types.Type) map[string]string
 }
 
 func resolveAlias(name string, aliases map[string]string) string {
-	if parent, exists := aliases[name]; exists && parent != name {
-		return resolveAlias(parent, aliases)
+	visited := make(map[string]bool)
+	current := name
+
+	for {
+		// Mark the current node as visited
+		visited[current] = true
+
+		parent, exists := aliases[current]
+
+		// If there is no parent, or the node points to itself, we've found the root
+		if !exists || parent == current {
+			return current
+		}
+
+		// If we've already seen the parent, we hit a cycle. Break out safely.
+		if visited[parent] {
+			return current
+		}
+
+		// Traverse up the chain
+		current = parent
 	}
-	return name
 }

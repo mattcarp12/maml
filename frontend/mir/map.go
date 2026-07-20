@@ -112,8 +112,6 @@ func (b *Builder) LowerMapInsertStmt(n *hir.MapInsertStmt) Value {
 	return unitValue
 }
 
-
-
 func (b *Builder) lowerDelete(e *hir.CallExpr) Value {
 	mapPtrReg := b.addressOf(e.Arguments[0].Argument)
 	hashVal, ptrVal, lenVal := b.lowerMapKey(e.Arguments[1].Argument)
@@ -138,8 +136,8 @@ func (b *Builder) lowerMapKey(keyExpr hir.Expr) (hash, ptr, length Value) {
 		keyTmp := b.newTemp()
 		safeKey := b.emit(&AssignInst{Dst: keyTmp, RValue: flatKey}, keyTmp, keyType)
 		ptrVal, lenVal := b.emitExtractString(safeKey)
-
-		hashVal := b.EmitMamlStrHash(ptrVal, lenVal)
+		strPtr := b.emitBorrow(keyTmp, false)
+		hashVal := b.EmitMamlStrHash(strPtr)
 		return hashVal, ptrVal, lenVal
 
 	default:

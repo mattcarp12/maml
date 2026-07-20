@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 func (p *Program) String() string {

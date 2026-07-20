@@ -10,8 +10,8 @@ fn terminate_session(own session SecureSession) int {
 }
 
 // A standard read-only function
-fn verify_payload(ro payload Vec<int>) int {
-    if len(ro payload) > 0 { return payload[0] }
+fn verify_payload(payload Vec<int>) int {
+    if len(payload) > 0 { return payload[0] }
     return 0
 }
 
@@ -32,7 +32,7 @@ fn main() int {
     // --- PART B: Implicit Liveness Mechanics ---
     mut dynamic_payload := Vec<int>{}
     dynamic_payload << 50
-    payload_result := verify_payload(ro dynamic_payload)
+    payload_result := verify_payload(dynamic_payload)
 
     // Expected: (5 + 45) + 50 = 100
     return session_result + payload_result

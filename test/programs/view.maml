@@ -1,7 +1,7 @@
 // EXIT_CODE: 88
 // Tests: Stack views, Heap views, Agnostic parameters, and In-place mutation.
 
-fn sum_three(ro v View<int>) int {
+fn sum_three(v View<int>) int {
     return v[0] + v[1] + v[2]
 }
 
@@ -29,7 +29,7 @@ fn main() int {
 
     // Safely create an immutable view to read it.
     read_stack_view := stack_arr[:]
-    stack_sum := sum_three(ro read_stack_view) // 3 + 6 + 9 = 18
+    stack_sum := sum_three(read_stack_view) // 3 + 6 + 9 = 18
 
 
     // ==========================================
@@ -49,7 +49,7 @@ fn main() int {
     
     // Create an immutable view to read it.
     read_heap_view := heap_vec[:]
-    heap_sum := sum_three(ro read_heap_view) // 30 + 60 + 90 = 180
+    heap_sum := sum_three(read_heap_view) // 30 + 60 + 90 = 180
 
 
     // ==========================================

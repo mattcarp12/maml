@@ -2,7 +2,7 @@
 package hir
 
 import (
-	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
 

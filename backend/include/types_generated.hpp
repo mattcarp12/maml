@@ -6,6 +6,8 @@
 #include <variant>
 #include <stdexcept>
 #include <memory>
+#include <unordered_map>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 namespace maml {
@@ -50,6 +52,11 @@ struct SumType {
     std::vector<maml::SumVariant> variants;
     std::vector<std::shared_ptr<maml::Type>> type_args;
 };
+struct FunctionType {
+    std::vector<std::shared_ptr<maml::Type>> params;
+    std::vector<std::string> caps;
+    std::shared_ptr<maml::Type> return_type;
+};
 struct ArrayType {
     std::shared_ptr<maml::Type> base;
     int32_t size;
@@ -81,7 +88,7 @@ struct ReceiverType {
     std::shared_ptr<maml::Type> base;
 };
 
-using TypeVariant = std::variant<I8Type, I16Type, I32Type, I64Type, I128Type, U8Type, U16Type, U32Type, U64Type, U128Type, F32Type, F64Type, BoolType, CharType, UnitType, StringType, AnyType, UnknownType, PtrType, StructType, SumType, ArrayType, ViewType, VectorType, MapType, FutureType, RefType, WeakRefType, SenderType, ReceiverType
+using TypeVariant = std::variant<I8Type, I16Type, I32Type, I64Type, I128Type, U8Type, U16Type, U32Type, U64Type, U128Type, F32Type, F64Type, BoolType, CharType, UnitType, StringType, AnyType, UnknownType, PtrType, StructType, SumType, FunctionType, ArrayType, ViewType, VectorType, MapType, FutureType, RefType, WeakRefType, SenderType, ReceiverType
 >;
 
 struct Type {
@@ -93,7 +100,6 @@ struct Type {
 // ============================================================================
 inline void from_json(const nlohmann::json& j, Type& v);
 
-// Explicit shared_ptr parser to bypass nlohmann::json template deduction failures
 inline void from_json(const nlohmann::json& j, std::shared_ptr<Type>& p) {
     if (j.is_null()) {
         p = nullptr;
@@ -106,6 +112,7 @@ inline void from_json(const nlohmann::json& j, StructField& t);
 inline void from_json(const nlohmann::json& j, SumVariant& t);
 inline void from_json(const nlohmann::json& j, StructType& t);
 inline void from_json(const nlohmann::json& j, SumType& t);
+inline void from_json(const nlohmann::json& j, FunctionType& t);
 inline void from_json(const nlohmann::json& j, ArrayType& t);
 inline void from_json(const nlohmann::json& j, ViewType& t);
 inline void from_json(const nlohmann::json& j, VectorType& t);
@@ -161,6 +168,17 @@ inline void from_json(const nlohmann::json& j, SumType& t) {
     }
     if (j.contains("type_args") && !j.at("type_args").is_null()) {
         j.at("type_args").get_to(t.type_args);
+    }
+}
+inline void from_json(const nlohmann::json& j, FunctionType& t) {
+    if (j.contains("params") && !j.at("params").is_null()) {
+        j.at("params").get_to(t.params);
+    }
+    if (j.contains("caps") && !j.at("caps").is_null()) {
+        j.at("caps").get_to(t.caps);
+    }
+    if (j.contains("return_type") && !j.at("return_type").is_null()) {
+        j.at("return_type").get_to(t.return_type);
     }
 }
 inline void from_json(const nlohmann::json& j, ArrayType& t) {
@@ -221,41 +239,56 @@ inline void from_json(const nlohmann::json& j, ReceiverType& t) {
 inline void from_json(const nlohmann::json& j, Type& v) {
     if (j.is_string()) {
         auto kind = j.get<std::string>();
-        if (kind == "i8") { v.inner = I8Type{}; return; }
-        if (kind == "i16") { v.inner = I16Type{}; return; }
-        if (kind == "i32") { v.inner = I32Type{}; return; }
-        if (kind == "i64") { v.inner = I64Type{}; return; }
-        if (kind == "i128") { v.inner = I128Type{}; return; }
-        if (kind == "u8") { v.inner = U8Type{}; return; }
-        if (kind == "u16") { v.inner = U16Type{}; return; }
-        if (kind == "u32") { v.inner = U32Type{}; return; }
-        if (kind == "u64") { v.inner = U64Type{}; return; }
-        if (kind == "u128") { v.inner = U128Type{}; return; }
-        if (kind == "f32") { v.inner = F32Type{}; return; }
-        if (kind == "f64") { v.inner = F64Type{}; return; }
-        if (kind == "i1") { v.inner = BoolType{}; return; }
-        if (kind == "char") { v.inner = CharType{}; return; }
-        if (kind == "void") { v.inner = UnitType{}; return; }
-        if (kind == "string") { v.inner = StringType{}; return; }
-        if (kind == "any") { v.inner = AnyType{}; return; }
-        if (kind == "unknown") { v.inner = UnknownType{}; return; }
-        if (kind == "ptr") { v.inner = PtrType{}; return; }
+        static const std::unordered_map<std::string, std::function<void(Type&)>> primMap = {
+            {"i8", [](Type& val) { val.inner = I8Type{}; }},
+            {"i16", [](Type& val) { val.inner = I16Type{}; }},
+            {"i32", [](Type& val) { val.inner = I32Type{}; }},
+            {"i64", [](Type& val) { val.inner = I64Type{}; }},
+            {"i128", [](Type& val) { val.inner = I128Type{}; }},
+            {"u8", [](Type& val) { val.inner = U8Type{}; }},
+            {"u16", [](Type& val) { val.inner = U16Type{}; }},
+            {"u32", [](Type& val) { val.inner = U32Type{}; }},
+            {"u64", [](Type& val) { val.inner = U64Type{}; }},
+            {"u128", [](Type& val) { val.inner = U128Type{}; }},
+            {"f32", [](Type& val) { val.inner = F32Type{}; }},
+            {"f64", [](Type& val) { val.inner = F64Type{}; }},
+            {"i1", [](Type& val) { val.inner = BoolType{}; }},
+            {"char", [](Type& val) { val.inner = CharType{}; }},
+            {"void", [](Type& val) { val.inner = UnitType{}; }},
+            {"string", [](Type& val) { val.inner = StringType{}; }},
+            {"any", [](Type& val) { val.inner = AnyType{}; }},
+            {"unknown", [](Type& val) { val.inner = UnknownType{}; }},
+            {"ptr", [](Type& val) { val.inner = PtrType{}; }},
+        };
+        auto it = primMap.find(kind);
+        if (it != primMap.end()) {
+            it->second(v);
+            return;
+        }
         throw std::runtime_error("Unknown primitive type string: " + kind);
     }
     
     if (j.is_object() && j.contains("kind")) {
         auto kind = j.at("kind").get<std::string>();
-        if (kind == "struct") { v.inner = j.get<StructType>(); return; }
-        if (kind == "sum_type") { v.inner = j.get<SumType>(); return; }
-        if (kind == "array") { v.inner = j.get<ArrayType>(); return; }
-        if (kind == "view") { v.inner = j.get<ViewType>(); return; }
-        if (kind == "vector") { v.inner = j.get<VectorType>(); return; }
-        if (kind == "map") { v.inner = j.get<MapType>(); return; }
-        if (kind == "future") { v.inner = j.get<FutureType>(); return; }
-        if (kind == "ref") { v.inner = j.get<RefType>(); return; }
-        if (kind == "weak_ref") { v.inner = j.get<WeakRefType>(); return; }
-        if (kind == "sender") { v.inner = j.get<SenderType>(); return; }
-        if (kind == "receiver") { v.inner = j.get<ReceiverType>(); return; }
+        static const std::unordered_map<std::string, std::function<void(const nlohmann::json&, Type&)>> compMap = {
+            {"struct", [](const nlohmann::json& json, Type& val) { val.inner = json.get<StructType>(); }},
+            {"sum_type", [](const nlohmann::json& json, Type& val) { val.inner = json.get<SumType>(); }},
+            {"function", [](const nlohmann::json& json, Type& val) { val.inner = json.get<FunctionType>(); }},
+            {"array", [](const nlohmann::json& json, Type& val) { val.inner = json.get<ArrayType>(); }},
+            {"view", [](const nlohmann::json& json, Type& val) { val.inner = json.get<ViewType>(); }},
+            {"vector", [](const nlohmann::json& json, Type& val) { val.inner = json.get<VectorType>(); }},
+            {"map", [](const nlohmann::json& json, Type& val) { val.inner = json.get<MapType>(); }},
+            {"future", [](const nlohmann::json& json, Type& val) { val.inner = json.get<FutureType>(); }},
+            {"ref", [](const nlohmann::json& json, Type& val) { val.inner = json.get<RefType>(); }},
+            {"weak_ref", [](const nlohmann::json& json, Type& val) { val.inner = json.get<WeakRefType>(); }},
+            {"sender", [](const nlohmann::json& json, Type& val) { val.inner = json.get<SenderType>(); }},
+            {"receiver", [](const nlohmann::json& json, Type& val) { val.inner = json.get<ReceiverType>(); }},
+        };
+        auto it = compMap.find(kind);
+        if (it != compMap.end()) {
+            it->second(j, v);
+            return;
+        }
         throw std::runtime_error("Unknown composite type kind: " + kind);
     }
     

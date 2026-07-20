@@ -1,10 +1,11 @@
 package lexer
 
-import "github.com/mattcarp12/maml/frontend/token"
+import "github.com/mattcarp12/maml/frontend/parser/token"
 
 // Lexer turns source code (string) into a stream of Token objects.
 type Lexer struct {
 	input            string          // the source code being tokenized
+	filename         string          // the filename being lexed
 	position         int             // points to the current character (l.ch)
 	readPosition     int             // points to the next character to read
 	ch               byte            // current character under examination
@@ -16,11 +17,12 @@ type Lexer struct {
 }
 
 // New creates and initializes a new Lexer.
-func New(input string) *Lexer {
+func New(filename, input string) *Lexer {
 	l := &Lexer{
-		input: input,
-		line:  1,
-		col:   0,
+		input:    input,
+		filename: filename,
+		line:     1,
+		col:      0,
 	}
 	l.readChar() // prime the lexer with the first character
 	return l
@@ -153,13 +155,13 @@ func (l *Lexer) NextToken() token.Token {
 		if l.ch != '"' {
 			typ = token.ILLEGAL // unterminated string
 		}
-		tok = token.Token{Type: token.TokenType(typ), Literal: str, Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.TokenType(typ), Literal: str, Pos: token.Position{Line: startLine, Column: startCol, Filename: l.filename}}
 
 	case '\n':
-		tok = token.Token{Type: token.NEWLINE, Literal: "\\n", Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.NEWLINE, Literal: "\\n", Pos: token.Position{Line: startLine, Column: startCol, Filename: l.filename}}
 
 	case 0: // end of input
-		tok = token.Token{Type: token.EOF, Literal: "", Line: startLine, Col: startCol}
+		tok = token.Token{Type: token.EOF, Literal: "", Pos: token.Position{Line: startLine, Column: startCol, Filename: l.filename}}
 
 	default:
 		if isLetter(l.ch) {
@@ -167,8 +169,7 @@ func (l *Lexer) NextToken() token.Token {
 			tok = token.Token{
 				Type:    token.LookupIdent(literal),
 				Literal: literal,
-				Line:    startLine,
-				Col:     startCol,
+				Pos:     token.Position{Line: startLine, Column: startCol, Filename: l.filename},
 			}
 			l.lastEmittedToken = tok.Type // Store before early return
 			return tok
@@ -177,8 +178,7 @@ func (l *Lexer) NextToken() token.Token {
 			tok = token.Token{
 				Type:    typ,
 				Literal: literal,
-				Line:    startLine,
-				Col:     startCol,
+				Pos:     token.Position{Line: startLine, Column: startCol, Filename: l.filename},
 			}
 			l.lastEmittedToken = tok.Type // Store before early return
 			return tok
@@ -200,8 +200,7 @@ func (l *Lexer) twoCharToken(tokenType token.TokenType, startLine, startCol int)
 	return token.Token{
 		Type:    tokenType,
 		Literal: literal,
-		Line:    startLine,
-		Col:     startCol,
+		Pos:     token.Position{Line: startLine, Column: startCol, Filename: l.filename},
 	}
 }
 
@@ -210,7 +209,6 @@ func (l *Lexer) newToken(tokenType token.TokenType, ch byte, startLine, startCol
 	return token.Token{
 		Type:    tokenType,
 		Literal: string(ch),
-		Line:    startLine,
-		Col:     startCol,
+		Pos:     token.Position{Line: startLine, Column: startCol, Filename: l.filename},
 	}
 }

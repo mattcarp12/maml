@@ -1,24 +1,54 @@
 primitives:
   - name: I8Type
     cpp_kind: "i8"
+    is_int: true
+    min: "-128"
+    max: "127"
   - name: I16Type
     cpp_kind: "i16"
+    is_int: true
+    min: "-32768"
+    max: "32767"
   - name: I32Type
     cpp_kind: "i32"
+    is_int: true
+    min: "-2147483648"
+    max: "2147483647"
   - name: I64Type
     cpp_kind: "i64"
+    is_int: true
+    min: "0" # Handled specially by code generation for full 64/128 bounds
+    max: "0"
   - name: I128Type
     cpp_kind: "i128"
+    is_int: true
+    min: "0"
+    max: "0"
   - name: U8Type
     cpp_kind: "u8"
+    is_int: true
+    min: "0"
+    max: "255"
   - name: U16Type
     cpp_kind: "u16"
+    is_int: true
+    min: "0"
+    max: "65535"
   - name: U32Type
     cpp_kind: "u32"
+    is_int: true
+    min: "0"
+    max: "4294967295"
   - name: U64Type
     cpp_kind: "u64"
+    is_int: true
+    min: "0"
+    max: "0"
   - name: U128Type
     cpp_kind: "u128"
+    is_int: true
+    min: "0"
+    max: "0"
   - name: F32Type
     cpp_kind: "f32"
   - name: F64Type
@@ -48,7 +78,6 @@ composites:
         type: "[]StructField"
       - name: IsReprC
         type: bool
-
   - name: SumType
     json_kind: "sum_type"
     properties:
@@ -58,6 +87,15 @@ composites:
         type: "[]SumVariant"
       - name: TypeArgs
         type: "[]Type"
+  - name: FunctionType
+    json_kind: "function"
+    properties:
+      - name: Params
+        type: "[]Type"
+      - name: Caps
+        type: "[]Cap"
+      - name: ReturnType
+        type: Type
 
 containers:
   - name: ArrayType
@@ -195,8 +233,8 @@ type_representations:
     string: "{{.Name}}"
     mangled: "{{.Name}}"
   - name: SumType
-    string: "{{.BaseName}}{{if .TypeArgs}}<{{.TypeArgs | join \", \"}}>{{end}}"
-    mangled: "{{.BaseName}}{{if .TypeArgs}}_{{.TypeArgs | join \"_\" | sanitizeMangle}}{{end}}"
+    string: '{{.BaseName}}{{if .TypeArgs}}<{{.TypeArgs | join ", "}}>{{end}}'
+    mangled: '{{.BaseName}}{{if .TypeArgs}}_{{.TypeArgs | join "_" | sanitizeMangle}}{{end}}'
 
   # --- Containers ---
   - name: ArrayType

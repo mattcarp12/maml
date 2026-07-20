@@ -70,6 +70,8 @@ const (
 	SYM_STR_EQ              = "maml_str_eq"
 	SYM_STR_CLONE           = "maml_str_clone"
 	SYM_STR_LEN             = "maml_str_len"
+	SYM_STR_FREE            = "maml_str_free"
+	SYM_STR_CONCAT          = "maml_str_concat"
 	SYM_CORO_RUNTIME_INIT   = "maml_coro_runtime_init"
 	SYM_CORO_RESUME_HELPER  = "maml_coro_resume_helper"
 	SYM_CORO_DONE_HELPER    = "maml_coro_done_helper"
@@ -89,6 +91,8 @@ const (
 	SYM_LISTEN              = "maml_listen"
 	SYM_ACCEPT              = "maml_accept"
 	SYM_SOCKET_READ         = "maml_socket_read"
+	SYM_SOCKET_WRITE        = "maml_socket_write"
+	SYM_CONNECT             = "maml_connect"
 )
 
 // ============================================================================
@@ -176,13 +180,13 @@ func (b *Builder) EmitMamlMapFree(m Value) Value {
 }
 
 // EmitMamlStrHash constructs a MIR call to the runtime function maml_str_hash.
-func (b *Builder) EmitMamlStrHash(str_ptr Value, len Value) Value {
-	return b.emitRuntimeCall(SYM_STR_HASH, types.U32Type{}, str_ptr, len)
+func (b *Builder) EmitMamlStrHash(str Value) Value {
+	return b.emitRuntimeCall(SYM_STR_HASH, types.U32Type{}, str)
 }
 
 // EmitMamlStrEq constructs a MIR call to the runtime function maml_str_eq.
-func (b *Builder) EmitMamlStrEq(a_ptr Value, a_len Value, b_ptr Value, b_len Value) Value {
-	return b.emitRuntimeCall(SYM_STR_EQ, types.I32Type{}, a_ptr, a_len, b_ptr, b_len)
+func (b *Builder) EmitMamlStrEq(a_str Value, b_str Value) Value {
+	return b.emitRuntimeCall(SYM_STR_EQ, types.I32Type{}, a_str, b_str)
 }
 
 // EmitMamlStrClone constructs a MIR call to the runtime function maml_str_clone.
@@ -193,6 +197,16 @@ func (b *Builder) EmitMamlStrClone(str_ptr Value, len Value) Value {
 // EmitMamlStrLen constructs a MIR call to the runtime function maml_str_len.
 func (b *Builder) EmitMamlStrLen(str Value) Value {
 	return b.emitRuntimeCall(SYM_STR_LEN, types.U32Type{}, str)
+}
+
+// EmitMamlStrFree constructs a MIR call to the runtime function maml_str_free.
+func (b *Builder) EmitMamlStrFree(str Value) Value {
+	return b.emitRuntimeCall(SYM_STR_FREE, types.UnitType{}, str)
+}
+
+// EmitMamlStrConcat constructs a MIR call to the runtime function maml_str_concat.
+func (b *Builder) EmitMamlStrConcat(str_a Value, str_b Value) Value {
+	return b.emitRuntimeCall(SYM_STR_CONCAT, &types.StringType{}, str_a, str_b)
 }
 
 // EmitMamlCoroRuntimeInit constructs a MIR call to the runtime function maml_coro_runtime_init.
@@ -288,4 +302,14 @@ func (b *Builder) EmitMamlAccept(fd Value) Value {
 // EmitMamlSocketRead constructs a MIR call to the runtime function maml_socket_read.
 func (b *Builder) EmitMamlSocketRead(fd Value, max_bytes Value) Value {
 	return b.emitRuntimeCall(SYM_SOCKET_READ, &types.StringType{}, fd, max_bytes)
+}
+
+// EmitMamlSocketWrite constructs a MIR call to the runtime function maml_socket_write.
+func (b *Builder) EmitMamlSocketWrite(fd Value, msg Value) Value {
+	return b.emitRuntimeCall(SYM_SOCKET_WRITE, types.I32Type{}, fd, msg)
+}
+
+// EmitMamlConnect constructs a MIR call to the runtime function maml_connect.
+func (b *Builder) EmitMamlConnect(fd Value, host Value, port Value) Value {
+	return b.emitRuntimeCall(SYM_CONNECT, types.I32Type{}, fd, host, port)
 }

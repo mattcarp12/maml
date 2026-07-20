@@ -3,7 +3,7 @@ package sema
 import (
 	"fmt"
 
-	"github.com/mattcarp12/maml/frontend/ast"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
 	"github.com/mattcarp12/maml/frontend/tast"
 	"github.com/mattcarp12/maml/frontend/types"
 )
@@ -140,40 +140,40 @@ func (a *Analyzer) registerFunctions(program *ast.Program) {
 }
 
 func (a *Analyzer) registerFunction(v *ast.FnDecl) {
-    paramTypes := make([]types.Type, len(v.Params))
-    caps := make([]types.Cap, len(v.Params))
+	paramTypes := make([]types.Type, len(v.Params))
+	caps := make([]types.Cap, len(v.Params))
 
-    for i, p := range v.Params {
-        paramTypes[i] = a.resolveAstType(p.Type)
-        
-        // INJECT DEFAULT CAPABILITY HERE
-        cap := types.Cap(p.Cap)
-        if cap == types.CapNone || cap == "" {
-            cap = types.CapRo
-        }
-        caps[i] = cap
-    }
+	for i, p := range v.Params {
+		paramTypes[i] = a.resolveAstType(p.Type)
 
-    var returnType types.Type = types.UnitType{}
-    if v.ReturnType != nil {
-        returnType = a.resolveAstType(v.ReturnType)
-    }
+		// INJECT DEFAULT CAPABILITY HERE
+		cap := types.Cap(p.Cap)
+		if cap == types.CapNone || cap == "" {
+			cap = types.CapRo
+		}
+		caps[i] = cap
+	}
 
-    if v.IsAsync {
-        returnType = &types.FutureType{Base: returnType}
-    }
+	var returnType types.Type = types.UnitType{}
+	if v.ReturnType != nil {
+		returnType = a.resolveAstType(v.ReturnType)
+	}
 
-    fnType := &types.FunctionType{
-        Params: paramTypes,
-        Caps:   caps,
-        Return: returnType,
-    }
+	if v.IsAsync {
+		returnType = &types.FutureType{Base: returnType}
+	}
 
-    sym := &types.Symbol{
-        Kind: types.FuncSymbol,
-        Name: v.Name,
-        Type: fnType,
-    }
+	fnType := &types.FunctionType{
+		Params: paramTypes,
+		Caps:   caps,
+		ReturnType: returnType,
+	}
 
-    a.scope.symbols[v.Name] = sym
+	sym := &types.Symbol{
+		Kind: types.FuncSymbol,
+		Name: v.Name,
+		Type: fnType,
+	}
+
+	a.scope.symbols[v.Name] = sym
 }

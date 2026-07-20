@@ -1,0 +1,82 @@
+// EXIT_CODE: 0
+// SKIP: true
+// Tests: HTTP GET Request
+
+// HTTP Client Implementation
+
+fn http_get(host string, port i64, domain string, path string) int {
+    // 1. Create the socket (AF_INET=2, SOCK_STREAM=1, IP=0)
+    fd := maml_socket(2, 1, 0)
+    if fd < 0 { 
+        print("Failed to create socket")
+        return 1 
+    }
+    print("Here 1")
+
+    // 2. Connect to the remote server
+    if maml_connect(fd, host, port) < 0 {
+        print("Failed to connect to host")
+        maml_file_close(fd)
+        return 2
+    }
+    print("Here 2")
+
+    // 3. Format the raw HTTP GET Request
+    // Format: 
+    // GET {path} HTTP/1.1\r\n
+    // Host: {host}\r\n
+    // Connection: close\r\n\r\n
+    
+    mut req := str_concat("GET ", path)
+    req = str_concat(req, " HTTP/1.1\r\nHost: ")
+    req = str_concat(req, domain)
+    req = str_concat(req, "\r\nConnection: close\r\n\r\n")
+
+    // 4. Send the request
+    bytes_written := maml_socket_write(fd, req)
+    if bytes_written <= 0 {
+        print("Failed to write to socket")
+        maml_file_close(fd)
+        return 3
+    }
+    print("Here 3")
+
+    // 5. Read the response
+    // We are using your current maml_socket_read which returns a heap-allocated string
+    print("--- RESPONSE ---")
+    
+    for true {
+        res_chunk := maml_socket_read(fd, 4096)
+        if len(res_chunk) == 0 {
+            break // EOF or error
+        }
+        print(res_chunk)
+    }
+
+    // 6. Cleanup
+    maml_file_close(fd)
+    return 0
+}
+
+
+
+fn main() int {
+    // Note: We use a raw IP address here because maml_connect uses inet_pton under the hood. 
+    // To support domain names like "example.com", you would need to implement DNS resolution 
+    // in your C++ runtime using getaddrinfo().
+    
+    // 93.184.215.14 is the IPv4 address for example.com
+    // target_ip := "93.184.215.14" 
+    target_ip := "1.1.1.1" 
+    target_port := 80
+    target_domain := "example.com"
+    
+    result := http_get(target_ip, target_port, target_domain, "/")
+    
+    if result != 0 {
+        print("HTTP Request failed!")
+        return result
+    }
+    
+    return 0
+}

@@ -30,6 +30,9 @@ var goTemplateStr string
 //go:embed runtime_llvm.tmpl
 var llvmTemplateStr string
 
+//go:embed runtime_maml.tmpl
+var mamlTemplateStr string
+
 //go:embed runtime_cpp_header.tmpl
 var cppHeaderTemplateStr string
 
@@ -42,26 +45,27 @@ type PrimitiveInfo struct {
 	GoType   string // Go AST type constructor, e.g. "types.I32Type{}"
 	CppType  string // C-ABI storage type, e.g. "int32_t", "void*"
 	LLVMKind string // one of: i1, i8, i16, i32, i64, i128, ptr, void
+	MamlType string
 }
 
 var primitiveTable = map[string]PrimitiveInfo{
-	"i8":        {1, 1, "types.I8Type{}", "int8_t", "i8"},
-	"i16":       {2, 2, "types.I16Type{}", "int16_t", "i16"},
-	"i32":       {4, 4, "types.I32Type{}", "int32_t", "i32"},
-	"i64":       {8, 8, "types.I64Type{}", "int64_t", "i64"},
-	"i128":      {16, 16, "types.I128Type{}", "__int128_t", "i128"},
-	"u8":        {1, 1, "types.U8Type{}", "uint8_t", "i8"},
-	"u16":       {2, 2, "types.U16Type{}", "uint16_t", "i16"},
-	"u32":       {4, 4, "types.U32Type{}", "uint32_t", "i32"},
-	"u64":       {8, 8, "types.U64Type{}", "uint64_t", "i64"},
-	"u128":      {16, 16, "types.U128Type{}", "__uint128_t", "i128"},
-	"usize":     {8, 8, "types.U64Type{}", "size_t", "i64"},
-	"bool":      {1, 1, "types.BoolType{}", "bool", "i1"},
-	"ptr":       {8, 8, "types.PtrType{}", "void*", "ptr"},
-	"?ptr":      {8, 8, "types.PtrType{}", "void*", "ptr"},
-	"bytes_ptr": {8, 8, "types.PtrType{}", "const char*", "ptr"},
-	"unit":      {0, 1, "types.UnitType{}", "void", "void"},
-	"Future":    {8, 8, "types.PtrType{}", "void*", "ptr"},
+	"i8":        {1, 1, "types.I8Type{}", "int8_t", "i8", "i8"},
+	"i16":       {2, 2, "types.I16Type{}", "int16_t", "i16", "i16"},
+	"i32":       {4, 4, "types.I32Type{}", "int32_t", "i32", "i32"},
+	"i64":       {8, 8, "types.I64Type{}", "int64_t", "i64", "i64"},
+	"i128":      {16, 16, "types.I128Type{}", "__int128_t", "i128", "i128"},
+	"u8":        {1, 1, "types.U8Type{}", "uint8_t", "i8", "u8"},
+	"u16":       {2, 2, "types.U16Type{}", "uint16_t", "i16", "u16"},
+	"u32":       {4, 4, "types.U32Type{}", "uint32_t", "i32", "u32"},
+	"u64":       {8, 8, "types.U64Type{}", "uint64_t", "i64", "u64"},
+	"u128":      {16, 16, "types.U128Type{}", "__uint128_t", "i128", "u128"},
+	"usize":     {8, 8, "types.U64Type{}", "size_t", "i64", "int"}, // Mapping to MAML's 'int'
+	"bool":      {1, 1, "types.BoolType{}", "bool", "i1", "bool"},
+	"ptr":       {8, 8, "types.PtrType{}", "void*", "ptr", "any"}, // Interim generic
+	"?ptr":      {8, 8, "types.PtrType{}", "void*", "ptr", "any"},
+	"bytes_ptr": {8, 8, "types.PtrType{}", "const char*", "ptr", "string"},
+	"unit":      {0, 1, "types.UnitType{}", "void", "void", "unit"},
+	"Future":    {8, 8, "types.PtrType{}", "void*", "ptr", "Future<any>"},
 }
 
 func mustPrimitive(name string) PrimitiveInfo {
@@ -178,6 +182,7 @@ type CtxArg struct {
 	RuntimeType string
 	CppType     string
 	GoType      string
+	MamlType    string
 	IsMut       bool
 }
 
@@ -189,6 +194,7 @@ type CtxFunction struct {
 	ReturnRuntime string
 	ReturnCpp     string
 	ReturnGo      string
+	ReturnMaml    string
 }
 
 type TemplateContext struct {
@@ -204,6 +210,7 @@ func main() {
 	goOut := flag.String("goOut", "frontend/mir/abi_generated.go", "output path for Go types")
 	runtimeOut := flag.String("runtimeOut", "runtime/include/mamlrt_abi.h", "output path for C++ runtime ABI header")
 	cppOut := flag.String("cppOut", "backend/include/abi_generated.hpp", "output path for cpp abi helpers")
+	mamlOut := flag.String("mamlOut", "stdlib/_runtime_externs.maml", "output path for MAML externs")
 	flag.Parse()
 
 	var schema YamlSchema
@@ -232,6 +239,7 @@ func main() {
 	executeTemplate("Go Frontend", goTemplateStr, *goOut, ctx, true)
 	executeTemplate("C++ Runtime Header", cppHeaderTemplateStr, *runtimeOut, ctx, false)
 	executeTemplate("LLVM Backend", llvmTemplateStr, *cppOut, ctx, false)
+	executeTemplate("MAML Standard Library", mamlTemplateStr, *mamlOut, ctx, false)
 }
 
 func calculateLayouts(yamlTypes []YamlType) []CtxType {
@@ -292,7 +300,7 @@ func buildFunctions(modules []YamlModuleGroup, compoundTypes map[string]YamlType
 		for _, fn := range group.Definitions {
 			args := buildFunctionArgs(fn.Args, compoundTypes)
 
-			retRuntime, retCpp, retGo := resolveType(fn.Return.Type, false, true, compoundTypes)
+			retRuntime, retCpp, retGo, retMaml := resolveType(fn.Return.Type, false, true, compoundTypes)
 
 			camelName := toCamelCase(strings.TrimPrefix(fn.Symbol, "maml_"))
 
@@ -304,6 +312,7 @@ func buildFunctions(modules []YamlModuleGroup, compoundTypes map[string]YamlType
 				ReturnRuntime: retRuntime,
 				ReturnCpp:     retCpp,
 				ReturnGo:      retGo,
+				ReturnMaml:    retMaml,
 			})
 		}
 	}
@@ -313,7 +322,7 @@ func buildFunctions(modules []YamlModuleGroup, compoundTypes map[string]YamlType
 func buildFunctionArgs(args []YamlArg, compoundTypes map[string]YamlType) []CtxArg {
 	var result []CtxArg
 	for _, arg := range args {
-		runtimeTy, cppTy, goTy := resolveType(arg.Type, arg.ByReference, false, compoundTypes)
+		runtimeTy, cppTy, goTy, mamlTy := resolveType(arg.Type, arg.ByReference, false, compoundTypes)
 
 		safeName := arg.Name
 		if safeName == "type" {
@@ -325,32 +334,38 @@ func buildFunctionArgs(args []YamlArg, compoundTypes map[string]YamlType) []CtxA
 			RuntimeType: runtimeTy,
 			CppType:     cppTy,
 			GoType:      goTy,
+			MamlType:    mamlTy,
 			IsMut:       arg.Mut,
 		})
 	}
 	return result
 }
 
-func resolveType(typ string, isRefOverride bool, isReturn bool, compoundTypes map[string]YamlType) (runtimeTy, cppTy, goTy string) {
-	// 1. Is it a Semantic Compound Type? (e.g., Vector, View)
+func resolveType(typ string, isRefOverride bool, isReturn bool, compoundTypes map[string]YamlType) (runtimeTy, cppTy, goTy, mamlTy string) {
 	if ct, ok := compoundTypes[typ]; ok {
-		// Only apply 'by_reference' to function arguments, not return types
 		isRef := isRefOverride || (!isReturn && ct.PassingConvention == "by_reference")
 
-		if isRef {
-			return ct.Name + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
+		// Temporary mapping for compound types to match your current stdlib.maml
+		mamlT := "any"
+		if ct.Name == "String" {
+			mamlT = "string"
+		} else if ct.Name == "Map" {
+			mamlT = "Map<any,any>"
 		}
-		return ct.Name, "rt::get" + typ + "Type(ctx.Context)", "&types." + typ + "Type{}"
+
+		if isRef {
+			return ct.Name + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}", mamlT
+		}
+		return ct.Name, "rt::get" + typ + "Type(ctx.Context)", "&types." + typ + "Type{}", mamlT
 	}
 
-	// 2. It's a primitive -- must be a known one.
 	info := mustPrimitive(typ)
 
 	if isRefOverride {
-		return info.CppType + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}"
+		return info.CppType + "*", "llvm::PointerType::getUnqual(ctx.Context)", "types.PtrType{}", info.MamlType
 	}
 
-	return info.CppType, llvmTypeExprFor(info.LLVMKind, "ctx.Context"), info.GoType
+	return info.CppType, llvmTypeExprFor(info.LLVMKind, "ctx.Context"), info.GoType, info.MamlType
 }
 
 func toCamelCase(s string) string {

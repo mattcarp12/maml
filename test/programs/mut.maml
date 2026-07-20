@@ -21,8 +21,8 @@ fn populate_buffer(mut buf DataBuffer) int {
 }
 
 // Strictly immutable read-only view
-fn sum_buffer(ro buf DataBuffer) int {
-    if len(ro buf.values) == 0 { return 0 }
+fn sum_buffer(buf DataBuffer) int {
+    if len(buf.values) == 0 { return 0 }
     return buf.values[0] + buf.values[1] + buf.values[2]
 }
 
@@ -46,7 +46,7 @@ fn main() int {
 
     // 4. Safe immutable aliasing
     // The underlying Rc (if escaped) or stack buffer can now be safely read.
-    result := sum_buffer(ro frozen_buffer)
+    result := sum_buffer(frozen_buffer)
 
 
     // ----------------------------------

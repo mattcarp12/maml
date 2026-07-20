@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 func (p *Parser) parseExpression(precedence int) ast.Expr {
 	prefix := p.prefixParseFns[p.curToken.Type]
 	if prefix == nil {
-		p.addError(fmt.Sprintf("no prefix parse function for %s found at line %d, col %d",
-			p.curToken.Type, p.curToken.Line, p.curToken.Col))
+		p.addError(fmt.Sprintf("no prefix parse function for %s found at %s",
+			p.curToken.Type, p.curToken.Pos.String()))
 		return nil
 	}
 

@@ -1,9 +1,9 @@
 package parser
 
 import (
-	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/lexer"
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/lexer"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 type (
@@ -17,7 +17,7 @@ type (
 const defaultMaxErrors = 25
 
 type Parser struct {
-	l                   *lexer.Lexer
+	l                   lexer.Scanner
 	curToken            token.Token
 	peekToken           token.Token
 	peek2Token          token.Token
@@ -29,7 +29,7 @@ type Parser struct {
 	lookahead           []token.Token
 }
 
-func New(l *lexer.Lexer) *Parser {
+func New(l lexer.Scanner) *Parser {
 	p := &Parser{
 		l:                   l,
 		parseErrors:         []ParseError{},
@@ -40,14 +40,6 @@ func New(l *lexer.Lexer) *Parser {
 	p.nextToken()
 	p.nextToken()
 	p.nextToken()
-	return p
-}
-
-// NewWithMaxErrors creates a Parser with a custom error cap. Useful in tests
-// that deliberately produce many errors and want to verify exact counts.
-func NewWithMaxErrors(l *lexer.Lexer, max int) *Parser {
-	p := New(l)
-	p.maxErrors = max
 	return p
 }
 

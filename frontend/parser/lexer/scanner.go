@@ -1,6 +1,6 @@
 package lexer
 
-import "github.com/mattcarp12/maml/frontend/token"
+import "github.com/mattcarp12/maml/frontend/parser/token"
 
 // skipWhitespace handles regular whitespace and implements ASI logic for newlines.
 func (l *Lexer) skipWhitespace() {

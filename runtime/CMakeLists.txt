@@ -32,3 +32,4 @@ target_include_directories(mamlrt PRIVATE include)
 set_target_properties(mamlrt PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
+target_compile_options(mamlrt PRIVATE -Werror=missing-declarations)

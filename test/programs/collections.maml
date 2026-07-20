@@ -10,7 +10,7 @@ fn test_vectors() int {
     v << 200
     v << 300
 
-    if len(ro v) != 3 { return 1 }
+    if len(v) != 3 { return 1 }
 
     // 2. Test reading
     if v[0] != 100 { return 2 }
@@ -22,10 +22,10 @@ fn test_vectors() int {
 
     // 4. Test Vec<string>
     mut vs := Vec<string>{"hello", "world"}
-    if len(ro vs) != 2 { return 5 }
+    if len(vs) != 2 { return 5 }
     vs << "foo"
     vs << "bar"
-    if len(ro vs) != 4 { return 6 }
+    if len(vs) != 4 { return 6 }
 
     if vs[3] != "bar" { return 7 }
 
@@ -44,7 +44,7 @@ fn test_maps() int {
     m["alice"] = 10
     m["bob"] = 20
 
-    if len(ro m) != 2 { return 10 }
+    if len(m) != 2 { return 10 }
 
     // 2. Test reading an existing key
     match m["alice"] {
@@ -69,7 +69,7 @@ fn test_maps() int {
     // 4. Test Tombstone Deletion
     delete(mut m, "alice")
     
-    if len(ro m) != 1 { return 14 } // Count should decrement
+    if len(m) != 1 { return 14 } // Count should decrement
 
     // Verify "alice" is actually gone and returns None
     match m["alice"] {

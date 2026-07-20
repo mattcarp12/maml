@@ -61,11 +61,6 @@ func AlignOf(t types.Type, target *Target) int {
 	case *types.RefType:
 		return REF_ALIGN
 	}
-
-	if t.IsReferenceType() {
-		return target.PointerAlign
-	}
-
 	switch v := t.(type) {
 	case types.I64Type:
 		return target.IntSize
@@ -183,62 +178,4 @@ func padToAlign(offset int, align int) int {
 		return offset + (align - rem)
 	}
 	return offset
-}
-
-// FieldOffsetBuiltin returns the ABI‑derived byte offset of a field inside a
-// built‑in runtime container type. If t is not a known built‑in, or the field
-// does not exist, it returns -1.
-func FieldOffsetBuiltin(t types.Type, fieldName string) int {
-	switch t.(type) {
-	case types.StringType, *types.StringType:
-		switch fieldName {
-		case "ptr":
-			return STRING_PTR_OFFSET
-		case "len":
-			return STRING_LEN_OFFSET
-		case "is_owned":
-			return STRING_IS_OWNED_OFFSET
-		}
-	case *types.VectorType:
-		switch fieldName {
-		case "buffer":
-			return VECTOR_BUFFER_OFFSET
-		case "cap":
-			return VECTOR_CAP_OFFSET
-		case "len":
-			return VECTOR_LEN_OFFSET
-		case "elem_size":
-			return VECTOR_ELEM_SIZE_OFFSET
-		}
-	case *types.ViewType:
-		switch fieldName {
-		case "data_ptr":
-			return VIEW_DATA_PTR_OFFSET
-		case "len":
-			return VIEW_LEN_OFFSET
-		}
-	case *types.MapType:
-		switch fieldName {
-		case "entries":
-			return MAP_ENTRIES_OFFSET
-		case "count":
-			return MAP_COUNT_OFFSET
-		case "tombstone_count":
-			return MAP_TOMBSTONE_COUNT_OFFSET
-		case "cap":
-			return MAP_CAP_OFFSET
-		case "val_size":
-			return MAP_VAL_SIZE_OFFSET
-		case "is_string_key":
-			return MAP_IS_STRING_KEY_OFFSET
-		}
-	case *types.RefType:
-		switch fieldName {
-		case "ptr":
-			return REF_PTR_OFFSET
-		case "refcount":
-			return REF_REFCOUNT_OFFSET
-		}
-	}
-	return -1
 }

@@ -580,7 +580,7 @@ func ownsHeapMemory(t types.Type) bool {
 		return false
 	}
 	switch v := t.(type) {
-	case *types.VectorType, *types.MapType:
+	case *types.VectorType, *types.MapType, types.StringType, *types.StringType:
 		return true
 	case *types.StructType:
 		for _, field := range v.Fields {
@@ -613,7 +613,7 @@ func (b *Builder) emitTransfer(dst string, val Value) {
 		return
 	}
 	if reg, isReg := val.(*Register); isReg && reg != nil {
-		if reg.Type != nil && (reg.Type.IsReferenceType() || ownsHeapMemory(reg.Type)) {
+		if reg.Type != nil && ownsHeapMemory(reg.Type) {
 			b.push(&MoveInst{Dst: dst, Src: reg.Name})
 		} else {
 			b.push(&CopyInst{Dst: dst, Src: reg.Name})
@@ -635,14 +635,11 @@ func (b *Builder) emitCapTransfer(dst, src string, cap any) {
 		b.push(&BorrowInst{Dst: dst, Src: src, IsMut: true})
 	case types.CapRo:
 		if isPtr {
-			// Passed by reference (heap-owning types or large structs)
 			b.push(&BorrowInst{Dst: dst, Src: src, IsMut: false})
 		} else {
-			// Passed by value (primitives, small flat structs)
 			b.push(&CopyInst{Dst: dst, Src: src})
 		}
 	case types.CapOwn:
-		// Ownership transfers are always passed by value/move semantics
 		b.push(&MoveInst{Dst: dst, Src: src})
 	}
 }
@@ -737,9 +734,4 @@ func (b *Builder) emitRuntimeCall(sym string, retType types.Type, args ...Value)
 		return nil
 	}
 	return &Register{Name: dst, Type: retType}
-}
-
-func (b *Builder) isPointerLocal(name string) bool {
-    _, ok := b.locals[name].(types.PtrType)
-    return ok
 }

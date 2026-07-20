@@ -270,9 +270,13 @@ func (b *Builder) LowerIfExpr(expr *hir.IfExpr) Value {
 		FalseTarget: elseBlock.ID,
 	}
 
+	// --- 1. Process 'Then' Branch ---
 	b.current = thenBlock
 	thenVal := b.LowerBlockStmt(expr.Consequence)
 	thenEnd := b.current
+
+	isMergeReachable := false
+
 	if thenEnd != nil {
 		if !isUnit {
 			thenEnd.Statements = append(thenEnd.Statements, &AssignInst{Dst: resultTemp, RValue: thenVal})
@@ -280,12 +284,15 @@ func (b *Builder) LowerIfExpr(expr *hir.IfExpr) Value {
 		if thenEnd.Terminator == nil {
 			thenEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 		}
+		isMergeReachable = true
 	}
 
+	// --- 2. Process 'Else' Branch (If Present) ---
 	if expr.Alternative != nil {
 		b.current = elseBlock
 		elseVal := b.LowerBlockStmt(expr.Alternative)
 		elseEnd := b.current
+
 		if elseEnd != nil {
 			if !isUnit {
 				elseEnd.Statements = append(elseEnd.Statements, &AssignInst{Dst: resultTemp, RValue: elseVal})
@@ -293,10 +300,24 @@ func (b *Builder) LowerIfExpr(expr *hir.IfExpr) Value {
 			if elseEnd.Terminator == nil {
 				elseEnd.Terminator = &JumpTerminator{Target: mergeBlock.ID}
 			}
+			isMergeReachable = true
 		}
+	} else {
+		// If there is no 'else' branch, a false condition jumps straight
+		// to the elseBlock (which is the mergeBlock), making it reachable.
+		isMergeReachable = true
 	}
 
-	b.current = mergeBlock
+	// --- 3. Resolve Merge Block Reachability ---
+	if isMergeReachable {
+		b.current = mergeBlock
+	} else {
+		// Both branches terminated early (e.g., via a return statement).
+		// The code following this if-expression is officially unreachable.
+		b.current = nil
+		delete(b.graph.Blocks, mergeBlock.ID)
+	}
+
 	return resultReg
 }
 
@@ -416,15 +437,12 @@ func (b *Builder) LowerVariantLiteral(e *hir.VariantLiteral) Value {
 
 func (b *Builder) flattenStringEq(e *hir.InfixExpr, flatLeft, flatRight Value) Value {
 	leftTmp := b.newTemp()
-	safeLeft := b.emit(&AssignInst{Dst: leftTmp, RValue: flatLeft}, leftTmp, types.StringType{})
-
+	b.emit(&AssignInst{Dst: leftTmp, RValue: flatLeft}, leftTmp, types.StringType{})
 	rightTmp := b.newTemp()
-	safeRight := b.emit(&AssignInst{Dst: rightTmp, RValue: flatRight}, rightTmp, types.StringType{})
-
-	leftPtr, leftLen := b.emitExtractString(safeLeft)
-	rightPtr, rightLen := b.emitExtractString(safeRight)
-
-	callVal := b.EmitMamlStrEq(leftPtr, leftLen, rightPtr, rightLen)
+	b.emit(&AssignInst{Dst: rightTmp, RValue: flatRight}, rightTmp, types.StringType{})
+	leftPtr := b.emitBorrow(leftTmp, false)
+	rightPtr := b.emitBorrow(rightTmp, false)
+	callVal := b.EmitMamlStrEq(leftPtr, rightPtr)
 
 	boolTmp := b.newTemp()
 	result := b.emit(&BinaryOpInst{
@@ -561,7 +579,7 @@ func (b *Builder) getVariantPayloadStructType(t types.Type, variantName string) 
 	}
 
 	return &types.StructType{
-		Name:   fmt.Sprintf("%s_%s_Payload", sumTy.BaseName, variantName),
+		Name:   fmt.Sprintf("%s_%s_Payload", sumTy.MangledName(), variantName),
 		Fields: fields,
 	}
 }
@@ -617,18 +635,14 @@ func init() {
 func (b *Builder) lowerLen(e *hir.CallExpr) Value {
 	arg := e.Arguments[0].Argument
 	argType := hir.TypeOf(arg)
-
+	ptrReg := b.addressOf(arg)
 	switch argType.(type) {
 	case *types.VectorType, *types.ViewType:
-		ptrReg := b.addressOf(arg)
 		return b.EmitMamlVecLen(ptrReg)
 	case *types.MapType:
-		ptrReg := b.addressOf(arg)
 		return b.EmitMamlMapLen(ptrReg)
 	case types.StringType, *types.StringType:
-		// maml_str_len takes String BY VALUE, not by pointer.
-		strVal := hir.LowerNode(arg, b)
-		return b.EmitMamlStrLen(strVal)
+		return b.EmitMamlStrLen(ptrReg)
 	default:
 		panic("compiler error: unhandled type passed to intrinsic len()")
 	}

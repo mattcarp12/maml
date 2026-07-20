@@ -215,7 +215,7 @@ void compileFunction(CodegenContext &ctx, const mir::Function &fn) {
 }
 
 void compileProgram(CodegenContext &ctx, const mir::Program &prog) {
-  rt::declareRuntimeFunctions(ctx);
+  // rt::declareRuntimeFunctions(ctx);
   defineCoroHelperStubs(ctx);
 
   // Pass 1: Declare all function signatures

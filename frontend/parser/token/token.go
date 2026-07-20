@@ -1,5 +1,7 @@
 package token
 
+import "strconv"
+
 //go:generate stringer -type=TokenType
 type TokenType int
 
@@ -106,9 +108,18 @@ func LookupIdent(ident string) TokenType {
 	return IDENT
 }
 
+type Position struct {
+	Filename string
+	Line     int
+	Column   int
+}
+
+func (p Position) String() string {
+	return p.Filename + ":" + strconv.Itoa(p.Line) + ":" + strconv.Itoa(p.Column)
+}
+
 type Token struct {
 	Type    TokenType
 	Literal string
-	Line    int
-	Col     int
+	Pos     Position
 }

@@ -70,7 +70,8 @@ void handle(CodegenContext &ctx, const mir::LoadPtrInst &inst) {
   llvm::Value *ptrVal = evaluateValue(ctx, inst.ptr);
   llvm::Type *targetTy = llvmTypeFor(ctx, inst.type);
   llvm::Value *loadedVal = ctx.Builder->CreateLoad(targetTy, ptrVal, inst.dst + "_load");
-  ctx.SymbolEnv.back()[inst.dst] = loadedVal;
+  llvm::Value *dstSlot = ctx.getMemoryBase(inst.dst);   // the pre-allocated alloca for inst.dst
+  ctx.Builder->CreateStore(loadedVal, dstSlot);
 }
 
 void handle(CodegenContext &ctx, const mir::StoreInst &inst) {

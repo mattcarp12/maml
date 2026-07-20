@@ -4,22 +4,18 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mattcarp12/maml/frontend/ast"
-	"github.com/mattcarp12/maml/frontend/token"
+	"github.com/mattcarp12/maml/frontend/parser/ast"
+	"github.com/mattcarp12/maml/frontend/parser/token"
 )
 
 func (p *Parser) ParseProgram() *ast.Program {
 	program := &ast.Program{
 		Decls: []ast.Decl{},
 	}
-
 	for p.curToken.Type != token.EOF {
-		// Stop collecting new nodes if errors are out of control — the
-		// output would be too unreliable to be useful.
 		if p.hadTooManyErrors() {
 			break
 		}
-
 		decl := p.parseDecl()
 		if decl != nil && !isNilDecl(decl) {
 			program.Decls = append(program.Decls, decl)
@@ -349,8 +345,8 @@ func (p *Parser) parseProductType() *ast.StructTypeExpr {
 			p.addError("expected '}' to close type definition, got EOF")
 		} else {
 			p.addError(fmt.Sprintf(
-				"expected '}' to close type definition, got %s at line %d",
-				p.curToken.Type, p.curToken.Line,
+				"expected '}' to close type definition, got %s at %s",
+				p.curToken.Type, p.curToken.Pos.String(),
 			))
 		}
 		return nil

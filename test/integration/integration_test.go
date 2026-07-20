@@ -18,6 +18,7 @@ var (
 	exitCodeRegex    = regexp.MustCompile(`//\s*EXIT_CODE:\s*(\d+)`)
 	expectedOutStart = regexp.MustCompile(`//\s*EXPECTED_OUTPUT:`)
 	expectedErrRegex = regexp.MustCompile(`//\s*EXPECTED_ERROR:\s*(.+)`)
+	skipRegex        = regexp.MustCompile(`//\s*SKIP:\s*true`)
 )
 
 func TestEndToEnd(t *testing.T) {
@@ -44,6 +45,11 @@ func TestEndToEnd(t *testing.T) {
 			require.NoError(t, err)
 			src := string(content)
 
+			// Check for skip directive
+			if shouldSkip(src) {
+				t.Skip("Skipping test case as requested by // SKIP: true")
+			}
+
 			expectedExit := parseExitCode(src)
 			expectedOut := parseExpectedOutput(src)
 			expectedErr := parseExpectedError(src)
@@ -61,22 +67,24 @@ func TestEndToEnd(t *testing.T) {
 				assert.Contains(t, string(compileOutput), strings.TrimSpace(expectedErr))
 				return
 			}
-
 			require.NoError(t, compileErr, "unexpected compilation error:\n%s", string(compileOutput))
 
 			actualExit, actualOut := runBinary(t, binPath)
-
 			assert.Equal(t, expectedExit, actualExit)
 
 			if expectedOut != "" {
 				// Normalize both sides: trim + collapse whitespace
 				normalizedExpected := normalizeOutput(expectedOut)
 				normalizedActual := normalizeOutput(actualOut)
-
 				assert.Equal(t, normalizedExpected, normalizedActual)
 			}
 		})
 	}
+}
+
+// shouldSkip checks if the source file requests a skip
+func shouldSkip(src string) bool {
+	return skipRegex.MatchString(src)
 }
 
 // parseExpectedOutput supports multi-line output
@@ -87,7 +95,6 @@ func parseExpectedOutput(src string) string {
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-
 		if expectedOutStart.MatchString(line) {
 			inOutput = true
 			// Capture anything after EXPECTED_OUTPUT: on the same line
@@ -109,12 +116,11 @@ func parseExpectedOutput(src string) string {
 					outputLines = append(outputLines, clean)
 				}
 			} else {
-				// Stop when we hit non-comment line
+				// Stop when we hit non-comment line break
 				break
 			}
 		}
 	}
-
 	return strings.Join(outputLines, "\n")
 }
 
@@ -155,5 +161,6 @@ func runBinary(t *testing.T, binPath string) (int, string) {
 	} else if err != nil {
 		t.Fatalf("failed to run binary: %v", err)
 	}
+
 	return exitCode, stdout.String()
 }
