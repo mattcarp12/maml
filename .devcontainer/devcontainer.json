@@ -1,27 +1,19 @@
 {
-	"name": "Debian",
-	"image": "mcr.microsoft.com/devcontainers/base:bookworm",
+	"name": "MAML Dev",
+	"image": "mcr.microsoft.com/devcontainers/cpp:2-debian13",
 	"features": {
-		"ghcr.io/devcontainers/features/go": {},
-		"ghcr.io/devcontainers-community/features/llvm:latest": {},
-		"ghcr.io/devcontainers/features/common-utils": {},
-		"ghcr.io/alexdenisov/features/feature-cmake": {}
+		"ghcr.io/devcontainers/features/go": {}
 	},
 	"customizations": {
 		"vscode": {
 			"extensions": [
 				"golang.go",
 				"llvm-vs-code-extensions.vscode-clangd",
-				// "ms-vscode.cpptools",
 				"ms-vscode.cmake-tools",
 				"redhat.vscode-yaml",
-				"xaver.clang-format",
 				"vadimcn.vscode-lldb"
 			]
 		}
-	},
-	"containerEnv": {
-		"CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
 	},
 	"postCreateCommand": "bash .devcontainer/setup.sh"
 }

@@ -3,34 +3,36 @@
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
-#include "CodegenContext.hpp"
 
 namespace maml {
 namespace rt {
 
-// ============================================================================
-// Struct Builder Functions (Create correct LLVM struct types)
-// ============================================================================
-inline llvm::StructType* getStringType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C)
-    });
-}
-inline llvm::StructType* getVectorType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C)
-    });
-}
-inline llvm::StructType* getViewType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C)
-    });
-}
-inline llvm::StructType* getMapType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C)
-    });
-}
-inline llvm::StructType* getRefType(llvm::LLVMContext &C) {
-    return llvm::StructType::get(C, {llvm::PointerType::getUnqual(C), llvm::PointerType::getUnqual(C)
-    });
-}
+    // ============================================================================
+    // Struct Builder Functions (Create correct LLVM struct types)
+    // ============================================================================
+    inline llvm::StructType* getStringType(llvm::LLVMContext& C)
+    {
+        return llvm::StructType::get(C,
+            { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C),
+                llvm::Type::getInt1Ty(C) });
+    }
+    inline llvm::StructType* getVectorType(llvm::LLVMContext& C)
+    {
+        return llvm::StructType::get(C,
+            { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
+                llvm::Type::getInt32Ty(C) });
+    }
+    inline llvm::StructType* getViewType(llvm::LLVMContext& C)
+    {
+        return llvm::StructType::get(
+            C, { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C) });
+    }
+    inline llvm::StructType* getMapType(llvm::LLVMContext& C)
+    {
+        return llvm::StructType::get(C,
+            { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
+                llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C) });
+    }
 
 } // namespace rt
 } // namespace maml

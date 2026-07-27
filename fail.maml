@@ -1,0 +1,23 @@
+// fn getSlice() View<int> {
+//     a := [3]int{1,2,3}
+//     return a[:]
+// }
+
+// type Box = { id int, data View<int> }
+// 
+// fn make_box(id int) Box {
+//     arr := [3]int{10, 20, 30}
+//     return Box{id: id, data: arr[:]}
+// }
+// fn main() int {
+//     a := make_box(1)
+//     return 0
+// }
+
+type Token = { id int }
+fn consume_token(own t Token) int { return t.id }
+fn main() int {
+    mut my_token := Token{ id: 99 }
+    val := consume_token(own my_token)
+    return my_token.id 
+}

@@ -1,93 +1,38 @@
-# =============================================================================
-# MAML Unified Build Pipeline Orchestration
-# =============================================================================
+.PHONY: all configure build clean test e2e e2efail tree run
 
-.PHONY: all frontend backend runtime clean test test-e2e pipeline-demo codegen
+BUILD_DIR := $(CURDIR)/build
+BIN_DIR   := $(BUILD_DIR)/bin
 
-# Directories
-BIN_DIR     := $(CURDIR)/bin
-BUILD_DIR   := $(CURDIR)/build
-RUNTIME_DIR := $(CURDIR)/runtime
+# Default: ensure configured, then build
+all: build
 
-# Default target runs codegen before compiling the decentralized engine
-all: codegen frontend backend runtime
+configure:
+	cmake --preset default
 
-# 0. Single Source of Truth Code Generation
-codegen:
-	@echo "==> Running Types Codegen..."
-	@go run meta/types/gen_types.go
+build: configure
+	cmake --build --preset default
 
-	@echo "==> Running AST Codegen..."
-	@go run meta/ast/gen_ast.go
-
-	@echo "==> Running TAST Codegen..."
-	@go run meta/tast/gen_tast.go
-
-	@echo "==> Running HIR Codegen..."
-	@go run meta/hir/gen_hir.go
-
-	@echo "==> Running MIR Go Codegen..."
-	@go run meta/mir/gen_mir_go.go
-
-	@echo "==> Running MIR C++ Codegen..."
-	@go run meta/mir/gen_mir_cpp.go
-
-	@echo "==> Running ABI + Runtime Codegen..."
-	@go run meta/abi/gen_abi.go
-
-	@echo "==> Running go generate..."
-	@go generate ./...
-
-# 1. Build the Go Compiler Frontend
-frontend: codegen
-	@echo "==> Building Go Frontend..."
-	@mkdir -p $(BIN_DIR)
-	@go build -o $(BIN_DIR)/maml ./cmd/maml
-
-# 2. Configure and Build the C++ LLVM Backend
-backend: codegen
-	@echo "==> Building C++ LLVM Backend with Ninja..."
-	@mkdir -p $(BUILD_DIR)/backend
-	@mkdir -p $(BIN_DIR)
-	@cd $(BUILD_DIR)/backend && cmake -G Ninja -DCMAKE_BUILD_TYPE=Release ../../backend && ninja
-	@cp $(BUILD_DIR)/backend/maml-backend $(BIN_DIR)/maml-backend
-
-# 3. Build the C++ Runtime
-runtime:
-	@echo "==> Building C++ Runtime with Ninja (musl static)..."
-	@mkdir -p $(BUILD_DIR)/runtime
-	@cd $(BUILD_DIR)/runtime && cmake -G Ninja \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_C_FLAGS="--target=x86_64-linux-musl -static" \
-		-DCMAKE_CXX_FLAGS="--target=x86_64-linux-musl -static" \
-		-DCMAKE_BUILD_TYPE=Release \
-		../../runtime && ninja
-# 4. Clean Up Build Environments
 clean:
-	@echo "==> Cleaning all build artifacts..."
-	@rm -rf $(BIN_DIR) $(BUILD_DIR)
-	@rm maml_app
-	@go clean ./...
+	@echo "==> Cleaning build artifacts..."
+	@rm -rf $(BUILD_DIR)
 
-# =============================================================================
-# Testing & Quality Control
-# =============================================================================
-fmt:
-	@go fmt ./...
-
-vet:
-	@go vet ./...
-
+# Legacy Go test harness (remove once C++ tests replace these)
 test: all
 	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./... -v -cover
 
 e2e: all
-	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/integration_test.go -v -cover
-	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/compile_fail_test.go -v -cover
+	@export PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)"; \
+	go test ./test/integration_test.go -v -cover && \
+	go test ./test/compile_fail_test.go -v -cover
 
-e2efail:
-	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/integration/compile_fail_test.go -v -cover
+e2efail: all
+	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/compile_fail_test.go -v -cover
+
+# Convenience: compile and run a single file
+# Usage: make run FILE=hello.maml
+run: all
+	@if [ -z "$(FILE)" ]; then echo "Usage: make run FILE=path/to/file.maml"; exit 1; fi
+	@$(BIN_DIR)/mamlc $(FILE) $(BUILD_DIR)/maml_run_tmp && $(BUILD_DIR)/maml_run_tmp
 
 tree:
 	tree -I '.zig-cache|zig-*|test|build|bin'

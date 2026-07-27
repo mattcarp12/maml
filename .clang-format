@@ -1,2 +1,2 @@
-BasedOnStyle: Google
-ColumnLimit: 120
+BasedOnStyle: Webkit
+ColumnLimit: 100

@@ -1,0 +1,47 @@
+#pragma once
+#include "token.h"
+#include <string_view>
+
+namespace maml {
+
+class Lexer {
+public:
+    explicit Lexer(std::string_view input)
+        : input_(input)
+        , position_(0)
+        , readPosition_(0)
+        , ch_(0)
+        , line_(1)
+        , col_(0)
+    {
+        readChar(); // prime the lexer
+    }
+
+    Token nextToken();
+
+private:
+    std::string_view input_;
+    size_t position_;
+    size_t readPosition_;
+    char ch_;
+
+    uint32_t line_;
+    uint32_t col_;
+
+    void readChar();
+    char peekChar() const;
+    void skipWhitespace();
+    void skipComment();
+
+    std::string_view readIdentifier();
+    std::pair<std::string_view, TokenType> readNumber();
+    std::string_view readString();
+
+    static bool isLetter(char ch);
+    static bool isDigit(char ch);
+
+    Token newToken(TokenType type, size_t startLine, size_t startCol, size_t len = 1);
+    Token twoCharToken(TokenType type, size_t startLine, size_t startCol);
+};
+
+} // namespace maml
