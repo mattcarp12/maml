@@ -236,8 +236,10 @@ std::unique_ptr<BlockState> BorrowAnalyzer::mergePredecessors(const mir::Graph* 
     std::vector<mir::BlockID> preds;
 
     for (mir::BlockID p : allPreds) {
-        if (visited.at(p))
+        auto it = visited.find(p);
+        if (it != visited.end() && it->second) {
             preds.push_back(p);
+        }
     }
     if (preds.empty())
         return merged;
@@ -253,7 +255,11 @@ std::unique_ptr<BlockState> BorrowAnalyzer::mergePredecessors(const mir::Graph* 
     for (auto& [k, _] : merged->bindings) {
         std::unique_ptr<BindingState> currentMerged = nullptr;
         for (mir::BlockID p : preds) {
-            const auto& predVal = stateOut.at(p)->bindings.at(k);
+            const BindingState* predVal = nullptr;
+            auto it = stateOut.at(p)->bindings.find(k);
+            if (it != stateOut.at(p)->bindings.end()) {
+                predVal = it->second.get();
+            }
             if (!currentMerged) {
                 if (predVal)
                     currentMerged = predVal->clone();
@@ -262,7 +268,8 @@ std::unique_ptr<BlockState> BorrowAnalyzer::mergePredecessors(const mir::Graph* 
                     currentMerged->state = LockState::Invalidated;
                 }
             } else {
-                currentMerged = mergeBindings(currentMerged.get(), predVal.get());
+                // Because predVal is now a raw pointer, pass it directly
+                currentMerged = mergeBindings(currentMerged.get(), predVal);
             }
         }
         merged->bindings[k] = std::move(currentMerged);

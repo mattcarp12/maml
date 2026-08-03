@@ -1,9 +1,38 @@
 #include "TypeLowering.hpp"
-#include "abi_generated.hpp"
+#include "CodegenContext.hpp"
+#include "types.h"
+#include "llvm/IR/Type.h"
+#include <cstdint>
+#include <llvm-19/llvm/IR/DerivedTypes.h>
+#include <llvm-19/llvm/IR/Type.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <string>
+#include <vector>
 
 namespace maml {
+
+inline llvm::StructType* getStringType(llvm::LLVMContext& C)
+{
+    return llvm::StructType::get(C,
+        { llvm::PointerType::getUnqual(C), llvm::Type::getInt64Ty(C), llvm::Type::getInt1Ty(C) });
+}
+inline llvm::StructType* getVectorType(llvm::LLVMContext& C)
+{
+    return llvm::StructType::get(C,
+        { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
+            llvm::Type::getInt32Ty(C) });
+}
+inline llvm::StructType* getViewType(llvm::LLVMContext& C)
+{
+    return llvm::StructType::get(C, { llvm::PointerType::getUnqual(C), llvm::Type::getInt64Ty(C) });
+}
+inline llvm::StructType* getMapType(llvm::LLVMContext& C)
+{
+    return llvm::StructType::get(C,
+        { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
+            llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C) });
+}
 
 llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
 {
@@ -42,7 +71,10 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
     case types::TypeKind::Bool:
         return llvm::Type::getInt1Ty(ctx.Context);
     case types::TypeKind::Unit:
-        return llvm::Type::getVoidTy(ctx.Context);
+        // TODO: Think about how we want the Unit type handled in MAML - 
+        // is it a "first class type" or is it just a placeholder for "no value"?
+        return llvm::Type::getVoidTy(ctx.Context);    
+    // return llvm::StructType::get(ctx.Context, {}); // Prevent void in structs
     case types::TypeKind::Char:
         return llvm::Type::getInt32Ty(ctx.Context);
 
@@ -57,15 +89,15 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
         return nullptr;
 
-    // --- Runtime compound types (Using ABI Generators) ---
+    // --- Runtime compound types ---
     case types::TypeKind::String:
-        return rt::getStringType(ctx.Context);
+        return getStringType(ctx.Context);
     case types::TypeKind::View:
-        return rt::getViewType(ctx.Context);
+        return getViewType(ctx.Context);
     case types::TypeKind::Vector:
-        return rt::getVectorType(ctx.Context);
+        return getVectorType(ctx.Context);
     case types::TypeKind::Map:
-        return rt::getMapType(ctx.Context);
+        return getMapType(ctx.Context);
 
     // --- Composites ---
     case types::TypeKind::Array: {
@@ -77,10 +109,12 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         const auto& payload = std::get<types::StructPayload>(type->payload);
         std::string structName = std::string(ctx.Sym.resolve(payload.name));
 
-        llvm::StructType* existingST = llvm::StructType::getTypeByName(ctx.Context, structName);
-        if (existingST && !existingST->isOpaque()) {
-            return existingST;
+        llvm::StructType* st = llvm::StructType::getTypeByName(ctx.Context, structName);
+        if (st) {
+            return st; // Early return prevents infinite recursion loop
         }
+
+        st = llvm::StructType::create(ctx.Context, structName);
 
         std::vector<llvm::Type*> fieldTypes;
         fieldTypes.reserve(payload.fields.size());
@@ -88,8 +122,6 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
             fieldTypes.push_back(llvmTypeFor(ctx, field.type));
         }
 
-        llvm::StructType* st
-            = existingST ? existingST : llvm::StructType::create(ctx.Context, structName);
         st->setBody(fieldTypes, /*isPacked=*/false);
         return st;
     }
@@ -98,10 +130,12 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         const auto& payload = std::get<types::SumPayload>(type->payload);
         std::string baseName = std::string(ctx.Sym.resolve(payload.baseName));
 
-        llvm::StructType* existingST = llvm::StructType::getTypeByName(ctx.Context, baseName);
-        if (existingST && !existingST->isOpaque()) {
-            return existingST;
+        llvm::StructType* st = llvm::StructType::getTypeByName(ctx.Context, baseName);
+        if (st) {
+            return st;
         }
+
+        st = llvm::StructType::create(ctx.Context, baseName);
 
         uint64_t maxPayloadSize = 0;
         const llvm::DataLayout& DL = ctx.Module->getDataLayout();
@@ -129,8 +163,6 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         llvm::Type* payloadTy
             = llvm::ArrayType::get(llvm::Type::getInt64Ty(ctx.Context), numBlocks);
 
-        llvm::StructType* st
-            = existingST ? existingST : llvm::StructType::create(ctx.Context, baseName);
         st->setBody({ discrimTy, payloadTy }, /*isPacked=*/false);
         return st;
     }
@@ -148,14 +180,14 @@ llvm::Type* llvmLayoutTypeFor(CodegenContext& ctx, const types::Type* type)
         return nullptr;
     }
 
-    // Bypass the standard local-variable pointer resolution to fetch the raw StructType[cite: 3]
+    // Bypass the standard local-variable pointer resolution to fetch the raw StructType
     switch (type->kind) {
     case types::TypeKind::Vector:
-        return rt::getVectorType(ctx.Context);
+        return getVectorType(ctx.Context);
     case types::TypeKind::Map:
-        return rt::getMapType(ctx.Context);
+        return getMapType(ctx.Context);
     case types::TypeKind::View:
-        return rt::getViewType(ctx.Context);
+        return getViewType(ctx.Context);
     default:
         return llvmTypeFor(ctx, type);
     }

@@ -1,5 +1,9 @@
 #include "types.h"
+#include "sym.h"
+#include <cstddef>
+#include <cstdint>
 #include <format>
+#include <string>
 
 namespace maml::types {
 

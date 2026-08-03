@@ -5,9 +5,13 @@
 #include "cfg.h"
 #include "mir.h"
 #include "sym.h"
+#include "token.h"
 #include "type_registry.h"
 #include <memory>
+#include <tuple>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace maml::mir {
@@ -44,6 +48,8 @@ template <typename Variant> const types::Type* safeGetExprType(const Variant& v)
             using T = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<T, std::monostate>) {
                 return nullptr;
+            } else if constexpr (std::is_same_v<T, ast::TypeExprWrapper*>) {
+                return e ? e->exprType : nullptr;
             } else if constexpr (HasExprType<std::remove_pointer_t<T>>::value) {
                 return e ? e->exprType : nullptr;
             } else {
@@ -90,7 +96,7 @@ private:
     SymID newPtrTemp();
     SymID emitTemp(const types::Type* t);
 
-    void push(Instruction inst);
+    void push(const Instruction& inst);
     Value emit(Instruction inst, SymID dst, const types::Type* t);
     Value emitLoad(Value ptr, const types::Type* t, Position pos);
     Value emitFieldAddr(Value obj, const types::Type* objType, SymID fieldName, int fieldIdx,
@@ -111,6 +117,7 @@ private:
 
     const types::Type* lowerParamType(const types::Type* t, ast::Capability cap);
     bool ownsHeapMemory(const types::Type* t) const;
+    static bool isAggregateType(const types::Type* t);
     Value boxScalar(Value val, const types::Type* t, Position pos);
     Value emitRuntimeCall(
         SymID funcSym, const types::Type* retType, const std::vector<Value>& args, Position pos);

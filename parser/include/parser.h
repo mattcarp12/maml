@@ -8,7 +8,6 @@
 #include "token.h"
 #include <array>
 #include <format>
-#include <string>
 #include <vector>
 
 namespace maml {
@@ -31,20 +30,24 @@ public:
     using PrefixFn = ast::Expr (Parser::*)();
     using InfixFn = ast::Expr (Parser::*)(ast::Expr);
 
-    Parser(Lexer& lexer, SymbolTable& sym, Arena& arena);
+    Parser(const std::vector<Token>& tokens, SymbolTable& sym, Arena& arena);
 
     ast::Program* parseProgram();
     const std::vector<ast::CompileError>& getErrors() const { return errors_; }
 
 private:
-    Lexer& l_;
+    const std::vector<Token>& tokens_;
+    size_t tokenIndex_ = 0;
+
     SymbolTable& sym_;
     Arena& arena_;
 
     Token curToken_;
     Token peekToken_;
+
     std::vector<ast::CompileError> errors_;
     static constexpr size_t MAX_ERRORS = 25;
+    bool panicMode_ = false;
 
     std::array<PrefixFn, 256> prefixParseFns_ {};
     std::array<InfixFn, 256> infixParseFns_ {};

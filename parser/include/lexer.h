@@ -6,8 +6,9 @@ namespace maml {
 
 class Lexer {
 public:
-    explicit Lexer(std::string_view input)
+    explicit Lexer(std::string_view input, std::string_view filename)
         : input_(input)
+        , filename_(filename)
         , position_(0)
         , readPosition_(0)
         , ch_(0)
@@ -21,6 +22,7 @@ public:
 
 private:
     std::string_view input_;
+    std::string_view filename_;
     size_t position_;
     size_t readPosition_;
     char ch_;

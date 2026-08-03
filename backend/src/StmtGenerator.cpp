@@ -1,7 +1,18 @@
 #include "StmtGenerator.hpp"
 
+#include "CodegenContext.hpp"
 #include "ExprGenerator.hpp"
 #include "mir.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include <type_traits>
+#include <variant>
 
 namespace maml {
 
@@ -113,9 +124,9 @@ void compileTerminator(CodegenContext& ctx, const mir::Terminator& term)
                 auto& Context = ctx.Context;
                 auto* Module = ctx.Module.get();
 
-                // 1. Store the return value in the Promise slot
-                if (!ctx.Builder->GetInsertBlock()->getParent()->getReturnType()->isVoidTy()) {
-                    llvm::Value* retVal = evaluateValue(ctx, arg.value);
+                // 1. Store the return value in the Promise slot (if a return value exists)
+                llvm::Value* retVal = evaluateValue(ctx, arg.value);
+                if (retVal && ctx.PromiseSlot) {
                     llvm::Value* typedPromise = ctx.Builder->CreatePointerCast(
                         ctx.PromiseSlot, llvm::PointerType::getUnqual(ctx.Context));
                     ctx.Builder->CreateStore(retVal, typedPromise);
@@ -125,7 +136,6 @@ void compileTerminator(CodegenContext& ctx, const mir::Terminator& term)
                 llvm::Function* saveFn
                     = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_save);
                 llvm::Value* coroState = ctx.Builder->CreateCall(saveFn, { ctx.CurrentCoroHandle });
-
                 llvm::Function* suspendFn
                     = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_suspend);
                 llvm::Value* isFinal = llvm::ConstantInt::get(llvm::Type::getInt1Ty(Context), 1);

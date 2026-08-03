@@ -7,31 +7,49 @@
     },
     "configurePresets": [
         {
-            "name": "default",
+            "name": "release",
             "displayName": "Clang + Ninja (Release)",
             "description": "Default release build using Clang and Ninja",
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build",
+            "binaryDir": "${sourceDir}/build/release",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
+        },
+        {
+            "name": "debug",
+            "displayName": "Clang + Ninja (Debug)",
+            "description": "Debug build with symbols and no optimization",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
         }
     ],
     "buildPresets": [
         {
-            "name": "default",
-            "configurePreset": "default",
-            "displayName": "Default Build"
+            "name": "release",
+            "configurePreset": "release",
+            "displayName": "Release Build"
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "displayName": "Debug Build"
         }
     ],
     "testPresets": [
         {
-            "name": "default",
-            "configurePreset": "default",
-            "displayName": "Default CTest",
+            "name": "debug",
+            "configurePreset": "debug",
+            "displayName": "Debug CTest",
             "output": {
                 "outputOnFailure": true
             }

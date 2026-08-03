@@ -5,12 +5,16 @@
 #include <llvm/IR/Module.h>
 
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "mir.h"
 #include "sym.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
 
 namespace maml {
 

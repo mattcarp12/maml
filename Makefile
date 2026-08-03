@@ -2,28 +2,30 @@
 
 BUILD_DIR := $(CURDIR)/build
 BIN_DIR   := $(BUILD_DIR)/bin
+TEST_RUNNER_BIN := $(BIN_DIR)/test_runner
 
 # Default: ensure configured, then build
 all: build
 
 configure:
-	cmake --preset default
+	cmake --preset debug
 
 build: configure
-	cmake --build --preset default
+	cmake --build --preset debug
 
 clean:
 	@echo "==> Cleaning build artifacts..."
 	@rm -rf $(BUILD_DIR)
 
-# Legacy Go test harness (remove once C++ tests replace these)
-test: all
-	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./... -v -cover
+build-test-runner:
+	@echo "==> Building C++ E2E test runner..."
+	@mkdir -p $(BIN_DIR)
+	clang++ -std=c++17 test/test_runner.cpp -o $(TEST_RUNNER_BIN)
 
-e2e: all
+e2e: all build-test-runner
+	@echo "==> Running C++ E2E Tests..."
 	@export PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)"; \
-	go test ./test/integration_test.go -v -cover && \
-	go test ./test/compile_fail_test.go -v -cover
+	cd test && $(TEST_RUNNER_BIN)
 
 e2efail: all
 	@PATH="$(BIN_DIR):$$PATH" MAML_ROOT="$(CURDIR)" go test ./test/compile_fail_test.go -v -cover

@@ -1,6 +1,11 @@
+#include "CodegenContext.hpp"
 #include "ExprGenerator.hpp"
 #include "TypeLowering.hpp"
 #include "mir.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include <string>
 
 namespace maml {
 

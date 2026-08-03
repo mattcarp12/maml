@@ -1,17 +1,17 @@
 // EXIT_CODE: 0
 // EXPECTED_OUTPUT: Workie!
 fn inc_int(mut x int) {
-    x= 1 + x
+    x= 1 + x;
 }
 
 fn main() int {
-    mut x := 1
-    inc_int(mut x)
-    if x != 2 {
-        print("No workie!")
+    mut x := 1;
+    inc_int(mut x);
+    if (x != 2) {
+        print("No workie!");
     } else {
-        print("Workie!")
+        print("Workie!");
     }
 
-    return 0
+    return 0;
 }

@@ -3,9 +3,22 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Verifier.h>
+#include <string>
+#include <variant>
+#include <vector>
 
+#include "CodegenContext.hpp"
 #include "StmtGenerator.hpp"
 #include "TypeLowering.hpp"
+#include "cfg.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constant.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/Support/raw_ostream.h"
+#include "mir.h"
+#include "sym.h"
 
 namespace maml {
 
@@ -80,6 +93,10 @@ static void allocateVariables(CodegenContext& ctx, llvm::Function* F, const mir:
 
     // 2. Allocate Locals
     for (const auto& [name, type] : fn.locals) {
+        // Skip if already allocated (e.g., it was a parameter)
+        if (ctx.SymbolEnv.back().count(name)) {
+            continue;
+        }
         llvm::Type* ty = llvmTypeFor(ctx, type);
         if (ty->isVoidTy())
             continue;
@@ -109,6 +126,8 @@ static void finalizeCoroutineBlocks(CodegenContext& ctx, llvm::Function* F)
         llvm::Value* isDone = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
         futureVal = ctx.Builder->CreateInsertValue(futureVal, isDone, 1);
         ctx.Builder->CreateRet(futureVal);
+    } else if (retTy->isVoidTy()) {
+        ctx.Builder->CreateRetVoid();
     } else {
         ctx.Builder->CreateRet(ctx.CurrentCoroHandle);
     }
@@ -135,6 +154,12 @@ void declareFunction(CodegenContext& ctx, const mir::Function& fn)
     if (fnName == "main")
         retType = llvm::Type::getInt32Ty(ctx.Context);
 
+    // Async functions must return a coroutine handle pointer (ptr)
+    // even if their MAML return type is Unit/void.
+    if (fn.isAsync) {
+        retType = llvm::PointerType::getUnqual(ctx.Context);
+    }
+
     std::vector<llvm::Type*> paramTypes;
     for (const auto& p : fn.params)
         paramTypes.push_back(llvmTypeFor(ctx, p.type));
@@ -150,6 +175,13 @@ void compileFunction(CodegenContext& ctx, const mir::Function& fn)
 {
     ctx.CurrentFunctionName = fn.name;
     std::string fnName = std::string(ctx.Sym.resolve(fn.name));
+
+    // Reset coroutine context members between functions
+    ctx.CurrentCoroHandle = nullptr;
+    ctx.PromiseSlot = nullptr;
+    ctx.CoroId = nullptr;
+    ctx.CoroSuspendBlock = nullptr;
+    ctx.CoroCleanupBlock = nullptr;
 
     // 1. Retrieve pre-declared signature
     llvm::Function* F = ctx.Module->getFunction(fnName);

@@ -1,18 +1,23 @@
+#include <cstddef>
 #include <llvm/IR/Intrinsics.h>
+#include <string>
+#include <variant>
+#include <vector>
 
+#include "CodegenContext.hpp"
 #include "ExprGenerator.hpp"
 #include "TypeLowering.hpp"
 #include "mir.h"
 #include "token.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 
 namespace maml {
 
-// NOTE (Phase 1 scope): inst.operator_ (std::string) does not exist on the
-// real mir::BinaryOpInst/UnaryOpInst — the field is `op` (a TokenType enum).
-// This file is patched to compile against TokenType with the same
-// comparisons as before, expressed via `tokenText`. The full switch-based
-// dispatch (dropping tokenText entirely in favor of `switch (inst.op)`) is
-// tracked as Phase 2 identifier/dispatch work and not done here.
 static std::string tokenText(TokenType t)
 {
     switch (t) {
@@ -51,8 +56,14 @@ void handle(CodegenContext& ctx, const mir::BinaryOpInst& inst)
 
     llvm::Value* left = evaluateValue(ctx, inst.left);
     llvm::Value* right = evaluateValue(ctx, inst.right);
-    llvm::Value* result = nullptr;
 
+    if (!left || !right) {
+        ctx.Error.fatal(
+            "Null operand encountered in BinaryOpInst near token: " + tokenText(inst.op));
+        return;
+    }
+
+    // Handle Pointer vs Integer null comparison
     if (left->getType()->isPointerTy() && right->getType()->isIntegerTy()) {
         if (auto* cInt = llvm::dyn_cast<llvm::ConstantInt>(right); cInt && cInt->isZero())
             right = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
@@ -61,17 +72,35 @@ void handle(CodegenContext& ctx, const mir::BinaryOpInst& inst)
             left = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(right->getType()));
     }
 
+    // Coerce integer widths if they mismatch
     if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) {
         if (left->getType() != right->getType()) {
-            // Coerce the right operand to match the left operand's integer width.
-            // (This will cleanly truncate your i64 `0` down to an i32 to match the discriminant)
             right = ctx.Builder->CreateSExtOrTrunc(right, left->getType(), "binop_cast");
         }
     }
 
-    std::string op = tokenText(inst.op);
+    llvm::Value* result = nullptr;
+    auto opType = static_cast<TokenType>(inst.op);
 
-    if (op == "/" || op == "%") {
+    switch (opType) {
+    case TokenType::PLUS:
+    case TokenType::PLUS_EQ:
+        result = ctx.Builder->CreateAdd(left, right, "addtmp");
+        break;
+
+    case TokenType::MINUS:
+    case TokenType::MINUS_EQ:
+        result = ctx.Builder->CreateSub(left, right, "subtmp");
+        break;
+
+    case TokenType::MULTIPLY:
+    case TokenType::MUL_EQ:
+        result = ctx.Builder->CreateMul(left, right, "multmp");
+        break;
+
+    case TokenType::DIVIDE:
+    case TokenType::DIV_EQ:
+    case TokenType::MODULO: {
         llvm::Value* isZero
             = ctx.Builder->CreateICmpEQ(right, llvm::ConstantInt::get(right->getType(), 0));
         llvm::Function* F = ctx.Builder->GetInsertBlock()->getParent();
@@ -86,28 +115,56 @@ void handle(CodegenContext& ctx, const mir::BinaryOpInst& inst)
         ctx.Builder->CreateUnreachable();
 
         ctx.Builder->SetInsertPoint(contBB);
-        if (op == "/")
+        if (opType == TokenType::DIVIDE || opType == TokenType::DIV_EQ) {
             result = ctx.Builder->CreateSDiv(left, right, "divtmp");
-        if (op == "%")
+        } else {
             result = ctx.Builder->CreateSRem(left, right, "modtmp");
-    } else if (op == "+")
-        result = ctx.Builder->CreateAdd(left, right, "addtmp");
-    else if (op == "-")
-        result = ctx.Builder->CreateSub(left, right, "subtmp");
-    else if (op == "*")
-        result = ctx.Builder->CreateMul(left, right, "multmp");
-    else if (op == "==")
+        }
+        break;
+    }
+
+    case TokenType::EQ:
         result = ctx.Builder->CreateICmpEQ(left, right, "eqtmp");
-    else if (op == "!=")
+        break;
+
+    case TokenType::NOT_EQ:
         result = ctx.Builder->CreateICmpNE(left, right, "neqtmp");
-    else if (op == "<")
+        break;
+
+    case TokenType::LT:
         result = ctx.Builder->CreateICmpSLT(left, right, "lttmp");
-    else if (op == ">")
+        break;
+
+    case TokenType::GT:
         result = ctx.Builder->CreateICmpSGT(left, right, "gttmp");
-    else if (op == "<=")
+        break;
+
+    case TokenType::LTE:
         result = ctx.Builder->CreateICmpSLE(left, right, "letmp");
-    else if (op == ">=")
+        break;
+
+    case TokenType::GTE:
         result = ctx.Builder->CreateICmpSGE(left, right, "getmp");
+        break;
+
+    case TokenType::AND:
+        result = ctx.Builder->CreateAnd(left, right, "andtmp");
+        break;
+
+    case TokenType::OR:
+        result = ctx.Builder->CreateOr(left, right, "ortmp");
+        break;
+
+    default:
+        ctx.Error.fatal("Unhandled binary operator token type: " + tokenText(inst.op)
+            + " (ID: " + std::to_string(static_cast<int>(opType)) + ")");
+        return;
+    }
+
+    if (!result) {
+        ctx.Error.fatal("BinaryOpInst evaluated to null LLVM Value");
+        return;
+    }
 
     if (llvm::Value* existing = ctx.resolveSymbol(inst.dst)) {
         if (llvm::isa<llvm::AllocaInst>(existing)) {
@@ -136,44 +193,6 @@ void handle(CodegenContext& ctx, const mir::UnaryOpInst& inst)
             llvm::ConstantInt::get(operand->getType(), 0), operand, "negtmp");
     }
     ctx.SymbolEnv.back()[inst.dst] = result;
-}
-
-static void lowerTaskGetResult(CodegenContext& ctx, const mir::CallInst& inst)
-{
-    llvm::Value* futurePtr = evaluateValue(ctx, inst.arguments[0]);
-
-    // Extract raw coroutine frame pointer from the {ptr, i1} wrapper
-    llvm::StructType* futureStructTy = llvm::StructType::get(ctx.Context,
-        { llvm::PointerType::getUnqual(ctx.Context), llvm::Type::getInt1Ty(ctx.Context) });
-    llvm::Value* framePtrAddr = ctx.Builder->CreateStructGEP(futureStructTy, futurePtr, 0);
-    llvm::Value* hdl = ctx.Builder->CreateLoad(
-        llvm::PointerType::getUnqual(ctx.Context), framePtrAddr, "raw_coro_hdl");
-
-    // Pass the extracted raw frame pointer to coro.promise
-    llvm::Function* promiseFn
-        = llvm::Intrinsic::getDeclaration(ctx.Module.get(), llvm::Intrinsic::coro_promise);
-    llvm::Value* align = llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx.Context), 8);
-    llvm::Value* from = llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx.Context), 0);
-
-    llvm::Value* promisePtr = ctx.Builder->CreateCall(promiseFn, { hdl, align, from });
-
-    llvm::Type* expectedTy = llvmTypeFor(ctx, inst.type);
-
-    if (!expectedTy->isVoidTy()) {
-        llvm::Value* typedPromise
-            = ctx.Builder->CreatePointerCast(promisePtr, llvm::PointerType::getUnqual(ctx.Context));
-        llvm::Value* res = ctx.Builder->CreateLoad(expectedTy, typedPromise, "coro.result");
-
-        if (llvm::Value* existing = ctx.resolveSymbol(inst.dst)) {
-            if (llvm::isa<llvm::AllocaInst>(existing)) {
-                ctx.Builder->CreateStore(res, existing);
-            } else {
-                ctx.SymbolEnv.back()[inst.dst] = res;
-            }
-        } else {
-            ctx.SymbolEnv.back()[inst.dst] = res;
-        }
-    }
 }
 
 static std::vector<llvm::Value*> prepareCallArguments(CodegenContext& ctx,

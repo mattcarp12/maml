@@ -106,12 +106,12 @@ struct Type {
     TypePayload payload;
 
     // Helper methods
-    bool isInteger() const;
-    bool canRepresentInt(int64_t value) const;
-    bool isCopyable() const;
+    [[nodiscard]] bool isInteger() const;
+    [[nodiscard]] bool canRepresentInt(int64_t value) const;
+    [[nodiscard]] bool isCopyable() const;
 
-    std::string toString(const SymbolTable& sym) const;
-    std::string mangledName(const SymbolTable& sym) const;
+    [[nodiscard]] std::string toString(const SymbolTable& sym) const;
+    [[nodiscard]] std::string mangledName(const SymbolTable& sym) const;
 };
 
 } // namespace maml::types

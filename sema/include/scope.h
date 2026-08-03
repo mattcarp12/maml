@@ -15,7 +15,7 @@ struct Symbol {
     const types::Type* type = nullptr;
 
     bool isMutable = false;
-    ast::Capability cap = ast::Capability::None;
+    ast::Capability cap = ast::Capability::Ro;
 
     // For variant symbols, we track the parent sum type and discriminant index.
     // In Go, you stored pointers to the variant struct itself, but since types
@@ -34,6 +34,7 @@ public:
     // Symbol Management
     void defineSymbol(SymID name, Symbol sym);
     Symbol* resolveSymbol(SymID name);
+    Symbol* resolveSymbolLocal(SymID name);
 
     // Custom Type Management (e.g., structs, sum types)
     void defineType(SymID name, const types::Type* type);

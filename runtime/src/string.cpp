@@ -1,4 +1,5 @@
 #include "mamlrt_abi.h"
+#include <cstdint>
 #include <string_view>
 #include <cstring>
 #include <cstdlib>

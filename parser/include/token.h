@@ -70,13 +70,13 @@ enum class TokenType : uint8_t {
     FOR,
     OWN,
     RO,
-    COPY,
     BREAK,
     CONTINUE,
     EXTERN
 };
 
 struct Position {
+    std::string_view filename = "";
     uint32_t line = 1;
     uint32_t col = 0;
 };
@@ -97,7 +97,7 @@ inline TokenType LookupIdent(std::string_view ident)
               { "spawn", TokenType::SPAWN }, { "if", TokenType::IF }, { "else", TokenType::ELSE },
               { "true", TokenType::BOOL_LIT }, { "false", TokenType::BOOL_LIT },
               { "mut", TokenType::MUT }, { "return", TokenType::RETURN }, { "for", TokenType::FOR },
-              { "own", TokenType::OWN }, { "ro", TokenType::RO }, { "copy", TokenType::COPY },
+              { "own", TokenType::OWN }, { "ro", TokenType::RO },
               { "continue", TokenType::CONTINUE }, { "break", TokenType::BREAK },
               { "extern", TokenType::EXTERN } };
 
@@ -222,8 +222,6 @@ inline std::string_view TokenTypeToString(TokenType type)
         return "own";
     case TokenType::RO:
         return "ro";
-    case TokenType::COPY:
-        return "copy";
     case TokenType::BREAK:
         return "break";
     case TokenType::CONTINUE:

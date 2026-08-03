@@ -72,7 +72,8 @@ struct CompileError {
 
     std::string toString() const
     {
-        return std::format("[{} Error] at {}:{}: {}", stage, pos.line, pos.col, msg);
+        return std::format(
+            "[{} Error] in {} at {}:{}: {}", stage, pos.filename, pos.line, pos.col, msg);
     }
 };
 

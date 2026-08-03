@@ -3,121 +3,121 @@
 
 fn test_index_of() int {
     // 1. Basic substring match
-    match str_index_of("hello world", "world") {
-        case Some(idx): { if idx != 6 { return 1 } }
-        case None: { return 2 }
+    match (str_index_of("hello world", "world")) {
+        case Some(idx): { if (idx != 6) { return 1; } }
+        case None: { return 2; }
     }
 
     // 2. Match at the beginning
-    match str_index_of("HTTP/1.1 200 OK", "HTTP") {
-        case Some(idx): { if idx != 0 { return 3 } }
-        case None: { return 4 }
+    match (str_index_of("HTTP/1.1 200 OK", "HTTP")) {
+        case Some(idx): { if (idx != 0) { return 3; } }
+        case None: { return 4; }
     }
 
     // 3. No match found
-    match str_index_of("Host: localhost", "x") {
-        case Some(idx): { return 5 }
+    match (str_index_of("Host: localhost", "x")) {
+        case Some(idx): { return 5; }
         case None: { } // Success
     }
 
-    return 0 // Success
+    return 0; // Success
 }
 
 fn test_split_once() int {
     // 1. Basic delimiter split (HTTP Header style)
-    match str_split_once("Host: localhost", ": ") {
+    match (str_split_once("Host: localhost", ": ")) {
         case Some(res): {
-            if res.left != "Host" { return 10 }
-            if res.right != "localhost" { return 11 }
+            if (res.left != "Host") { return 10; }
+            if (res.right != "localhost") { return 11; }
         }
-        case None: { return 12 }
+        case None: { return 12; }
     }
 
     // 2. Split with spaces (HTTP Request Line style)
-    match str_split_once("GET /index.html HTTP/1.1", " ") {
+    match (str_split_once("GET /index.html HTTP/1.1", " ")) {
         case Some(res): {
-            if res.left != "GET" { return 13 }
-            if res.right != "/index.html HTTP/1.1" { return 14 }
+            if (res.left != "GET") { return 13; }
+            if (res.right != "/index.html HTTP/1.1") { return 14; }
         }
-        case None: { return 15 }
+        case None: { return 15; }
     }
 
     // 3. Missing delimiter
-    match str_split_once("MalformedHeader", ": ") {
-        case Some(res): { return 16 }
+    match (str_split_once("MalformedHeader", ": ")) {
+        case Some(res): { return 16; }
         case None: { } // Success
     }
 
-    return 0 // Success
+    return 0; // Success
 }
 
 fn test_str_to_int() int {
     // 1. Basic positive integer
-    match str_to_int("404") {
-        case Some(val): { if val != 404 { return 20 } }
-        case None: { return 21 }
+    match (str_to_int("404")) {
+        case Some(val): { if (val != 404) { return 20; } }
+        case None: { return 21; }
     }
 
     // 2. Negative integer
-    match str_to_int("-42") {
-        case Some(val): { if val != -42 { return 22 } }
-        case None: { return 23 }
+    match (str_to_int("-42")) {
+        case Some(val): { if (val != -42) { return 22; } }
+        case None: { return 23; }
     }
 
     // 3. Invalid characters
-    match str_to_int("200OK") {
-        case Some(val): { return 24 }
+    match (str_to_int("200OK")) {
+        case Some(val): { return 24; }
         case None: { } // Success
     }
 
-    return 0
+    return 0;
 }
 
 fn test_str_trim() int {
     // 1. Trim both sides (using space and newline)
-    mut t1 := str_trim("   Hello World \n")
-    if len(t1) != 11 { return 30 }
+    mut t1 := str_trim("   Hello World \n");
+    if (len(t1) != 11) { return 30; }
     
     // 2. No whitespace
-    mut t2 := str_trim("Strict")
-    if len(t2) != 6 { return 31 }
+    mut t2 := str_trim("Strict");
+    if (len(t2) != 6) { return 31; }
 
     // 3. All whitespace
-    mut t3 := str_trim("   \t  ")
-    if len(t3) != 0 { return 32 }
+    mut t3 := str_trim("   \t  ");
+    if (len(t3) != 0) { return 32; }
 
-    return 0
+    return 0;
 }
 
 fn test_str_split() int {
     // 1. Multiple delimiters
-    mut parts := str_split("a,b,c", ",")
-    if len(parts) != 3 { return 40 }
-    if parts[1] != "b" { return 41 }
+    mut parts := str_split("a,b,c", ",");
+    if (len(parts) != 3) { return 40; }
+    if (parts[1] != "b") { return 41; }
 
     // 2. No delimiters found
-    mut single := str_split("localhost", "/")
-    if len(single) != 1 { return 42 }
-    if single[0] != "localhost" { return 43 }
+    mut single := str_split("localhost", "/");
+    if (len(single) != 1) { return 42; }
+    if (single[0] != "localhost") { return 43; }
 
-    return 0
+    return 0;
 }
 
 fn main() int {
-    idx_result := test_index_of()
-    if idx_result != 0 { return idx_result }
+    idx_result := test_index_of();
+    if (idx_result != 0) { return idx_result; }
 
-    split_once_result := test_split_once()
-    if split_once_result != 0 { return split_once_result }
+    split_once_result := test_split_once();
+    if (split_once_result != 0) { return split_once_result; }
 
-    to_int_result := test_str_to_int()
-    if to_int_result != 0 { return to_int_result }
+    to_int_result := test_str_to_int();
+    if (to_int_result != 0) { return to_int_result; }
 
-    trim_result := test_str_trim()
-    if trim_result != 0 { return trim_result }
+    trim_result := test_str_trim();
+    if (trim_result != 0) { return trim_result; }
 
-    split_result := test_str_split()
-    if split_result != 0 { return split_result }
+    split_result := test_str_split();
+    if (split_result != 0) { return split_result; }
 
-    return 0
+    return 0;
 }

@@ -1,0 +1,26 @@
+# Point clangd to your debug build directory for compile_commands.json
+CompileFlags:
+  CompilationDatabase: "build"
+  
+# Enable background indexing for fast symbol search and jump-to-definition
+Index:
+  Background: Build
+
+# Enable inlay hints in the IDE (very useful for C++20 auto types and parameters)
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+  Designators: Yes
+
+# Enable extra code quality checks and warnings
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+  ClangTidy:
+    Add: 
+      - performance-*
+      - bugprone-*
+      - modernize-*
+    Remove:
+      - modernize-use-trailing-return-type # Optional: disable if you prefer traditional function syntax

@@ -1,4 +1,10 @@
+#include "ast_nodes.h"
 #include "builder.h"
+#include "mir.h"
+#include "sym.h"
+#include "token.h"
+#include "types.h"
+#include <variant>
 
 namespace maml::mir {
 
@@ -88,29 +94,31 @@ int sizeOfDynamic(const types::Type* t, const Target& target)
 // Composite Literal Lowering (Vec and Map)
 // =============================================================================
 
-// This logic maps directly from frontend/mir/vec.go.
-// Call this from the CompositeLiteral branch in builder_lower_expr.cpp when resolvedType is Vector.
 Value Builder::lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType)
 {
     SymID tmp = emitTemp(resolvedType);
-    Value obj = Register { tmp, resolvedType, e->pos };
+    push(AllocaInst { .dst = tmp, .type = resolvedType, .pos = e->pos });
+    Value obj = Register { .name = tmp, .type = resolvedType, .pos = e->pos };
 
     const types::Type* baseType = std::get<types::VectorPayload>(resolvedType->payload).base;
 
     // Inline construct the { buffer, cap, len, elem_size } struct directly
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos }, sym_.intern("buffer"),
-        0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos);
+        Register { .name = sym_.intern("null"),
+            .type = reg_.getPrimitive(types::TypeKind::Ptr),
+            .pos = e->pos },
+        sym_.intern("buffer"), 0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos);
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::U32), e->pos }, sym_.intern("cap"), 1,
-        reg_.getPrimitive(types::TypeKind::U32), e->pos);
+        IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
+        sym_.intern("cap"), 1, reg_.getPrimitive(types::TypeKind::U32), e->pos);
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::U32), e->pos }, sym_.intern("len"), 2,
-        reg_.getPrimitive(types::TypeKind::U32), e->pos);
+        IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
+        sym_.intern("len"), 2, reg_.getPrimitive(types::TypeKind::U32), e->pos);
 
     int elemSize = sizeOfDynamic(baseType, target_);
     storeField(obj, resolvedType,
-        IntConstant { elemSize, reg_.getPrimitive(types::TypeKind::U32), e->pos },
+        IntConstant {
+            .value = elemSize, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
         sym_.intern("elem_size"), 3, reg_.getPrimitive(types::TypeKind::U32), e->pos);
 
     if (!e->elements.empty()) {
@@ -118,7 +126,16 @@ Value Builder::lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* reso
 
         for (const auto& elem : e->elements) {
             Value flatElem = lowerExpr(elem.value);
-            Value boxedElem = boxScalar(flatElem, baseType, elem.pos);
+            Value boxedElem;
+            if (baseType && isAggregateType(baseType)) {
+                if (auto* reg = std::get_if<Register>(&flatElem)) {
+                    boxedElem = emitBorrow(reg->name, true, elem.pos);
+                } else {
+                    boxedElem = boxScalar(flatElem, baseType, elem.pos);
+                }
+            } else {
+                boxedElem = boxScalar(flatElem, baseType, elem.pos);
+            }
             EmitMamlVecPush(vecPtrReg, boxedElem, elem.pos);
         }
     }
@@ -126,12 +143,11 @@ Value Builder::lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* reso
     return obj;
 }
 
-// This logic maps directly from frontend/mir/map.go.
-// Call this from the CompositeLiteral branch in builder_lower_expr.cpp when resolvedType is Map.
 Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType)
 {
     SymID tmp = emitTemp(resolvedType);
-    Value obj = Register { tmp, resolvedType, e->pos };
+    push(AllocaInst { .dst = tmp, .type = resolvedType, .pos = e->pos });
+    Value obj = Register { .name = tmp, .type = resolvedType, .pos = e->pos };
 
     const types::Type* keyType = std::get<types::MapPayload>(resolvedType->payload).key;
     const types::Type* valType = std::get<types::MapPayload>(resolvedType->payload).value;
@@ -140,24 +156,28 @@ Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* reso
 
     // Inline Initialization
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos }, sym_.intern("entries"),
-        0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos);
+        Register { .name = sym_.intern("null"),
+            .type = reg_.getPrimitive(types::TypeKind::Ptr),
+            .pos = e->pos },
+        sym_.intern("entries"), 0, reg_.getPrimitive(types::TypeKind::Ptr), e->pos);
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::U32), e->pos }, sym_.intern("count"), 1,
-        reg_.getPrimitive(types::TypeKind::U32), e->pos);
+        IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
+        sym_.intern("count"), 1, reg_.getPrimitive(types::TypeKind::U32), e->pos);
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::U32), e->pos },
+        IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
         sym_.intern("tombstone_count"), 2, reg_.getPrimitive(types::TypeKind::U32), e->pos);
     storeField(obj, resolvedType,
-        IntConstant { 0, reg_.getPrimitive(types::TypeKind::U32), e->pos }, sym_.intern("cap"), 3,
-        reg_.getPrimitive(types::TypeKind::U32), e->pos);
+        IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
+        sym_.intern("cap"), 3, reg_.getPrimitive(types::TypeKind::U32), e->pos);
 
     int valSize = sizeOfDynamic(valType, target_);
     storeField(obj, resolvedType,
-        IntConstant { valSize, reg_.getPrimitive(types::TypeKind::U32), e->pos },
+        IntConstant {
+            .value = valSize, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
         sym_.intern("val_size"), 4, reg_.getPrimitive(types::TypeKind::U32), e->pos);
     storeField(obj, resolvedType,
-        BoolConstant { isStrKey, reg_.getPrimitive(types::TypeKind::Bool), e->pos },
+        BoolConstant {
+            .value = isStrKey, .type = reg_.getPrimitive(types::TypeKind::Bool), .pos = e->pos },
         sym_.intern("is_string_key"), 5, reg_.getPrimitive(types::TypeKind::Bool), e->pos);
 
     if (!e->elements.empty()) {
@@ -166,7 +186,16 @@ Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* reso
         for (const auto& kv : e->elements) {
             Value flatVal = lowerExpr(kv.value);
             auto [hashVal, ptrVal, lenVal] = lowerMapKey(kv.key, kv.pos);
-            Value boxedVal = boxScalar(flatVal, valType, kv.pos);
+            Value boxedVal;
+            if (valType && isAggregateType(valType)) {
+                if (auto* reg = std::get_if<Register>(&flatVal)) {
+                    boxedVal = emitBorrow(reg->name, true, kv.pos);
+                } else {
+                    boxedVal = boxScalar(flatVal, valType, kv.pos);
+                }
+            } else {
+                boxedVal = boxScalar(flatVal, valType, kv.pos);
+            }
             EmitMamlMapPut(mapPtrReg, hashVal, ptrVal, lenVal, boxedVal, kv.pos);
         }
     }

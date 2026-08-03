@@ -1,19 +1,32 @@
 #include "parser.h"
+#include "arena.h"
+#include "ast.h"
+#include "ast_nodes.h"
+#include "sym.h"
+#include "token.h"
 #include <charconv>
+#include <cstddef>
+#include <format>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
 namespace maml {
 
 template <typename... Args>
 void Parser::addError(Position pos, std::format_string<Args...> fmt, Args&&... args)
 {
+    if (panicMode_ || errors_.size() >= MAX_ERRORS)
+        return;
+    panicMode_ = true; // Enter panic mode on the first error
     if (errors_.size() >= MAX_ERRORS)
         return;
     errors_.push_back(
         ast::CompileError { "Parser", pos, std::format(fmt, std::forward<Args>(args)...) });
 }
 
-Parser::Parser(Lexer& lexer, SymbolTable& sym, Arena& arena)
-    : l_(lexer)
+Parser::Parser(const std::vector<Token>& tokens, SymbolTable& sym, Arena& arena)
+    : tokens_(tokens)
     , sym_(sym)
     , arena_(arena)
 {
@@ -78,7 +91,14 @@ Parser::Parser(Lexer& lexer, SymbolTable& sym, Arena& arena)
 void Parser::nextToken()
 {
     curToken_ = peekToken_;
-    peekToken_ = l_.nextToken();
+
+    if (tokenIndex_ < tokens_.size()) {
+        peekToken_ = tokens_[tokenIndex_++];
+    } else {
+        // Safe fallback in case of overrun.
+        // Ensure this matches your updated Position struct!
+        peekToken_ = { TokenType::END_OF_FILE, "", { "", 0, 0 } };
+    }
 }
 
 bool Parser::expectPeek(TokenType t)
@@ -109,6 +129,7 @@ Precedence Parser::curPrecedence() const
 
 void Parser::synchronize()
 {
+    panicMode_ = false; // We are attempting to recover
     while (curToken_.type != TokenType::END_OF_FILE) {
         if (curToken_.type == TokenType::RBRACE)
             return;
@@ -126,6 +147,7 @@ void Parser::synchronize()
 
 void Parser::synchronizeToDecl()
 {
+    panicMode_ = false;
     while (curToken_.type != TokenType::END_OF_FILE) {
         if (curToken_.type == TokenType::FN || curToken_.type == TokenType::TYPE
             || curToken_.type == TokenType::ASYNC) {
@@ -251,10 +273,9 @@ ast::Param Parser::parseParam()
 {
     ast::Param p;
     p.pos = curToken_.pos;
-    p.cap = ast::Capability::None;
 
     if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
-        || curToken_.type == TokenType::RO || curToken_.type == TokenType::COPY) {
+        || curToken_.type == TokenType::RO) {
         p.cap = ast::parseCapability(curToken_.literal);
         nextToken();
     }
@@ -433,8 +454,8 @@ ast::Stmt Parser::parseStmt()
         return parseDeclareStmt();
     case TokenType::OWN:
     case TokenType::RO:
-    case TokenType::COPY:
-        if (peekToken_.type == TokenType::IDENT && l_.nextToken().type == TokenType::DECLARE) {
+        if (peekToken_.type == TokenType::IDENT && tokenIndex_ < tokens_.size()
+            && tokens_[tokenIndex_].type == TokenType::DECLARE) {
             addError(curToken_.pos, "invalid annotation on left side of declaration");
             return std::monostate {};
         }
@@ -474,9 +495,12 @@ ast::Stmt Parser::parseDeclareStmt()
         return std::monostate {};
     nextToken();
 
-    ast::Capability cap = ast::Capability::None;
+    bool isAlias = false;
+    ast::Capability cap = ast::Capability::Ro; // only meaningful when isAlias == true
+
     if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
-        || curToken_.type == TokenType::RO || curToken_.type == TokenType::COPY) {
+        || curToken_.type == TokenType::RO) {
+        isAlias = true;
         cap = ast::parseCapability(curToken_.literal);
         nextToken();
     }
@@ -484,7 +508,7 @@ ast::Stmt Parser::parseDeclareStmt()
     ast::Expr value = parseExpression(LOWEST);
     expectPeek(TokenType::SEMICOLON); // Explicit semicolon required
 
-    if (cap != ast::Capability::None) {
+    if (isAlias) {
         if (isMutable) {
             addError(curToken_.pos, "Alias Declarations not allowed to be mutable.");
             return std::monostate {};
@@ -550,7 +574,11 @@ ast::Stmt Parser::parseExpressionStmt()
         nextToken();
 
         ast::Expr rValue = parseExpression(LOWEST);
-        expectPeek(TokenType::SEMICOLON);
+        if (peekToken_.type == TokenType::SEMICOLON) {
+            nextToken();
+        } else if (peekToken_.type != TokenType::RPAREN) {
+            expectPeek(TokenType::SEMICOLON);
+        }
 
         auto* assign = arena_.make<ast::AssignStmt>();
         assign->pos = pos;
@@ -565,7 +593,11 @@ ast::Stmt Parser::parseExpressionStmt()
         nextToken();
         nextToken();
         ast::Expr rValue = parseExpression(LOWEST);
-        expectPeek(TokenType::SEMICOLON);
+        if (peekToken_.type == TokenType::SEMICOLON) {
+            nextToken();
+        } else if (peekToken_.type != TokenType::RPAREN) {
+            expectPeek(TokenType::SEMICOLON);
+        }
 
         auto* push = arena_.make<ast::VecPushStmt>();
         push->pos = pos;
@@ -579,7 +611,11 @@ ast::Stmt Parser::parseExpressionStmt()
         || std::holds_alternative<ast::MatchExpr*>(expr);
 
     if (!isBlockLike) {
-        expectPeek(TokenType::SEMICOLON);
+        if (peekToken_.type == TokenType::SEMICOLON) {
+            nextToken();
+        } else if (peekToken_.type != TokenType::RPAREN) {
+            expectPeek(TokenType::SEMICOLON);
+        }
     } else if (peekToken_.type == TokenType::SEMICOLON) {
         nextToken(); // tolerate an optional semicolon
     }
@@ -662,7 +698,8 @@ ast::Expr Parser::parseExpression(Precedence precedence)
 {
     PrefixFn prefix = prefixParseFns_[static_cast<size_t>(curToken_.type)];
     if (!prefix) {
-        addError(curToken_.pos, "no prefix parse function for type found");
+        addError(curToken_.pos, "no prefix parse function for type '{}' found",
+            TokenTypeToString(curToken_.type));
         return std::monostate {};
     }
 
@@ -695,6 +732,16 @@ ast::Expr Parser::parseIdentifier()
         auto* wrapper = arena_.make<ast::TypeExprWrapper>();
         wrapper->pos = pos;
         wrapper->typeExpr = named;
+        return wrapper;
+    }
+
+    if (peekToken_.type == TokenType::LT && looksLikeGenericInstantiation()) {
+        nextToken(); // Advance so curToken_ is '<'
+        auto* genType = parseGenericTypeExpr(name, pos);
+
+        auto* wrapper = arena_.make<ast::TypeExprWrapper>();
+        wrapper->pos = pos;
+        wrapper->typeExpr = genType;
         return wrapper;
     }
 
@@ -823,10 +870,16 @@ ast::Expr Parser::parseMatchExpression()
 {
     auto* expr = arena_.make<ast::MatchExpr>();
     expr->pos = curToken_.pos;
+
+    // Enforced parentheses (mirrors parseIfExpression/parseForStmt)
+    if (!expectPeek(TokenType::LPAREN))
+        return std::monostate {};
     nextToken();
 
     expr->subject = parseExpression(LOWEST);
 
+    if (!expectPeek(TokenType::RPAREN))
+        return std::monostate {};
     if (!expectPeek(TokenType::LBRACE))
         return std::monostate {};
     nextToken();
@@ -881,9 +934,51 @@ ast::Pattern Parser::parsePattern()
             w->pos = pos;
             return w;
         }
+
+        SymID name = sym_.intern(curToken_.literal);
+
+        // Check if this is a variant/composite pattern like Some(idx)
+        if (peekToken_.type == TokenType::LPAREN) {
+            auto* cp = arena_.make<ast::CompositePattern>();
+            cp->pos = pos;
+
+            auto* named = arena_.make<ast::NamedTypeExpr>();
+            named->pos = pos;
+            named->name = arena_.make<ast::Identifier>();
+            named->name->name = name;
+            named->name->pos = pos;
+            cp->typeExpr = named;
+
+            nextToken(); // Advance so curToken_ is '('
+
+            while (
+                peekToken_.type != TokenType::RPAREN && peekToken_.type != TokenType::END_OF_FILE) {
+                nextToken(); // Advance to the start of the next pattern element
+
+                ast::CompositePatternElement el;
+                el.pos = curToken_.pos;
+                el.pattern = parsePattern();
+                el.end = curToken_.pos;
+                cp->elements.push_back(el);
+
+                if (peekToken_.type == TokenType::COMMA) {
+                    nextToken(); // Advance to ','
+                } else if (peekToken_.type != TokenType::RPAREN) {
+                    addError(peekToken_.pos, "expected ',' or ')' in pattern");
+                    break;
+                }
+            }
+
+            if (peekToken_.type == TokenType::RPAREN) {
+                nextToken(); // Advance to ')'
+            }
+            return cp;
+        }
+
+        // Standard identifier pattern
         auto* ip = arena_.make<ast::IdentifierPattern>();
         ip->pos = pos;
-        ip->name = sym_.intern(curToken_.literal);
+        ip->name = name;
         return ip;
     } else if (curToken_.type == TokenType::INT) {
         auto* lit = arena_.make<ast::LiteralPattern>();
@@ -891,6 +986,8 @@ ast::Pattern Parser::parsePattern()
         lit->value = parseIntegerLiteral();
         return lit;
     }
+
+    addError(curToken_.pos, "invalid pattern");
     return std::monostate {};
 }
 
@@ -902,9 +999,9 @@ ast::Expr Parser::parseCallExpression(ast::Expr function)
 
     parseCommaSeparatedList(TokenType::RPAREN, [&]() {
         ast::CallArg arg;
-        arg.cap = ast::Capability::None;
+        arg.pos = curToken_.pos;
         if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
-            || curToken_.type == TokenType::RO || curToken_.type == TokenType::COPY) {
+            || curToken_.type == TokenType::RO) {
             arg.cap = ast::parseCapability(curToken_.literal);
             nextToken();
         }
@@ -941,6 +1038,36 @@ ast::Expr Parser::parseCompositeLiteral(ast::Expr left)
 
     cl->end = curToken_.pos;
     return cl;
+}
+
+bool Parser::looksLikeGenericInstantiation() const
+{
+    // We are currently at curToken_ (the identifier), peekToken_ is '<'
+    // tokenIndex_ is the token AFTER peekToken_
+    size_t i = tokenIndex_;
+    int angleBrackets = 1;
+
+    while (i < tokens_.size()) {
+        TokenType t = tokens_[i].type;
+        if (t == TokenType::GT) {
+            angleBrackets--;
+            if (angleBrackets == 0) {
+                // We found the matching '>'. If the next token is '{', it's a generic literal
+                if (i + 1 < tokens_.size() && tokens_[i + 1].type == TokenType::LBRACE) {
+                    return true;
+                }
+                return false;
+            }
+        } else if (t == TokenType::LT) {
+            angleBrackets++;
+        } else if (t == TokenType::SEMICOLON || t == TokenType::LBRACE
+            || t == TokenType::END_OF_FILE) {
+            // Abort early if we hit statement boundaries before closing the brackets
+            return false;
+        }
+        i++;
+    }
+    return false;
 }
 
 ast::Expr Parser::parseFieldAccess(ast::Expr left)

@@ -234,29 +234,29 @@ uint32_t maml_map_len(Map* map) {
     return map->count;
 }
 
-void* maml_map_next_active(Map* map, uint32_t* index_ptr, void** out_str_key) {
-    if (map->cap == 0 || map->count == 0) return nullptr;
+// void* maml_map_next_active(Map* map, uint32_t* index_ptr, void** out_str_key) {
+//     if (map->cap == 0 || map->count == 0) return nullptr;
     
-    bool is_str = map->is_string_key;
-    while (*index_ptr < map->cap) {
-        uint32_t current_idx = *index_ptr;
-        *index_ptr += 1;
+//     bool is_str = map->is_string_key;
+//     while (*index_ptr < map->cap) {
+//         uint32_t current_idx = *index_ptr;
+//         *index_ptr += 1;
 
-        unsigned char* entry = entry_at(map->entries, current_idx, map->val_size, is_str);
+//         unsigned char* entry = entry_at(map->entries, current_idx, map->val_size, is_str);
 
-        if (entry_status(entry) == EntryStatus::Occupied) {
-            if (is_str) {
-                auto* header = reinterpret_cast<StrKeyHeader*>(entry);
-                *out_str_key = const_cast<void*>(static_cast<const void*>(header->key_ptr));
-            } else {
-                *out_str_key = nullptr;
-            }
-            return entry_value_ptr(entry, is_str);
-        }
-    }
+//         if (entry_status(entry) == EntryStatus::Occupied) {
+//             if (is_str) {
+//                 auto* header = reinterpret_cast<StrKeyHeader*>(entry);
+//                 *out_str_key = const_cast<void*>(static_cast<const void*>(header->key_ptr));
+//             } else {
+//                 *out_str_key = nullptr;
+//             }
+//             return entry_value_ptr(entry, is_str);
+//         }
+//     }
 
-    return nullptr;
-}
+//     return nullptr;
+// }
 
 Map maml_map_clone(Map* old_map) {
     Map new_header{};

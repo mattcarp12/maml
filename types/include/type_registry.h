@@ -1,5 +1,7 @@
 #pragma once
 #include "arena.h"
+#include "ast_nodes.h"
+#include "sym.h"
 #include "types.h"
 #include <vector>
 
@@ -26,6 +28,8 @@ public:
     const Type* getStruct(SymID name, std::vector<StructField> fields, bool isReprC = false);
     const Type* getSum(
         SymID baseName, std::vector<SumVariant> variants, std::vector<const Type*> typeArgs = {});
+    void updateStruct(const Type* structType, std::vector<StructField> fields);
+    void updateSum(const Type* sumType, std::vector<SumVariant> variants);
     const Type* getFunction(
         std::vector<const Type*> params, std::vector<ast::Capability> caps, const Type* returnType);
 

@@ -122,25 +122,27 @@ Token Lexer::nextToken()
         break;
     case '"':
         tok.literal = readString();
-        tok.pos = { static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
+        tok.pos = { filename_, static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
         tok.type = (ch_ == '"') ? TokenType::STRING_LIT : TokenType::ILLEGAL;
         break;
     case 0:
         tok.type = TokenType::END_OF_FILE;
         tok.literal = "";
-        tok.pos = { static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
+        tok.pos = { filename_, static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
         break;
     default:
         if (isLetter(ch_)) {
             tok.literal = readIdentifier();
             tok.type = LookupIdent(tok.literal);
-            tok.pos = { static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
+            tok.pos
+                = { filename_, static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
             return tok; // Early return because readIdentifier advanced ch_
         } else if (isDigit(ch_)) {
             auto [literal, type] = readNumber();
             tok.literal = literal;
             tok.type = type;
-            tok.pos = { static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
+            tok.pos
+                = { filename_, static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) };
             return tok; // Early return because readNumber advanced ch_
         } else {
             tok = newToken(TokenType::ILLEGAL, startLine, startCol);
@@ -244,7 +246,7 @@ bool Lexer::isDigit(char ch) { return '0' <= ch && ch <= '9'; }
 Token Lexer::newToken(TokenType type, size_t startLine, size_t startCol, size_t len)
 {
     return { type, input_.substr(position_, len),
-        { static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) } };
+        { filename_, static_cast<uint32_t>(startLine), static_cast<uint32_t>(startCol) } };
 }
 
 Token Lexer::twoCharToken(TokenType type, size_t startLine, size_t startCol)

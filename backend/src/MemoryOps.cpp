@@ -1,8 +1,16 @@
 #include <llvm/IR/Intrinsics.h>
+#include <string>
 
+#include "CodegenContext.hpp"
 #include "ExprGenerator.hpp"
 #include "TypeLowering.hpp"
 #include "mir.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
+#include "sym.h"
 
 namespace maml {
 
@@ -93,7 +101,10 @@ void handle(CodegenContext& ctx, const mir::MoveInst& inst)
 
 void handle(CodegenContext& ctx, const mir::LoadPtrInst& inst)
 {
-    llvm::Value* ptrVal = evaluateValue(ctx, inst.ptr);
+    // llvm::Value* ptrVal = evaluateValue(ctx, inst.ptr);
+
+    llvm::Value* ptrVal = evaluateAddress(ctx, inst.ptr);
+
     llvm::Type* targetTy = llvmTypeFor(ctx, inst.type);
     std::string dstName = std::string(ctx.Sym.resolve(inst.dst));
     llvm::Value* loadedVal = ctx.Builder->CreateLoad(targetTy, ptrVal, dstName + "_load");
@@ -104,7 +115,10 @@ void handle(CodegenContext& ctx, const mir::LoadPtrInst& inst)
 void handle(CodegenContext& ctx, const mir::StoreInst& inst)
 {
     llvm::Value* val = evaluateValue(ctx, inst.value);
-    llvm::Value* dstPtr = evaluateValue(ctx, inst.dstPtr);
+    // llvm::Value* dstPtr = evaluateValue(ctx, inst.dstPtr);
+
+    llvm::Value* dstPtr = evaluateAddress(ctx, inst.dstPtr);
+
     if (!dstPtr) {
         ctx.Error.fatal("store: failed to evaluate destination pointer");
         return;

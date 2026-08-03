@@ -1,0 +1,15 @@
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-g -O0 -fno-omit-frame-pointer)
+    #add_compile_options(-g -O0 -fsanitize=address -fno-omit-frame-pointer)
+    # add_link_options(-fsanitize=address)
+endif()
+
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
+    add_compile_options(-Wall -Wextra -pedantic -Wno-unused-parameter)
+endif()

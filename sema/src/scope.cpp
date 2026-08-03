@@ -1,5 +1,8 @@
 #include "scope.h"
+#include "ast_nodes.h"
+#include "sym.h"
 #include "type_registry.h"
+#include "types.h"
 
 namespace maml::sema {
 
@@ -13,6 +16,15 @@ Symbol* Scope::resolveSymbol(SymID name)
     }
     if (parent_) {
         return parent_->resolveSymbol(name);
+    }
+    return nullptr;
+}
+
+Symbol* Scope::resolveSymbolLocal(SymID name)
+{
+    auto it = symbols_.find(name);
+    if (it != symbols_.end()) {
+        return &it->second;
     }
     return nullptr;
 }
@@ -34,7 +46,7 @@ const types::Type* Scope::resolveType(SymID name)
 Scope* createGlobalScope(types::TypeRegistry& registry, SymbolTable& sym)
 {
     // Note: The Analyzer will take ownership of this pointer and clean it up.
-    Scope* global = new Scope(nullptr);
+    auto* global = new Scope(nullptr);
 
     // 1. Inject polymorphic Option variants
     const types::Type* anyType = registry.getPrimitive(types::TypeKind::Any);
@@ -42,22 +54,22 @@ Scope* createGlobalScope(types::TypeRegistry& registry, SymbolTable& sym)
 
     SymID someId = sym.intern("Some");
     global->defineSymbol(someId,
-        Symbol { SymbolKind::Variant, someId, optType, false, ast::Capability::None, optType, 0 });
+        Symbol { .kind=SymbolKind::Variant, .name=someId, .type=optType, .isMutable=false, .cap=ast::Capability::Ro, .sumType=optType, .variantDiscriminant=0 });
 
     SymID noneId = sym.intern("None");
     global->defineSymbol(noneId,
-        Symbol { SymbolKind::Variant, noneId, optType, false, ast::Capability::None, optType, 1 });
+        Symbol { .kind=SymbolKind::Variant, .name=noneId, .type=optType, .isMutable=false, .cap=ast::Capability::Ro, .sumType=optType, .variantDiscriminant=1 });
 
     // 2. Inject polymorphic Result variants
     const types::Type* resType = registry.getResult(anyType, anyType, sym);
 
     SymID okId = sym.intern("Ok");
     global->defineSymbol(okId,
-        Symbol { SymbolKind::Variant, okId, resType, false, ast::Capability::None, resType, 0 });
+        Symbol { .kind=SymbolKind::Variant, .name=okId, .type=resType, .isMutable=false, .cap=ast::Capability::Ro, .sumType=resType, .variantDiscriminant=0 });
 
     SymID errId = sym.intern("Err");
     global->defineSymbol(errId,
-        Symbol { SymbolKind::Variant, errId, resType, false, ast::Capability::None, resType, 1 });
+        Symbol { .kind=SymbolKind::Variant, .name=errId, .type=resType, .isMutable=false, .cap=ast::Capability::Ro, .sumType=resType, .variantDiscriminant=1 });
 
     return global;
 }

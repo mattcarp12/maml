@@ -1,4 +1,17 @@
+#include "ast_nodes.h"
 #include "builder.h"
+#include "cfg.h"
+#include "mir.h"
+#include "sym.h"
+#include "token.h"
+#include "type_registry.h"
+#include "types.h"
+#include <cstddef>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace maml::mir {
 
@@ -39,38 +52,47 @@ void Builder::buildFn(ast::FnDecl* fn, Program& prog)
     mirFn.isAsync = fn->isAsync;
     mirFn.isExtern = fn->isExtern;
 
-    // Resolve return type from semantic pass decoration
-    mirFn.returnType = reg_.getPrimitive(types::TypeKind::Unit);
-    if (!std::holds_alternative<std::monostate>(fn->returnType)) {
-        mirFn.returnType = safeGetExprType(fn->returnType);
-    }
-
-    if (fn->isExtern) {
-        prog.functions.push_back(std::move(mirFn));
-        return;
-    }
-
-    graph_ = new Graph();
+    // 1. Reset function-level builder state FIRST
     nextID_ = 0;
     tempCount_ = 0;
     loops_.clear();
     env_.clear();
     nameFreq_.clear();
     locals_.clear();
+    currentFuture_ = std::monostate {};
 
-    enterScope(); // Function-level scope
+    // 2. Open function scope before processing parameters
+    enterScope();
 
-    for (const auto& p : fn->params) {
-        const types::Type* baseType = safeGetExprType(p.type);
-
-        const types::Type* loweredType = lowerParamType(baseType, p.cap);
-        SymID uniqueName = defineLocal(p.name);
-        locals_[uniqueName] = loweredType;
-
-        mirFn.params.push_back(Param { uniqueName, loweredType });
+    // Resolve return type from semantic pass decoration
+    mirFn.returnType = reg_.getPrimitive(types::TypeKind::Unit);
+    if (!std::holds_alternative<std::monostate>(fn->returnType)) {
+        mirFn.returnType = safeGetExprType(fn->returnType);
     }
 
+    // 3. Populate parameters for ALL functions
+    for (const auto& p : fn->params) {
+        const types::Type* baseType = safeGetExprType(p.type);
+        const types::Type* loweredType = lowerParamType(baseType, p.cap);
+
+        // For extern functions, keep original names; otherwise register via defineLocal
+        SymID paramName = fn->isExtern ? p.name : defineLocal(p.name);
+        locals_[paramName] = loweredType;
+
+        mirFn.params.push_back(Param { paramName, loweredType });
+    }
+
+    // 4. Early exit for extern functions (make sure to exit scope!)
+    if (fn->isExtern) {
+        exitScope();
+        prog.functions.push_back(std::move(mirFn));
+        return;
+    }
+
+    // 5. Set up CFG and Graph for non-extern functions
+    graph_ = new Graph();
     graph_->params = mirFn.params;
+
     BasicBlock* entry = newBlock();
     graph_->entry = entry->id;
     current_ = entry;
@@ -174,8 +196,22 @@ SymID Builder::emitTemp(const types::Type* t)
 // Core Emission Primitives
 // =============================================================================
 
-void Builder::push(Instruction inst)
+// void Builder::push(Instruction inst)
+// {
+//     if (current_)
+//         current_->statements.push_back(inst);
+// }
+
+void Builder::push(const Instruction& inst)
 {
+    // Hoist all stack allocations to the function's entry block
+    if (std::holds_alternative<AllocaInst>(inst)) {
+        if (graph_ && graph_->entry != InvalidBlock) {
+            graph_->blocks[graph_->entry]->statements.push_back(inst);
+            return;
+        }
+    }
+
     if (current_)
         current_->statements.push_back(inst);
 }
@@ -228,6 +264,23 @@ Value Builder::emitBorrow(SymID src, bool isMut, Position pos)
 // =============================================================================
 // Memory Transfer Operations
 // =============================================================================
+
+bool Builder::isAggregateType(const types::Type* t)
+{
+    if (!t)
+        return false;
+    switch (t->kind) {
+    case types::TypeKind::Struct:
+    case types::TypeKind::Array:
+    case types::TypeKind::Sum:
+    case types::TypeKind::String:
+    case types::TypeKind::Vector:
+    case types::TypeKind::Map:
+        return true;
+    default:
+        return false;
+    }
+}
 
 bool Builder::ownsHeapMemory(const types::Type* t) const
 {
@@ -315,6 +368,7 @@ const types::Type* Builder::lowerParamType(const types::Type* t, ast::Capability
 Value Builder::boxScalar(Value val, const types::Type* t, Position pos)
 {
     SymID slot = emitTemp(t);
+    push(AllocaInst { slot, t, pos });
     Value ptrVal = emitBorrow(slot, true, pos);
     push(StoreInst { ptrVal, val, t, pos });
     return ptrVal;
@@ -379,7 +433,7 @@ void Builder::emitVariantInit(BasicBlock* block, SymID dst, const types::Type* s
 {
     BasicBlock* prev = current_;
     current_ = block;
-
+    push(AllocaInst { dst, sumType, pos });
     Value basePtr = emitBorrow(dst, true, pos);
     storeField(basePtr, sumType,
         IntConstant { discriminant, reg_.getPrimitive(types::TypeKind::I32), pos },

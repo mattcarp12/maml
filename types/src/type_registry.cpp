@@ -1,4 +1,13 @@
 #include "type_registry.h"
+#include "arena.h"
+#include "ast_nodes.h"
+#include "sym.h"
+#include "types.h"
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+#include <variant>
+#include <vector>
 
 namespace maml::types {
 
@@ -50,8 +59,26 @@ bool TypeRegistry::isPayloadEqual(const TypePayload& a, const TypePayload& b, Ty
     case TypeKind::Struct:
         // Since names must be unique in scope, checking the SymID is sufficient for structs
         return std::get<StructPayload>(a).name == std::get<StructPayload>(b).name;
-    case TypeKind::Sum:
-        return std::get<SumPayload>(a).baseName == std::get<SumPayload>(b).baseName;
+    case TypeKind::Sum: {
+        auto pa = std::get<SumPayload>(a);
+        auto pb = std::get<SumPayload>(b);
+
+        // 1. Check the base name
+        if (pa.baseName != pb.baseName) {
+            return false;
+        }
+
+        // 2. Check that the generic arguments match exactly
+        if (pa.typeArgs.size() != pb.typeArgs.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < pa.typeArgs.size(); ++i) {
+            if (pa.typeArgs[i] != pb.typeArgs[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
     case TypeKind::Function: {
         auto pa = std::get<FunctionPayload>(a);
         auto pb = std::get<FunctionPayload>(b);
@@ -173,6 +200,25 @@ const Type* TypeRegistry::getSum(
     t->payload = std::move(p);
     composites_.push_back(t);
     return t;
+}
+
+void TypeRegistry::updateStruct(const Type* structType, std::vector<StructField> fields)
+{
+    // Safely cast away constness since the registry owns the Arena allocation
+    Type* t = const_cast<Type*>(structType);
+    if (t && t->kind == TypeKind::Struct) {
+        auto& p = std::get<StructPayload>(t->payload);
+        p.fields = std::move(fields);
+    }
+}
+
+void TypeRegistry::updateSum(const Type* sumType, std::vector<SumVariant> variants)
+{
+    Type* t = const_cast<Type*>(sumType);
+    if (t && t->kind == TypeKind::Sum) {
+        auto& p = std::get<SumPayload>(t->payload);
+        p.variants = std::move(variants);
+    }
 }
 
 const Type* TypeRegistry::getFunction(

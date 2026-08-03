@@ -1,5 +1,20 @@
+#include "ast.h"
+#include "ast_nodes.h"
 #include "builder.h"
+#include "cfg.h"
+#include "mir.h"
+#include "sym.h"
+#include "token.h"
+#include "types.h"
+#include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
 namespace maml::mir {
 
@@ -19,7 +34,13 @@ Value Builder::emitCompoundMath(
     Value flatRHS = lowerExpr(rhsExpr);
 
     SymID opTmp = newTemp();
-    return emit(BinaryOpInst { opTmp, readVal, op, flatRHS, elemType, pos }, opTmp, elemType);
+    return emit(BinaryOpInst { .dst = opTmp,
+                    .left = readVal,
+                    .op = op,
+                    .right = flatRHS,
+                    .type = elemType,
+                    .pos = pos },
+        opTmp, elemType);
 }
 
 // =============================================================================
@@ -74,18 +95,19 @@ void Builder::lowerStmt(ast::Stmt stmt)
                 if (!std::holds_alternative<std::monostate>(s->value)) {
                     t = safeGetExprType(s->value);
                 }
+                bool needsAlloca = s->isMutable || ownsHeapMemory(t)
+                    || (t
+                        && (t->kind == types::TypeKind::Struct || t->kind == types::TypeKind::Array
+                            || t->kind == types::TypeKind::Sum));
 
-                if (s->isMutable) {
-                    // LLVM ABI: Allocate mutable locals on the stack
+                if (needsAlloca) {
                     locals_[uniqueName] = reg_.getPrimitive(types::TypeKind::Ptr);
                     push(AllocaInst { uniqueName, t, s->pos });
 
-                    // Store the initial value into the stack pointer
                     Value ptrReg
                         = Register { uniqueName, reg_.getPrimitive(types::TypeKind::Ptr), s->pos };
                     push(StoreInst { ptrReg, flatRHS, t, s->pos });
                 } else {
-                    // Immutable variables can stay as SSA registers
                     locals_[uniqueName] = t;
                     emitTransfer(uniqueName, flatRHS, s->pos);
                 }
@@ -117,6 +139,33 @@ void Builder::lowerStmt(ast::Stmt stmt)
 
                 if (auto** idxPtr = std::get_if<ast::IndexExpr*>(&s->lValue)) {
                     ast::IndexExpr* idx = *idxPtr;
+                    const types::Type* sourceType = safeGetExprType(idx->left);
+
+                    // Handle Map index assignment: m[key] = val
+                    if (sourceType && sourceType->kind == types::TypeKind::Map) {
+                        Value mapPtr = addressOf(idx->left);
+                        auto [hashVal, keyPtrVal, lenVal] = lowerMapKey(idx->index, s->pos);
+
+                        const types::Type* valType
+                            = std::get<types::MapPayload>(sourceType->payload).value;
+
+                        Value writeVal = lowerExpr(s->rValue);
+
+                        Value boxedVal;
+                        if (valType && isAggregateType(valType)) {
+                            if (auto* reg = std::get_if<Register>(&writeVal)) {
+                                boxedVal = emitBorrow(reg->name, true, s->pos);
+                            } else {
+                                boxedVal = boxScalar(writeVal, valType, s->pos);
+                            }
+                        } else {
+                            boxedVal = boxScalar(writeVal, valType, s->pos);
+                        }
+
+                        EmitMamlMapPut(mapPtr, hashVal, keyPtrVal, lenVal, boxedVal, s->pos);
+                        return;
+                    }
+
                     Value ptrVal = addressOf(s->lValue);
                     Value writeVal;
                     if (s->op != TokenType::ASSIGN) {
@@ -133,8 +182,7 @@ void Builder::lowerStmt(ast::Stmt stmt)
                     ast::Identifier* ident = *idPtr;
                     SymID dstName = resolveLocal(ident->name);
 
-                    // IMPLICIT STORE: If the local is a pointer, mutate the underlying memory[cite:
-                    // 4]
+                    // IMPLICIT STORE: If the local is a pointer, mutate the underlying memory
                     if (locals_[dstName]->kind == types::TypeKind::Ptr) {
                         Value ptrReg
                             = Register { dstName, reg_.getPrimitive(types::TypeKind::Ptr), s->pos };
@@ -248,13 +296,31 @@ void Builder::lowerStmt(ast::Stmt stmt)
             },
             [&](ast::VecPushStmt* s) {
                 Value vecPtr = addressOf(s->lValue);
-                Value flatElem = lowerExpr(s->rValue);
                 const types::Type* vecType = safeGetExprType(s->lValue);
                 const types::Type* elemType = nullptr;
                 if (vecType && vecType->kind == types::TypeKind::Vector) {
                     elemType = std::get<types::VectorPayload>(vecType->payload).base;
                 }
-                Value boxedElem = boxScalar(flatElem, elemType, s->pos);
+
+                Value flatElem = lowerExpr(s->rValue);
+
+                if (!elemType) {
+                    elemType = getTypeOf(flatElem);
+                }
+                if (!elemType) {
+                    elemType = safeGetExprType(s->rValue);
+                }
+
+                Value boxedElem;
+                if (elemType && isAggregateType(elemType)) {
+                    if (auto* reg = std::get_if<Register>(&flatElem)) {
+                        boxedElem = emitBorrow(reg->name, true, s->pos);
+                    } else {
+                        boxedElem = boxScalar(flatElem, elemType, s->pos);
+                    }
+                } else {
+                    boxedElem = boxScalar(flatElem, elemType, s->pos);
+                }
                 EmitMamlVecPush(vecPtr, boxedElem, s->pos);
             },
         },
@@ -271,9 +337,11 @@ Value Builder::addressOf(ast::Expr expr)
         overloaded { [&](std::monostate) -> Value { return std::monostate {}; },
             [&](ast::Identifier* e) -> Value {
                 SymID regName = resolveLocal(e->name);
-                if (locals_[regName]->kind == types::TypeKind::Ptr) {
-                    return Register { regName, reg_.getPrimitive(types::TypeKind::Ptr), e->pos };
-                }
+                // if (locals_[regName]->kind == types::TypeKind::Ptr) {
+                //     return Register { .name = regName,
+                //         .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                //         .pos = e->pos };
+                // }
                 return emitBorrow(regName, true, e->pos);
             },
             [&](ast::FieldAccess* e) -> Value {
@@ -357,16 +425,19 @@ Value Builder::emitGetFutureResult(Value futureVal, const types::Type* resultTyp
 
 Value Builder::flattenStringEq(ast::InfixExpr* e, Value flatLeft, Value flatRight)
 {
-    SymID leftTmp = emitTemp(reg_.getPrimitive(types::TypeKind::String));
+    const types::Type* strTy = reg_.getPrimitive(types::TypeKind::String);
+
+    SymID leftTmp = emitTemp(strTy);
+    push(AllocaInst { leftTmp, strTy, e->pos });
     emitTransfer(leftTmp, flatLeft, e->pos);
 
-    SymID rightTmp = emitTemp(reg_.getPrimitive(types::TypeKind::String));
+    SymID rightTmp = emitTemp(strTy);
+    push(AllocaInst { rightTmp, strTy, e->pos });
     emitTransfer(rightTmp, flatRight, e->pos);
 
     Value leftPtr = emitBorrow(leftTmp, false, e->pos);
     Value rightPtr = emitBorrow(rightTmp, false, e->pos);
 
-    // Assumes EmitMamlStrEq is implemented in builder_abi.cpp
     Value callVal = emitRuntimeCall(sym_.intern("maml_str_eq"),
         reg_.getPrimitive(types::TypeKind::I32), { leftPtr, rightPtr }, e->pos);
 
@@ -401,7 +472,9 @@ std::tuple<Value, Value, Value> Builder::lowerMapKey(ast::Expr keyExpr, Position
         return { hashVal, ptrVal, lenVal };
     } else if (keyType->kind == types::TypeKind::String) {
         SymID keyTmp = emitTemp(keyType);
-        Value safeKey = emit(AssignInst { keyTmp, flatKey, pos }, keyTmp, keyType);
+        push(AllocaInst { keyTmp, keyType, pos }); // FIX: Stack allocate temporary key
+        emitTransfer(keyTmp, flatKey, pos);
+        Value safeKey = Register { keyTmp, keyType, pos };
 
         Value ptrVal = loadField(
             safeKey, keyType, sym_.intern("ptr"), 0, reg_.getPrimitive(types::TypeKind::Ptr), pos);
@@ -414,7 +487,6 @@ std::tuple<Value, Value, Value> Builder::lowerMapKey(ast::Expr keyExpr, Position
         return { hashVal, ptrVal, lenVal };
     }
 
-    // Fallback
     return { IntConstant { 0, reg_.getPrimitive(types::TypeKind::I64), pos },
         IntConstant { 0, reg_.getPrimitive(types::TypeKind::I64), pos },
         IntConstant { 0, reg_.getPrimitive(types::TypeKind::I64), pos } };
@@ -431,25 +503,35 @@ Value Builder::lowerExpr(ast::Expr expr)
 
     return std::visit(
         overloaded { [&](std::monostate) -> Value { return std::monostate {}; },
+            [&](ast::BlockStmt* s) -> Value {
+                lowerBlockStmt(s);
+                return std::monostate {};
+            },
             [&](ast::Identifier* e) -> Value {
                 SymID regName = resolveLocal(e->name);
                 const types::Type* t = locals_[regName];
 
                 // IMPLICIT LOAD: If the MIR tracks a pointer (e.g. mut parameter), load it
-                if (t->kind == types::TypeKind::Ptr && e->exprType->kind != types::TypeKind::Ptr) {
+                if (t && e->exprType && t->kind == types::TypeKind::Ptr
+                    && e->exprType->kind != types::TypeKind::Ptr) {
                     Value ptrReg = Register { regName, t, e->pos };
                     return emitLoad(ptrReg, e->exprType, e->pos);
                 }
                 return Register { regName, t, e->pos };
             },
             [&](ast::IntLiteral* e) -> Value {
-                return IntConstant { e->value, e->exprType, e->pos };
+                const types::Type* ty
+                    = e->exprType ? e->exprType : reg_.getPrimitive(types::TypeKind::I64);
+                return IntConstant { e->value, ty, e->pos };
             },
             [&](ast::BoolLiteral* e) -> Value {
-                return BoolConstant { e->value, e->exprType, e->pos };
+                const types::Type* ty
+                    = e->exprType ? e->exprType : reg_.getPrimitive(types::TypeKind::Bool);
+                return BoolConstant { .value = e->value, .type = ty, .pos = e->pos };
             },
             [&](ast::StringLiteral* e) -> Value {
                 SymID tmp = emitTemp(e->exprType);
+                push(AllocaInst { tmp, e->exprType, e->pos });
                 Value obj = Register { tmp, e->exprType, e->pos };
                 Value rawStrPtr
                     = StringConstant { e->value, reg_.getPrimitive(types::TypeKind::Ptr), e->pos };
@@ -531,6 +613,7 @@ Value Builder::lowerExpr(ast::Expr expr)
 
                 if (!isUnit) {
                     resultTemp = emitTemp(e->exprType);
+                    push(AllocaInst { resultTemp, e->exprType, e->pos });
                     resultReg = Register { resultTemp, e->exprType, e->pos };
                 }
 
@@ -579,7 +662,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                                               }
                                               return std::monostate {};
                                           },
-                                          e->consequence->statements.back()));
+                                          e->alternative->statements.back()));
                             if (!std::holds_alternative<std::monostate>(elseYield))
                                 push(AssignInst { resultTemp, elseYield, e->pos });
                         }
@@ -601,7 +684,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                 return resultReg;
             },
             [&](ast::CallExpr* e) -> Value {
-                // Intrinsics[cite: 4]
+                // Intrinsics
                 if (auto** idPtr = std::get_if<ast::Identifier*>(&e->function)) {
                     std::string_view fnName = sym_.resolve((*idPtr)->name);
                     if (fnName == "yield_now") {
@@ -642,12 +725,6 @@ Value Builder::lowerExpr(ast::Expr expr)
                 std::vector<bool> argConsumed;
 
                 for (const auto& arg : e->arguments) {
-                    if (arg.cap == ast::Capability::None) {
-                        flatArgs.push_back(lowerExpr(arg.argument));
-                        argConsumed.push_back(false);
-                        continue;
-                    }
-
                     const types::Type* argType = safeGetExprType(arg.argument);
                     const types::Type* resultType = lowerParamType(argType, arg.cap);
 
@@ -679,7 +756,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                 Value ptrVal = addressOf(e);
                 const types::Type* sourceType = safeGetExprType(e->left);
 
-                // Map Option Wrapping[cite: 4]
+                // Map Option Wrapping
                 if (sourceType->kind == types::TypeKind::Map) {
                     auto [hashVal, keyPtrVal, lenVal] = lowerMapKey(e->index, e->pos);
                     Value opaquePtr = emitRuntimeCall(sym_.intern("maml_map_get"),
@@ -687,19 +764,28 @@ Value Builder::lowerExpr(ast::Expr expr)
                         { ptrVal, hashVal, keyPtrVal, lenVal }, e->pos);
 
                     SymID resTmp = emitTemp(e->exprType);
+                    push(AllocaInst { .dst = resTmp, .type = e->exprType, .pos = e->pos });
                     SymID cmpTmp = newTemp();
-                    push(BinaryOpInst { cmpTmp, opaquePtr, TokenType::NOT_EQ,
-                        IntConstant { 0, reg_.getPrimitive(types::TypeKind::I64), e->pos },
-                        reg_.getPrimitive(types::TypeKind::Bool), e->pos });
+                    push(BinaryOpInst { .dst = cmpTmp,
+                        .left = opaquePtr,
+                        .op = TokenType::NOT_EQ,
+                        .right = IntConstant { .value = 0,
+                            .type = reg_.getPrimitive(types::TypeKind::I64),
+                            .pos = e->pos },
+                        .type = reg_.getPrimitive(types::TypeKind::Bool),
+                        .pos = e->pos });
 
                     BasicBlock* thenBlock = newBlock();
                     BasicBlock* elseBlock = newBlock();
                     BasicBlock* mergeBlock = newBlock();
 
-                    current_->terminator = BranchTerminator {
-                        Register { cmpTmp, reg_.getPrimitive(types::TypeKind::Bool), e->pos },
-                        thenBlock->id, elseBlock->id, e->pos
-                    };
+                    current_->terminator
+                        = BranchTerminator { .condition = Register { .name = cmpTmp,
+                                                 .type = reg_.getPrimitive(types::TypeKind::Bool),
+                                                 .pos = e->pos },
+                              .trueTarget = thenBlock->id,
+                              .falseTarget = elseBlock->id,
+                              .pos = e->pos };
 
                     const types::Type* valType
                         = std::get<types::SumPayload>(e->exprType->payload).typeArgs[0];
@@ -785,6 +871,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                         newDataPtrTmp, reg_.getPrimitive(types::TypeKind::Ptr));
 
                 SymID resultTmp = emitTemp(e->exprType);
+                push(AllocaInst { resultTmp, e->exprType, e->pos });
                 Value result = Register { resultTmp, e->exprType, e->pos };
 
                 storeField(result, e->exprType, newDataPtr, sym_.intern("ptr"), 0,
@@ -827,7 +914,8 @@ Value Builder::lowerExpr(ast::Expr expr)
                 if (t->kind == types::TypeKind::Struct) {
                     const auto& fields = std::get<types::StructPayload>(t->payload).fields;
                     SymID tmp = emitTemp(t);
-                    Value obj = Register { tmp, t, e->pos };
+                    push(AllocaInst { .dst = tmp, .type = t, .pos = e->pos });
+                    Value obj = Register { .name = tmp, .type = t, .pos = e->pos };
 
                     for (size_t i = 0; i < e->elements.size(); ++i) {
                         const auto& elem = e->elements[i];
@@ -868,16 +956,22 @@ Value Builder::lowerExpr(ast::Expr expr)
                     size_t arraySize = payload.size;
 
                     SymID tmp = emitTemp(t);
+                    push(AllocaInst { .dst = tmp, .type = t, .pos = e->pos });
                     Value arrPtr = emitBorrow(tmp, true, e->pos);
 
                     for (size_t i = 0; i < e->elements.size() && i < arraySize; ++i) {
                         Value flatElem = lowerExpr(e->elements[i].value);
-                        Value idx = IntConstant { static_cast<int64_t>(i),
-                            reg_.getPrimitive(types::TypeKind::I64), e->elements[i].pos };
+                        Value idx = IntConstant { .value = static_cast<int64_t>(i),
+                            .type = reg_.getPrimitive(types::TypeKind::I64),
+                            .pos = e->elements[i].pos };
 
                         SymID elemAddrTmp = newPtrTemp();
-                        Value elemAddr = emit(IndexAddrInst { elemAddrTmp, arrPtr, t, idx, elemType,
-                                                  e->elements[i].pos },
+                        Value elemAddr = emit(IndexAddrInst { .dst = elemAddrTmp,
+                                                  .source = arrPtr,
+                                                  .sourceType = t,
+                                                  .index = idx,
+                                                  .type = elemType,
+                                                  .pos = e->elements[i].pos },
                             elemAddrTmp, reg_.getPrimitive(types::TypeKind::Ptr));
 
                         push(StoreInst { elemAddr, flatElem, elemType, e->elements[i].pos });
@@ -888,18 +982,27 @@ Value Builder::lowerExpr(ast::Expr expr)
                 return std::monostate {};
             },
             [&](ast::MatchExpr* e) -> Value {
-                // Direct CFG Unrolling[cite: 3, 4]
+                // Direct CFG Unrolling
                 Value subjectVal = lowerExpr(e->subject);
                 const types::Type* subjectType = getTypeOf(subjectVal);
 
                 // Assign subject to a local temp to avoid re-evaluation
                 SymID subjectReg = emitTemp(subjectType);
+                if (subjectType
+                    && (ownsHeapMemory(subjectType) || subjectType->kind == types::TypeKind::Sum
+                        || subjectType->kind == types::TypeKind::Struct)) {
+                    push(AllocaInst { .dst = subjectReg, .type = subjectType, .pos = e->pos });
+                }
                 emitTransfer(subjectReg, subjectVal, e->pos);
-                Value stableSubject = Register { subjectReg, subjectType, e->pos };
+                Value stableSubject
+                    = Register { .name = subjectReg, .type = subjectType, .pos = e->pos };
 
                 BasicBlock* mergeBlock = newBlock();
                 bool isUnit = (e->exprType->kind == types::TypeKind::Unit);
                 SymID resultTemp = isUnit ? NoSymbol : emitTemp(e->exprType);
+                if (!isUnit) {
+                    push(AllocaInst { .dst = resultTemp, .type = e->exprType, .pos = e->pos });
+                }
                 bool mergeReachable = false;
 
                 for (const auto& arm : e->arms) {
@@ -914,15 +1017,19 @@ Value Builder::lowerExpr(ast::Expr expr)
                     std::visit(
                         overloaded { [&](std::monostate) {},
                             [&](ast::WildcardPattern* p) {
-                                condVal = BoolConstant { true,
-                                    reg_.getPrimitive(types::TypeKind::Bool), p->pos };
+                                condVal = BoolConstant { .value = true,
+                                    .type = reg_.getPrimitive(types::TypeKind::Bool),
+                                    .pos = p->pos };
                             },
                             [&](ast::LiteralPattern* p) {
                                 Value litVal = lowerExpr(p->value);
                                 SymID condTmp = newTemp();
-                                condVal = emit(
-                                    BinaryOpInst { condTmp, stableSubject, TokenType::EQ, litVal,
-                                        reg_.getPrimitive(types::TypeKind::Bool), p->pos },
+                                condVal = emit(BinaryOpInst { .dst = condTmp,
+                                                   .left = stableSubject,
+                                                   .op = TokenType::EQ,
+                                                   .right = litVal,
+                                                   .type = reg_.getPrimitive(types::TypeKind::Bool),
+                                                   .pos = p->pos },
                                     condTmp, reg_.getPrimitive(types::TypeKind::Bool));
                             },
                             [&](ast::IdentifierPattern* p) {
@@ -933,26 +1040,33 @@ Value Builder::lowerExpr(ast::Expr expr)
                                     for (const auto& v : payload.variants) {
                                         if (v.name == p->name) {
                                             isUnitVariant = true;
-                                            Value discVal = loadField(addressOf(e->subject),
-                                                subjectType, sym_.intern("discriminant"), 0,
+                                            Value subjectPtr
+                                                = emitBorrow(subjectReg, false, p->pos);
+                                            Value discVal = loadField(subjectPtr, subjectType,
+                                                sym_.intern("discriminant"), 0,
                                                 reg_.getPrimitive(types::TypeKind::I32), p->pos);
                                             SymID condTmp = newTemp();
                                             condVal = emit(
-                                                BinaryOpInst { condTmp, discVal, TokenType::EQ,
-                                                    IntConstant { v.discriminant,
-                                                        reg_.getPrimitive(types::TypeKind::I32),
-                                                        p->pos },
-                                                    reg_.getPrimitive(types::TypeKind::Bool),
-                                                    p->pos },
+                                                BinaryOpInst { .dst = condTmp,
+                                                    .left = discVal,
+                                                    .op = TokenType::EQ,
+                                                    .right = IntConstant { .value = v.discriminant,
+                                                        .type
+                                                        = reg_.getPrimitive(types::TypeKind::I32),
+                                                        .pos = p->pos },
+                                                    .type
+                                                    = reg_.getPrimitive(types::TypeKind::Bool),
+                                                    .pos = p->pos },
                                                 condTmp, reg_.getPrimitive(types::TypeKind::Bool));
                                             break;
                                         }
                                     }
                                 }
                                 if (!isUnitVariant) {
-                                    condVal = BoolConstant { true,
-                                        reg_.getPrimitive(types::TypeKind::Bool), p->pos };
-                                    bindings.push_back(
+                                    condVal = BoolConstant { .value = true,
+                                        .type = reg_.getPrimitive(types::TypeKind::Bool),
+                                        .pos = p->pos };
+                                    bindings.emplace_back(
                                         [&, name = p->name, t = subjectType, pos = p->pos]() {
                                             SymID local = defineLocal(name);
                                             locals_[local] = t;
@@ -961,8 +1075,108 @@ Value Builder::lowerExpr(ast::Expr expr)
                                 }
                             },
                             [&](ast::CompositePattern* p) {
-                                // Struct/Tuple Variant matching logic omitted to preserve
-                                // space. Follows discriminant check + loadField bindings.
+                                if (!subjectType || subjectType->kind != types::TypeKind::Sum) {
+                                    return;
+                                }
+
+                                // 1. Extract the variant name symbol (e.g. "Some" or "Ok")
+                                SymID variantName = NoSymbol;
+                                if (auto** ntePtr
+                                    = std::get_if<ast::NamedTypeExpr*>(&p->typeExpr)) {
+                                    if (*ntePtr && (*ntePtr)->name) {
+                                        variantName = (*ntePtr)->name->name;
+                                    }
+                                }
+
+                                if (variantName == NoSymbol)
+                                    return;
+                                // 2. Find matching variant in the Sum type payload
+                                const auto& sumPayload
+                                    = std::get<types::SumPayload>(subjectType->payload);
+                                const types::SumVariant* matchedVariant = nullptr;
+                                for (const auto& v : sumPayload.variants) {
+                                    if (v.name == variantName) {
+                                        matchedVariant = &v;
+                                        break;
+                                    }
+                                }
+
+                                if (!matchedVariant)
+                                    return;
+
+                                // 3. Emit discriminant comparison (discriminant ==
+                                // variant.discriminant)
+                                Value discVal = loadField(addressOf(e->subject), subjectType,
+                                    sym_.intern("discriminant"), 0,
+                                    reg_.getPrimitive(types::TypeKind::I32), p->pos);
+
+                                SymID condTmp = newTemp();
+                                condVal = emit(
+                                    BinaryOpInst { .dst = condTmp,
+                                        .left = discVal,
+                                        .op = TokenType::EQ,
+                                        .right
+                                        = IntConstant { .value = matchedVariant->discriminant,
+                                            .type = reg_.getPrimitive(types::TypeKind::I32),
+                                            .pos = p->pos },
+                                        .type = reg_.getPrimitive(types::TypeKind::Bool),
+                                        .pos = p->pos },
+                                    condTmp, reg_.getPrimitive(types::TypeKind::Bool));
+
+                                // 4. Bind payload variables (e.g. `idx` in `Some(idx)`)
+                                bindings.emplace_back([&, p, matchedVariant, variantName,
+                                                          t = subjectType, pos = p->pos]() {
+                                    if (p->elements.empty())
+                                        return;
+
+                                    Value basePtr = emitBorrow(subjectReg, false, pos);
+                                    Value payloadArrPtr
+                                        = emitFieldAddr(basePtr, t, sym_.intern("payload"), 1,
+                                            reg_.getPrimitive(types::TypeKind::Unknown), pos);
+
+                                    const types::Type* variantStructTy
+                                        = getVariantPayloadStructType(t, variantName);
+
+                                    SymID castTmp = newPtrTemp();
+                                    push(BitcastPtrInst { .dst = castTmp,
+                                        .src = payloadArrPtr,
+                                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                                        .pos = pos });
+                                    Value castPtr = Register { .name = castTmp,
+                                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                                        .pos = pos };
+
+                                    for (size_t i = 0; i < p->elements.size(); ++i) {
+                                        const auto& elemPattern = p->elements[i].pattern;
+                                        if (auto* ip
+                                            = std::get_if<ast::IdentifierPattern*>(&elemPattern)) {
+                                            SymID fieldName
+                                                = sym_.intern("payload_" + std::to_string(i));
+                                            const types::Type* fieldType = nullptr;
+
+                                            if (i < matchedVariant->tupleTypes.size()) {
+                                                fieldType = matchedVariant->tupleTypes[i];
+                                            } else if (i - matchedVariant->tupleTypes.size()
+                                                < matchedVariant->fields.size()) {
+                                                fieldType
+                                                    = matchedVariant
+                                                          ->fields[i
+                                                              - matchedVariant->tupleTypes.size()]
+                                                          .type;
+                                            }
+
+                                            if (!fieldType)
+                                                fieldType = reg_.getPrimitive(types::TypeKind::I64);
+
+                                            Value fieldVal = loadField(castPtr, variantStructTy,
+                                                fieldName, static_cast<int>(i), fieldType, pos);
+
+                                            SymID local = defineLocal((*ip)->name);
+                                            locals_[local] = fieldType;
+                                            emitTransfer(local, fieldVal, pos);
+                                        }
+                                    }
+                                });
                             } },
                         arm.pattern);
 

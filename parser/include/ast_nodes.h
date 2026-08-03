@@ -4,13 +4,14 @@
 #include "sym.h"
 #include "token.h"
 
+#include <cassert>
 #include <cstdint>
 #include <string_view>
 #include <vector>
 
 namespace maml::ast {
 
-enum class Capability : uint8_t { None, Mut, Own, Ro, Copy };
+enum class Capability : uint8_t { Mut, Own, Ro };
 
 inline Capability parseCapability(std::string_view literal)
 {
@@ -20,9 +21,8 @@ inline Capability parseCapability(std::string_view literal)
         return Capability::Own;
     if (literal == "ro")
         return Capability::Ro;
-    if (literal == "copy")
-        return Capability::Copy;
-    return Capability::None;
+    assert(false && "parseCapability called with non-capability literal");
+    return Capability::Ro; // suppress warnings
 }
 
 // =============================================================================
@@ -32,7 +32,7 @@ inline Capability parseCapability(std::string_view literal)
 struct CallArg {
     Position pos;
     Position end;
-    Capability cap;
+    Capability cap = Capability::Ro;
     Expr argument;
 };
 
@@ -60,7 +60,7 @@ struct MatchArm {
 struct Param {
     Position pos;
     Position end;
-    Capability cap;
+    Capability cap = Capability::Ro;
     SymID name;
     TypeExpr type;
 };
@@ -277,7 +277,7 @@ struct ContinueStmt {
 struct AliasDecl {
     Position pos;
     Position end;
-    Capability cap;
+    Capability cap = Capability::Ro;
     SymID name;
     Expr value;
 };
@@ -297,6 +297,7 @@ struct NamedTypeExpr {
     Position pos;
     Position end;
     Identifier* name;
+    const maml::types::Type* exprType = nullptr;
 };
 
 struct ArrayTypeExpr {
@@ -304,6 +305,7 @@ struct ArrayTypeExpr {
     Position end;
     TypeExpr base;
     int size;
+    const maml::types::Type* exprType = nullptr;
 };
 
 struct StructTypeExpr {
@@ -326,6 +328,7 @@ struct GenericTypeExpr {
     Position end;
     Identifier* name;
     std::vector<TypeExpr> args;
+    const maml::types::Type* exprType = nullptr;
 };
 
 // =============================================================================

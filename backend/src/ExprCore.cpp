@@ -1,7 +1,19 @@
+#include "CodegenContext.hpp"
 #include "ExprGenerator.hpp"
 #include "TypeLowering.hpp"
+#include "mir.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <string>
+#include <string_view>
+#include <variant>
 
 namespace maml {
 
@@ -61,7 +73,7 @@ llvm::Value* evaluateValue(CodegenContext& ctx, const mir::Value& val)
                 // directly if supported
                 llvm::Constant* strConst
                     = llvm::ConstantDataArray::getString(ctx.Context, arg.value, true);
-                llvm::GlobalVariable* globalVar
+                auto* globalVar
                     = new llvm::GlobalVariable(*ctx.Module, strConst->getType(), true,
                         llvm::GlobalValue::PrivateLinkage, strConst, "str_lit");
                 return ctx.Builder->CreatePointerCast(

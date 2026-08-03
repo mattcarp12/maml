@@ -6,144 +6,144 @@ extern fn run_executor(own s any) any
 
 
 fn print(x string) {
-    maml_print(x)
+    maml_print(x);
 }
 
 // --------------------------------------------------------
 // String Manipulation Library
 // --------------------------------------------------------
-type str_SplitResult = { left string, right string }
+type str_SplitResult = { left string, right string };
 
 fn str_index_of(s string, target string) Option<int> {
-    s_len := len(s)
-    t_len := len(target)
+    s_len := len(s);
+    t_len := len(target);
     
-    if t_len == 0 {
-        return Some(0)
+    if (t_len == 0) {
+        return Some(0);
     }
-    if s_len < t_len {
-        return None
+    if (s_len < t_len) {
+        return None;
     }
 
-    for mut i := 0; i <= s_len - t_len; i = i + 1 {
-        mut match_found := true
-        for mut j := 0; j < t_len; j = j + 1 {
-            if s[i + j] != target[j] {
-                match_found = false
-                break
+    for (mut i := 0; i <= s_len - t_len; i = i + 1) {
+        mut match_found := true;
+        for (mut j := 0; j < t_len; j = j + 1) {
+            if (s[i + j] != target[j]) {
+                match_found = false;
+                break;
             }
         }
-        if match_found {
-            return Some(i)
+        if (match_found) {
+            return Some(i);
         }
     }
     
-    return None
+    return None;
 }
 
 fn str_split_once(s string, delim string) Option<str_SplitResult> {
-    match str_index_of(s, delim) {
+    match (str_index_of(s, delim)) {
         case Some(idx): {
-            left_part := s[0:idx]
-            right_part := s[idx + len(delim) : len(s)]
-            return Some(str_SplitResult{ left: left_part, right: right_part })
+            left_part := s[0:idx];
+            right_part := s[idx + len(delim) : len(s)];
+            return Some(str_SplitResult{ left: left_part, right: right_part });
         }
         case None: {
-            return None
+            return None;
         }
     }
 }
 
 fn str_concat(a string, b string) string {
-    return maml_str_concat(a, b)
+    return maml_str_concat(a, b);
 }
 
 fn str_to_int(s string) Option<int> {
-    s_len := len(s)
-    if s_len == 0 {
-        return None
+    s_len := len(s);
+    if (s_len == 0) {
+        return None;
     }
     
-    mut result := 0
-    mut start := 0
-    mut is_neg := false
+    mut result := 0;
+    mut start := 0;
+    mut is_neg := false;
 
     // Handle negative numbers (ASCII 45 is '-')
-    if s[0] == 45 { 
-        is_neg = true
-        start = 1
-        if s_len == 1 { return None }
+    if (s[0] == 45) { 
+        is_neg = true;
+        start = 1;
+        if (s_len == 1) { return None; }
     }
 
-    for mut i := start; i < s_len; i = i + 1 {
-        ch := s[i]
+    for (mut i := start; i < s_len; i = i + 1) {
+        ch := s[i];
         // Check if character is outside '0' (48) and '9' (57)
-        if ch < 48 || ch > 57 { 
-            return None
+        if (ch < 48 || ch > 57) { 
+            return None;
         }
-        result = (result * 10) + (ch - 48)
+        result = (result * 10) + (ch - 48);
     }
 
-    if is_neg {
-        result = 0 - result 
+    if (is_neg) {
+        result = 0 - result;
     }
-    return Some(result)
+    return Some(result);
 }
 
 fn is_whitespace(ch int) bool {
     // Space (32), Tab (9), LF (10), CR (13)
-    return ch == 32 || ch == 9 || ch == 10 || ch == 13
+    return ch == 32 || ch == 9 || ch == 10 || ch == 13;
 }
 
 fn str_trim(s string) string {
-    s_len := len(s)
-    if s_len == 0 { return s }
+    s_len := len(s);
+    if (s_len == 0) { return s; }
 
-    mut start := 0
-    for mut i := 0; i < s_len; i = i + 1 {
-        if !is_whitespace(s[i]) {
-            break
+    mut start := 0;
+    for (mut i := 0; i < s_len; i = i + 1) {
+        if (!is_whitespace(s[i])) {
+            break;
         }
-        start = start + 1
+        start = start + 1;
     }
 
-    mut end := s_len
-    for mut i := s_len - 1; i >= start; i = i - 1 {
-        if !is_whitespace(s[i]) {
-            break
+    mut end := s_len;
+    for (mut i := s_len - 1; i >= start; i = i - 1) {
+        if (!is_whitespace(s[i])) {
+            break;
         }
-        end = end - 1
+        end = end - 1;
     }
 
-    if start >= end {
+    if (start >= end) {
         // Return an empty slice if entirely whitespace
-        return s[0:0] 
+        return s[0:0]; 
     }
 
-    return s[start:end]
+    return s[start:end];
 }
 
 fn str_split(s string, delim string) Vec<string> {
-    mut result := Vec<string>{}
-    if len(delim) == 0 {
-        result << s
-        return result
+    mut result := Vec<string>{};
+    if (len(delim) == 0) {
+        result << s;
+        return result;
     }
 
-    mut current := s
-    for true {
-        match str_split_once(current, delim) {
+    mut current := s;
+    for (true) {
+        match (str_split_once(current, delim)) {
             case Some(parts): {
-                result << parts.left
-                current = parts.right
+                result << parts.left;
+                current = parts.right;
             }
             case None: {
-                result << current
-                break
+                result << current;
+                break;
             }
         }
     }
-    return result
+    return result;
 }
 
 
@@ -157,64 +157,64 @@ type HTTP_Request = {
     version string,
     headers Map<string, string>,
     body string
-}
+};
 
 type HTTP_Response = {
     status_code int,
     status_text string,
     headers Map<string, string>,
     body string
-}
+};
 
 fn parse_http_request(raw_request string) Option<HTTP_Request> {
     // 1. Separate the headers from the body.
     // HTTP defines the boundary between headers and body as a double CRLF ("\r\n\r\n")
-    mut header_block := raw_request
-    mut body_block := ""
+    mut header_block := raw_request;
+    mut body_block := "";
     
-    match str_split_once(raw_request, "\r\n\r\n") {
+    match (str_split_once(raw_request, "\r\n\r\n")) {
         case Some(parts): {
-            header_block = parts.left
-            body_block = parts.right
+            header_block = parts.left;
+            body_block = parts.right;
         }
         case None: {
             // No body found, the entire payload is headers
-            header_block = raw_request
+            header_block = raw_request;
         }
     }
 
     // 2. Split the header block into individual lines
-    lines := str_split(header_block, "\r\n")
-    if len(lines) == 0 {
-        return None
+    lines := str_split(header_block, "\r\n");
+    if (len(lines) == 0) {
+        return None;
     }
 
     // 3. Parse the Request Line (e.g., "GET /index.html HTTP/1.1")
-    request_line := lines[0]
-    req_parts := str_split(request_line, " ")
-    if len(req_parts) != 3 {
-        return None // Malformed request line
+    request_line := lines[0];
+    req_parts := str_split(request_line, " ");
+    if (len(req_parts) != 3) {
+        return None; // Malformed request line
     }
     
-    req_method := req_parts[0]
-    req_path := req_parts[1]
-    req_version := req_parts[2]
+    req_method := req_parts[0];
+    req_path := req_parts[1];
+    req_version := req_parts[2];
 
     // 4. Parse the Headers into a Map
-    mut headers_map := Map<string, string>{}
+    mut headers_map := Map<string, string>{};
     
-    for mut i := 1; i < len(lines); i = i + 1 {
-        line := lines[i]
+    for (mut i := 1; i < len(lines); i = i + 1) {
+        line := lines[i];
         
         // Skip empty lines (safety check)
-        if len(line) == 0 {
-            continue
+        if (len(line) == 0) {
+            continue;
         }
         
         // Split by the first colon-space delimiter
-        match str_split_once(line, ": ") {
+        match (str_split_once(line, ": ")) {
             case Some(h): {
-                headers_map[h.left] = h.right
+                headers_map[h.left] = h.right;
             }
             case None: {
                 // If a header doesn't have ": ", we silently ignore it for this implementation
@@ -229,5 +229,5 @@ fn parse_http_request(raw_request string) Option<HTTP_Request> {
         version: req_version,
         headers: headers_map,
         body: body_block
-    })
+    });
 }

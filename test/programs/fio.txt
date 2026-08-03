@@ -1,3 +1,0 @@
-This is text that should be read from the fio.maml program.
-
-This should be read too!

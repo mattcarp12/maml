@@ -123,9 +123,11 @@ void Analyzer::resolveTypeBody(ast::TypeDecl* td)
             fields.push_back({ f.name, resolveAstType(f.type) });
         }
 
-        // Update the registry with the fully resolved struct
-        const types::Type* resolved = registry_.getStruct(td->name->name, std::move(fields));
-        currentScope_->defineType(td->name->name, resolved);
+        // Fetch the empty shell created in Pass 1 and update its fields
+        const types::Type* resolved = lookupCustomType(td->name->name);
+        if (resolved) {
+            registry_.updateStruct(resolved, std::move(fields));
+        }
 
     } else if (auto** sumPtr = std::get_if<ast::SumTypeExpr*>(&td->rhs)) {
         ast::SumTypeExpr* rhs = *sumPtr;
@@ -146,18 +148,21 @@ void Analyzer::resolveTypeBody(ast::TypeDecl* td)
             variants.push_back(std::move(variant));
         }
 
-        const types::Type* resolved = registry_.getSum(td->name->name, variants);
-        currentScope_->defineType(td->name->name, resolved);
+        // Fetch the empty shell created in Pass 1 and update its variants
+        const types::Type* resolved = lookupCustomType(td->name->name);
+        if (resolved) {
+            registry_.updateSum(resolved, variants); // Pass a copy or adjust std::move logic
 
-        // Register variant constructors as symbols
-        for (size_t i = 0; i < variants.size(); ++i) {
-            Symbol sym;
-            sym.kind = SymbolKind::Variant;
-            sym.name = variants[i].name;
-            sym.type = resolved;
-            sym.sumType = resolved;
-            sym.variantDiscriminant = static_cast<int>(i);
-            currentScope_->defineSymbol(variants[i].name, sym);
+            // Register variant constructors as symbols
+            for (size_t i = 0; i < variants.size(); ++i) {
+                Symbol sym;
+                sym.kind = SymbolKind::Variant;
+                sym.name = variants[i].name;
+                sym.type = resolved;
+                sym.sumType = resolved;
+                sym.variantDiscriminant = static_cast<int>(i);
+                currentScope_->defineSymbol(variants[i].name, sym);
+            }
         }
     }
 }
@@ -182,13 +187,7 @@ void Analyzer::registerFunction(ast::FnDecl* fn)
 
     for (const auto& p : fn->params) {
         paramTypes.push_back(resolveAstType(p.type));
-
-        // Inject default capability (CapRo) if none provided
-        ast::Capability cap = p.cap;
-        if (cap == ast::Capability::None) {
-            cap = ast::Capability::Ro;
-        }
-        caps.push_back(cap);
+        caps.push_back(p.cap);
     }
 
     const types::Type* returnType = registry_.getPrimitive(types::TypeKind::Unit);
@@ -223,58 +222,65 @@ const types::Type* Analyzer::resolveAstType(ast::TypeExpr expr)
 
     if (auto** namedPtr = std::get_if<ast::NamedTypeExpr*>(&expr)) {
         ast::NamedTypeExpr* e = *namedPtr;
+        const types::Type* resolved = nullptr;
         std::string_view nameStr = sym_.resolve(e->name->name);
 
         if (nameStr == "int" || nameStr == "i64")
-            return registry_.getPrimitive(types::TypeKind::I64);
-        if (nameStr == "i8")
-            return registry_.getPrimitive(types::TypeKind::I8);
-        if (nameStr == "i16")
-            return registry_.getPrimitive(types::TypeKind::I16);
-        if (nameStr == "i32")
-            return registry_.getPrimitive(types::TypeKind::I32);
-        if (nameStr == "i128")
-            return registry_.getPrimitive(types::TypeKind::I128);
-        if (nameStr == "u8" || nameStr == "byte")
-            return registry_.getPrimitive(types::TypeKind::U8);
-        if (nameStr == "u16")
-            return registry_.getPrimitive(types::TypeKind::U16);
-        if (nameStr == "u32")
-            return registry_.getPrimitive(types::TypeKind::U32);
-        if (nameStr == "u64")
-            return registry_.getPrimitive(types::TypeKind::U64);
-        if (nameStr == "u128")
-            return registry_.getPrimitive(types::TypeKind::U128);
-        if (nameStr == "f32")
-            return registry_.getPrimitive(types::TypeKind::F32);
-        if (nameStr == "f64")
-            return registry_.getPrimitive(types::TypeKind::F64);
-        if (nameStr == "bool")
-            return registry_.getPrimitive(types::TypeKind::Bool);
-        if (nameStr == "char")
-            return registry_.getPrimitive(types::TypeKind::Char);
-        if (nameStr == "string")
-            return registry_.getPrimitive(types::TypeKind::String);
-        if (nameStr == "unit")
-            return registry_.getPrimitive(types::TypeKind::Unit);
-        if (nameStr == "any")
-            return registry_.getPrimitive(types::TypeKind::Any);
-
-        if (const types::Type* custom = lookupCustomType(e->name->name)) {
-            return custom;
+            resolved = registry_.getPrimitive(types::TypeKind::I64);
+        else if (nameStr == "i8")
+            resolved = registry_.getPrimitive(types::TypeKind::I8);
+        else if (nameStr == "i16")
+            resolved = registry_.getPrimitive(types::TypeKind::I16);
+        else if (nameStr == "i32")
+            resolved = registry_.getPrimitive(types::TypeKind::I32);
+        else if (nameStr == "i128")
+            resolved = registry_.getPrimitive(types::TypeKind::I128);
+        else if (nameStr == "u8" || nameStr == "byte")
+            resolved = registry_.getPrimitive(types::TypeKind::U8);
+        else if (nameStr == "u16")
+            resolved = registry_.getPrimitive(types::TypeKind::U16);
+        else if (nameStr == "u32")
+            resolved = registry_.getPrimitive(types::TypeKind::U32);
+        else if (nameStr == "u64")
+            resolved = registry_.getPrimitive(types::TypeKind::U64);
+        else if (nameStr == "u128")
+            resolved = registry_.getPrimitive(types::TypeKind::U128);
+        else if (nameStr == "f32")
+            resolved = registry_.getPrimitive(types::TypeKind::F32);
+        else if (nameStr == "f64")
+            resolved = registry_.getPrimitive(types::TypeKind::F64);
+        else if (nameStr == "bool")
+            resolved = registry_.getPrimitive(types::TypeKind::Bool);
+        else if (nameStr == "char")
+            resolved = registry_.getPrimitive(types::TypeKind::Char);
+        else if (nameStr == "string")
+            resolved = registry_.getPrimitive(types::TypeKind::String);
+        else if (nameStr == "unit")
+            resolved = registry_.getPrimitive(types::TypeKind::Unit);
+        else if (nameStr == "any")
+            resolved = registry_.getPrimitive(types::TypeKind::Any);
+        else if (const types::Type* custom = lookupCustomType(e->name->name)) {
+            resolved = custom;
+        } else {
+            addError(e->pos, "unknown type '{}'", nameStr);
+            resolved = registry_.getPrimitive(types::TypeKind::Unknown);
         }
 
-        addError(e->pos, "unknown type '{}'", nameStr);
-        return registry_.getPrimitive(types::TypeKind::Unknown);
+        e->exprType = resolved;
+        return resolved;
     }
 
     if (auto** arrPtr = std::get_if<ast::ArrayTypeExpr*>(&expr)) {
         ast::ArrayTypeExpr* e = *arrPtr;
-        return registry_.getArray(resolveAstType(e->base), e->size);
+        const types::Type* resolved = registry_.getArray(resolveAstType(e->base), e->size);
+        e->exprType = resolved;
+        return resolved;
     }
 
     if (auto** genPtr = std::get_if<ast::GenericTypeExpr*>(&expr)) {
-        return resolveGenericBuiltin(*genPtr);
+        const types::Type* resolved = resolveGenericBuiltin(*genPtr);
+        (*genPtr)->exprType = resolved;
+        return resolved;
     }
 
     return registry_.getPrimitive(types::TypeKind::Unknown);
@@ -407,6 +413,36 @@ static Position posOf(ast::Expr expr)
 // =============================================================================
 // Helper: Merge Types
 // =============================================================================
+static bool isCompatible(const types::Type* expected, const types::Type* actual)
+{
+    if (!expected || !actual)
+        return false;
+    if (expected == actual)
+        return true;
+
+    // 'any' satisfies anything
+    if (expected->kind == types::TypeKind::Any || actual->kind == types::TypeKind::Any) {
+        return true;
+    }
+
+    // Allow Option<any> to seamlessly match Option<T>
+    if (expected->kind == types::TypeKind::Sum && actual->kind == types::TypeKind::Sum) {
+        const auto& ep = std::get<types::SumPayload>(expected->payload);
+        const auto& ap = std::get<types::SumPayload>(actual->payload);
+
+        if (ep.baseName == ap.baseName && ep.typeArgs.size() == ap.typeArgs.size()) {
+            for (size_t i = 0; i < ep.typeArgs.size(); ++i) {
+                if (!isCompatible(ep.typeArgs[i], ap.typeArgs[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
 const types::Type* mergeTypes(
     const types::Type* t1, const types::Type* t2, types::TypeRegistry& reg)
 {
@@ -414,6 +450,19 @@ const types::Type* mergeTypes(
         return nullptr;
     if (t1 == t2)
         return t1;
+
+    if (isCompatible(t1, t2)) {
+        // Prefer the concrete type (the one with fewer 'any' arguments)
+        if (t1->kind == types::TypeKind::Sum) {
+            const auto& p1 = std::get<types::SumPayload>(t1->payload);
+            for (const auto* arg : p1.typeArgs) {
+                if (arg->kind == types::TypeKind::Any)
+                    return t2;
+            }
+        }
+        return t1;
+    }
+
     if (t1->kind != types::TypeKind::Unknown && t2->kind != types::TypeKind::Unknown) {
         return reg.getPrimitive(types::TypeKind::Unknown); // Conflict
     }
@@ -447,7 +496,14 @@ void Analyzer::analyzeDecl(ast::Decl decl)
                 }
 
                 const auto& fnPayload = std::get<types::FunctionPayload>(fnSym->type->payload);
-                expectedReturn_ = fnPayload.returnType;
+
+                // If the function is async, the body's 'return' statement returns T, not Future<T>
+                if (fn->isAsync && fnPayload.returnType->kind == types::TypeKind::Future) {
+                    expectedReturn_
+                        = std::get<types::FuturePayload>(fnPayload.returnType->payload).base;
+                } else {
+                    expectedReturn_ = fnPayload.returnType;
+                }
                 isAsync_ = fn->isAsync;
 
                 pushScope();
@@ -508,7 +564,7 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                 }
 
                 // NoDuplicateDeclaration rule
-                if (currentScope_->resolveSymbol(decl->name) != nullptr) {
+                if (currentScope_->resolveSymbolLocal(decl->name) != nullptr) {
                     addError(
                         decl->pos, "variable '{}' is already declared", sym_.resolve(decl->name));
                 }
@@ -518,6 +574,7 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                 sym.name = decl->name;
                 sym.type = valType ? valType : registry_.getPrimitive(types::TypeKind::Unknown);
                 sym.isMutable = decl->isMutable;
+                sym.cap = ast::Capability::Own;
                 currentScope_->defineSymbol(decl->name, sym);
             },
             [&](ast::AliasDecl* alias) {
@@ -542,13 +599,10 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                 }
 
                 // AliasPathValid
-                if (alias->cap == ast::Capability::Mut || alias->cap == ast::Capability::Own
-                    || alias->cap == ast::Capability::Ro) {
-                    if (!isValidMemoryPath(alias->value)) {
-                        addError(alias->pos,
-                            "the '{}' capability can only be applied to variables and their fields",
-                            capabilityToString(alias->cap));
-                    }
+                if (!isValidMemoryPath(alias->value)) {
+                    addError(alias->pos,
+                        "the '{}' capability can only be applied to variables and their fields",
+                        capabilityToString(alias->cap));
                 }
             },
             [&](ast::AssignStmt* assign) {
@@ -558,14 +612,24 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                 const types::Type* lType = exprTypeOf(assign->lValue);
                 const types::Type* rType = exprTypeOf(assign->rValue);
 
-                if (lType && rType && lType != rType && lType->kind != types::TypeKind::Unknown
+                // --- Map Assignment Bypass ---
+                // If we are assigning to a map index, we expect the raw value type, not an Option
+                if (auto** idxPtr = std::get_if<ast::IndexExpr*>(&assign->lValue)) {
+                    const types::Type* leftType = exprTypeOf((*idxPtr)->left);
+                    if (leftType && leftType->kind == types::TypeKind::Map) {
+                        lType = std::get<types::MapPayload>(leftType->payload).value;
+                    }
+                }
+
+                if (lType && rType && !isCompatible(lType, rType)
+                    && lType->kind != types::TypeKind::Unknown
                     && rType->kind != types::TypeKind::Unknown) {
                     addError(assign->pos, "type mismatch: cannot assign '{}' to '{}'",
                         rType->toString(sym_), lType->toString(sym_));
                 }
 
                 // AssignLValueMustBeSymbol & Mutability Check
-                if (auto** idPtr = std::get_if<ast::Identifier*>(&assign->lValue)) {
+                if (std::holds_alternative<ast::Identifier*>(assign->lValue)) {
                     Symbol* rootSym = getRootSymbol(assign->lValue);
                     if (!rootSym) {
                         addError(assign->pos, "cannot assign to non-variable expression");
@@ -595,22 +659,12 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                     ? expectedReturn_
                     : registry_.getPrimitive(types::TypeKind::Unit);
 
-                // AwaitRequiresFuture / Async Unwrapping
-                if (isAsync_) {
-                    if (expected->kind == types::TypeKind::Future) {
-                        expected = std::get<types::FuturePayload>(expected->payload).base;
-                    } else {
-                        addError(ret->pos,
-                            "error: async function return type should be wrapped in Future");
-                    }
-                }
-
                 // CannotReturnView
                 if (retType && containsView(retType)) {
                     addError(ret->pos, "cannot return a View from a function");
                 }
 
-                if (retType && expected && retType != expected
+                if (retType && expected && !isCompatible(expected, retType)
                     && retType->kind != types::TypeKind::Unknown
                     && expected->kind != types::TypeKind::Unknown) {
                     addError(ret->pos, "type mismatch: expected return type '{}', got '{}'",
@@ -774,7 +828,8 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                             const types::Type* expectedType = targetVariant->tupleTypes[i];
                             if (argType && argType != expectedType
                                 && argType->kind != types::TypeKind::Unknown
-                                && expectedType->kind != types::TypeKind::Unknown) {
+                                && expectedType->kind != types::TypeKind::Unknown
+                                && expectedType->kind != types::TypeKind::Any) {
                                 addError(call->arguments[i].pos,
                                     "type mismatch for variant argument {}: expected '{}', got "
                                     "'{}'",
@@ -846,11 +901,9 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     // --- Literal Auto-Coercion ---
                     bool isLiteral
                         = std::holds_alternative<ast::StringLiteral*>(call->arguments[i].argument);
-                    if (isLiteral && actualCap == ast::Capability::None
-                        && (expectedCap == ast::Capability::Ro
-                            || expectedCap == ast::Capability::Own)) {
-                        actualCap = expectedCap;
-                        call->arguments[i].cap = expectedCap;
+                    if (isLiteral && actualCap == ast::Capability::Ro
+                        && expectedCap == ast::Capability::Own) {
+                        actualCap = ast::Capability::Own;
                     }
 
                     // --- Integer Literal Auto-Coercion ---
@@ -866,7 +919,8 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     // 1. Type Check
                     if (argType && argType != expectedType
                         && argType->kind != types::TypeKind::Unknown
-                        && expectedType->kind != types::TypeKind::Unknown) {
+                        && expectedType->kind != types::TypeKind::Unknown
+                        && expectedType->kind != types::TypeKind::Any) {
                         addError(call->arguments[i].pos,
                             "argument {} type mismatch: expected '{}', got '{}'", i + 1,
                             expectedType->toString(sym_), argType->toString(sym_));

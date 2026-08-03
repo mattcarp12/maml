@@ -4,14 +4,14 @@
 // This should be read too!
 fn main() int {
     // read existing file
-    fd1 := maml_file_open("fio.txt")
-    msg := maml_file_read_str(fd1)
-    print(msg)
-    maml_file_close(fd1)
+    fd1 := maml_file_open("fio.txt");
+    msg := maml_file_read_str(fd1);
+    print(msg);
+    maml_file_close(fd1);
 
     // write new file
-    fd2 := maml_file_open("dummy.txt")
-    maml_file_write_str(fd2, "Write this string if you know what's good fer ya!")
-    maml_file_close(fd2)
-    return 0
+    fd2 := maml_file_open("dummy.txt");
+    maml_file_write_str(fd2, "Write this string if you know what's good fer ya!");
+    maml_file_close(fd2);
+    return 0;
 }
