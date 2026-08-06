@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ast.h"
-#include "ast_nodes.h"
 #include "cfg.h"
 #include "mir.h"
 #include "sym.h"
@@ -122,15 +121,11 @@ private:
     Value emitRuntimeCall(
         SymID funcSym, const types::Type* retType, const std::vector<Value>& args, Position pos);
 
-    void emitVariantInit(BasicBlock* block, SymID dst, const types::Type* sumType,
-        SymID variantName, int discriminant, const std::vector<Value>& payloads, Position pos);
-    const types::Type* getVariantPayloadStructType(const types::Type* t, SymID variantName);
-
-    // --- Lowering passes (To be implemented in Phase 4/5) ---
     Value lowerExpr(ast::Expr expr);
     void lowerStmt(ast::Stmt stmt);
     void lowerBlockStmt(ast::BlockStmt* block);
     Value addressOf(ast::Expr expr);
+    Value lowerIntrinsicCallExpr(ast::IntrinsicCallExpr* e);
 
     // Extracted Intrinsic and ABI Calls
     Value EmitMamlVecPush(Value vec, Value element, Position pos);

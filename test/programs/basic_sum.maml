@@ -1,0 +1,22 @@
+// EXIT_CODE: 42
+
+fn sum_func() Option<int> {
+    return Some(42);
+}
+
+fn main() int {
+    y := match (sum_func()) {
+        case Some(x): {
+           => if (x != 42) {
+                => 1;
+            } else {
+                => x;
+            };
+        }
+        case None: {
+            => 2;
+        }
+    };
+
+    return y;
+}

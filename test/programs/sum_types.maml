@@ -40,7 +40,7 @@ fn process_action(act Action) int {
 
 // Basic Option construction and match validation
 fn test_option_basic() int {
-    mut x := Some(42)
+    mut x := Some(42);
     return match (x) {
         case Some(v): { => v; }
         case None:    { => 0; }
@@ -67,7 +67,7 @@ fn divide(a int, b int) Result<int, int> {
 
 // Nested match handling on computed Result payloads
 fn test_result_match() int {
-    result := divide(10, 2)
+    result := divide(10, 2);
     return match (result) {
         case Ok(v):  { => v; }
         case Err(e): { => e; }
@@ -95,7 +95,7 @@ fn parse_positive(n int) Result<int, int> {
 
 // Track 4.3: Manual deep-variant propagation tracking
 fn double_positive(n int) int {
-    result := parse_positive(n)
+    result := parse_positive(n);
     return match (result) {
         case Ok(v):  { => v * 2; }
         case Err(e): { => e; }

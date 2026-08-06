@@ -1,3 +1,5 @@
+#pragma once
+
 #include "cfg.h"
 #include "mir.h"
 #include "sym.h"

@@ -1,8 +1,9 @@
 #pragma once
 #include "arena.h"
-#include "ast_nodes.h"
+#include "ast.h"
 #include "sym.h"
 #include "types.h"
+#include <cstddef>
 #include <vector>
 
 namespace maml::types {
@@ -36,6 +37,8 @@ public:
     // Helpers
     const Type* getOption(const Type* base, SymbolTable& sym);
     const Type* getResult(const Type* val, const Type* err, SymbolTable& sym);
+    const Type* getTaggedUnionLayout(const Type* sumType, SymbolTable& sym);
+    size_t getTypeSize(const Type* type);
 
 private:
     Arena& arena_;

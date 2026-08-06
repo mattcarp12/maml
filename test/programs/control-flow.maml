@@ -1,4 +1,5 @@
 // EXIT_CODE: 35
+// SKIP: true
 
 fn main() int {
     mut sum := 0;

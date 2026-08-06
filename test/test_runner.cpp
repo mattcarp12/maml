@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -162,13 +163,20 @@ int main()
     std::vector<FailureDetail> failures;
     std::string tempDir = fs::temp_directory_path().string();
 
+    // --- Collect and sort test files alphabetically ---
+    std::vector<fs::path> testFiles;
     for (const auto& entry : fs::directory_iterator(programsDir)) {
-        if (entry.path().extension() != ".maml")
-            continue;
+        if (entry.path().extension() == ".maml") {
+            testFiles.push_back(entry.path());
+        }
+    }
+    std::sort(testFiles.begin(), testFiles.end());
 
-        std::string srcPath = entry.path().string();
-        std::string testName = entry.path().stem().string();
-        std::string fileName = entry.path().filename().string();
+    // --- Execute tests deterministically ---
+    for (const auto& path : testFiles) {
+        std::string srcPath = path.string();
+        std::string testName = path.stem().string();
+        std::string fileName = path.filename().string();
         std::string src = readFile(srcPath);
 
         if (shouldSkip(src)) {

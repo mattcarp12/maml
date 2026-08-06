@@ -1,5 +1,11 @@
 #include "reachability.h"
+#include "cfg.h"
+#include "mir.h"
+#include "sym.h"
+#include <string>
 #include <unordered_set>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace maml::passes {
@@ -58,7 +64,7 @@ void eliminateDeadFunctions(mir::Program* prog, SymbolTable& sym)
         }
     }
 
-    // 3. Prune the dead functions[cite: 3]
+    // 3. Prune the dead functions
     std::vector<mir::Function> liveFunctions;
     for (auto& fn : prog->functions) {
         if (liveSet.find(fn.name) != liveSet.end()) {

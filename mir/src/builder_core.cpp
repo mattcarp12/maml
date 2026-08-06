@@ -1,4 +1,5 @@
-#include "ast_nodes.h"
+
+#include "ast.h"
 #include "builder.h"
 #include "cfg.h"
 #include "mir.h"
@@ -6,7 +7,6 @@
 #include "token.h"
 #include "type_registry.h"
 #include "types.h"
-#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -196,12 +196,6 @@ SymID Builder::emitTemp(const types::Type* t)
 // Core Emission Primitives
 // =============================================================================
 
-// void Builder::push(Instruction inst)
-// {
-//     if (current_)
-//         current_->statements.push_back(inst);
-// }
-
 void Builder::push(const Instruction& inst)
 {
     // Hoist all stack allocations to the function's entry block
@@ -377,16 +371,20 @@ Value Builder::boxScalar(Value val, const types::Type* t, Position pos)
 Value Builder::emitRuntimeCall(
     SymID funcSym, const types::Type* retType, const std::vector<Value>& args, Position pos)
 {
-    SymID dst = NoSymbol;
-    if (retType && retType->kind != types::TypeKind::Unit) {
-        dst = emitTemp(retType);
-    }
+    bool isVoid = !retType || retType->kind == types::TypeKind::Unit;
+    SymID dst = isVoid ? sym_.intern("_") : emitTemp(retType);
 
     std::vector<bool> consumed(args.size(), false);
-    push(CallInst { dst, Register { funcSym, reg_.getPrimitive(types::TypeKind::Unknown), pos },
-        args, consumed, retType, pos });
+    push(CallInst { .dst = dst,
+        .function = Register { .name = funcSym,
+            .type = reg_.getPrimitive(types::TypeKind::Unknown),
+            .pos = pos },
+        .arguments = args,
+        .argConsumed = consumed,
+        .type = retType,
+        .pos = pos });
 
-    if (dst == NoSymbol)
+    if (isVoid)
         return std::monostate {};
     return Register { dst, retType, pos };
 }
@@ -394,70 +392,6 @@ Value Builder::emitRuntimeCall(
 // =============================================================================
 // Structs and Variants
 // =============================================================================
-
-const types::Type* Builder::getVariantPayloadStructType(
-    const types::Type* sumType, SymID variantName)
-{
-    if (!sumType || sumType->kind != types::TypeKind::Sum)
-        return nullptr;
-    const auto& payload = std::get<types::SumPayload>(sumType->payload);
-
-    const types::SumVariant* targetVariant = nullptr;
-    for (const auto& v : payload.variants) {
-        if (v.name == variantName) {
-            targetVariant = &v;
-            break;
-        }
-    }
-    if (!targetVariant)
-        return nullptr;
-
-    std::vector<types::StructField> fields;
-    int idx = 0;
-    for (auto tt : targetVariant->tupleTypes) {
-        fields.push_back({ sym_.intern("payload_" + std::to_string(idx)), tt });
-        idx++;
-    }
-    for (const auto& f : targetVariant->fields) {
-        fields.push_back({ sym_.intern("payload_" + std::to_string(idx)), f.type });
-        idx++;
-    }
-
-    SymID structName = sym_.intern(std::string(sym_.resolve(payload.baseName)) + "_"
-        + std::string(sym_.resolve(variantName)) + "_Payload");
-    return reg_.getStruct(structName, std::move(fields), false);
-}
-
-void Builder::emitVariantInit(BasicBlock* block, SymID dst, const types::Type* sumType,
-    SymID variantName, int discriminant, const std::vector<Value>& payloads, Position pos)
-{
-    BasicBlock* prev = current_;
-    current_ = block;
-    push(AllocaInst { dst, sumType, pos });
-    Value basePtr = emitBorrow(dst, true, pos);
-    storeField(basePtr, sumType,
-        IntConstant { discriminant, reg_.getPrimitive(types::TypeKind::I32), pos },
-        sym_.intern("discriminant"), 0, reg_.getPrimitive(types::TypeKind::I32), pos);
-
-    if (!payloads.empty()) {
-        Value payloadArrPtr = emitFieldAddr(basePtr, sumType, sym_.intern("payload"), 1,
-            reg_.getPrimitive(types::TypeKind::Unknown), pos);
-        const types::Type* variantStructTy = getVariantPayloadStructType(sumType, variantName);
-
-        SymID castTmp = newPtrTemp();
-        push(BitcastPtrInst {
-            castTmp, payloadArrPtr, reg_.getPrimitive(types::TypeKind::Ptr), pos });
-        Value castPtr = Register { castTmp, reg_.getPrimitive(types::TypeKind::Ptr), pos };
-
-        for (size_t i = 0; i < payloads.size(); ++i) {
-            const types::Type* pType = getTypeOf(payloads[i]);
-            SymID fieldName = sym_.intern("payload_" + std::to_string(i));
-            storeField(
-                castPtr, variantStructTy, payloads[i], fieldName, static_cast<int>(i), pType, pos);
-        }
-    }
-    current_ = prev;
-}
 
 BasicBlock* Builder::emitCoroSuspend(Position pos)
 {

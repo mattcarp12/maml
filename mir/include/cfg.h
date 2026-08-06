@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ast_nodes.h"
 #include "mir.h"
 #include "sym.h"
 #include "types.h"

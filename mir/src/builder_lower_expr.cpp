@@ -1,5 +1,5 @@
 #include "ast.h"
-#include "ast_nodes.h"
+
 #include "builder.h"
 #include "cfg.h"
 #include "mir.h"
@@ -8,7 +8,6 @@
 #include "types.h"
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -102,11 +101,13 @@ void Builder::lowerStmt(ast::Stmt stmt)
 
                 if (needsAlloca) {
                     locals_[uniqueName] = reg_.getPrimitive(types::TypeKind::Ptr);
-                    push(AllocaInst { uniqueName, t, s->pos });
+                    push(AllocaInst { .dst = uniqueName, .type = t, .pos = s->pos });
 
-                    Value ptrReg
-                        = Register { uniqueName, reg_.getPrimitive(types::TypeKind::Ptr), s->pos };
-                    push(StoreInst { ptrReg, flatRHS, t, s->pos });
+                    Value ptrReg = Register { .name = uniqueName,
+                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                        .pos = s->pos };
+                    push(
+                        StoreInst { .dstPtr = ptrReg, .value = flatRHS, .type = t, .pos = s->pos });
                 } else {
                     locals_[uniqueName] = t;
                     emitTransfer(uniqueName, flatRHS, s->pos);
@@ -133,7 +134,8 @@ void Builder::lowerStmt(ast::Stmt stmt)
                     } else {
                         writeVal = lowerExpr(s->rValue);
                     }
-                    push(StoreInst { ptrVal, writeVal, fa->exprType, s->pos });
+                    push(StoreInst {
+                        .dstPtr = ptrVal, .value = writeVal, .type = fa->exprType, .pos = s->pos });
                     return;
                 }
 
@@ -174,7 +176,10 @@ void Builder::lowerStmt(ast::Stmt stmt)
                     } else {
                         writeVal = lowerExpr(s->rValue);
                     }
-                    push(StoreInst { ptrVal, writeVal, idx->exprType, s->pos });
+                    push(StoreInst { .dstPtr = ptrVal,
+                        .value = writeVal,
+                        .type = idx->exprType,
+                        .pos = s->pos });
                     return;
                 }
 
@@ -184,8 +189,9 @@ void Builder::lowerStmt(ast::Stmt stmt)
 
                     // IMPLICIT STORE: If the local is a pointer, mutate the underlying memory
                     if (locals_[dstName]->kind == types::TypeKind::Ptr) {
-                        Value ptrReg
-                            = Register { dstName, reg_.getPrimitive(types::TypeKind::Ptr), s->pos };
+                        Value ptrReg = Register { .name = dstName,
+                            .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                            .pos = s->pos };
                         Value writeVal;
                         if (s->op != TokenType::ASSIGN) {
                             writeVal = emitCompoundMath(
@@ -193,7 +199,10 @@ void Builder::lowerStmt(ast::Stmt stmt)
                         } else {
                             writeVal = lowerExpr(s->rValue);
                         }
-                        push(StoreInst { ptrReg, writeVal, ident->exprType, s->pos });
+                        push(StoreInst { .dstPtr = ptrReg,
+                            .value = writeVal,
+                            .type = ident->exprType,
+                            .pos = s->pos });
                         return;
                     }
 
@@ -204,8 +213,12 @@ void Builder::lowerStmt(ast::Stmt stmt)
                         Value flatLHS = lowerExpr(s->lValue);
                         Value flatRHS = lowerExpr(s->rValue);
                         SymID opTmp = newTemp();
-                        writeVal = emit(BinaryOpInst { opTmp, flatLHS, s->op, flatRHS,
-                                            ident->exprType, s->pos },
+                        writeVal = emit(BinaryOpInst { .dst = opTmp,
+                                            .left = flatLHS,
+                                            .op = s->op,
+                                            .right = flatRHS,
+                                            .type = ident->exprType,
+                                            .pos = s->pos },
                             opTmp, ident->exprType);
                     } else {
                         writeVal = lowerExpr(s->rValue);
@@ -217,13 +230,15 @@ void Builder::lowerStmt(ast::Stmt stmt)
             [&](ast::YieldStmt* s) { lowerExpr(s->value); },
             [&](ast::BreakStmt* s) {
                 if (!loops_.empty()) {
-                    current_->terminator = JumpTerminator { loops_.back().exit, s->pos };
+                    current_->terminator
+                        = JumpTerminator { .target = loops_.back().exit, .pos = s->pos };
                     current_ = nullptr;
                 }
             },
             [&](ast::ContinueStmt* s) {
                 if (!loops_.empty()) {
-                    current_->terminator = JumpTerminator { loops_.back().header, s->pos };
+                    current_->terminator
+                        = JumpTerminator { .target = loops_.back().header, .pos = s->pos };
                     current_ = nullptr;
                 }
             },
@@ -241,12 +256,14 @@ void Builder::lowerStmt(ast::Stmt stmt)
                     BasicBlock* suspendBlock = newBlock();
                     BasicBlock* cleanupBlock = newBlock();
 
-                    current_->terminator = CoroFinalSuspendTerminator { flatRet, suspendBlock->id,
-                        cleanupBlock->id, s->pos };
+                    current_->terminator = CoroFinalSuspendTerminator { .value = flatRet,
+                        .suspendBlock = suspendBlock->id,
+                        .cleanupBlock = cleanupBlock->id,
+                        .pos = s->pos };
                     cleanupBlock->terminator = CoroYieldTerminator { s->pos };
                     suspendBlock->terminator = UnreachableTerminator { s->pos };
                 } else {
-                    current_->terminator = ReturnTerminator { flatRet, s->pos };
+                    current_->terminator = ReturnTerminator { .value = flatRet, .pos = s->pos };
                 }
                 current_ = nullptr;
             },
@@ -260,7 +277,8 @@ void Builder::lowerStmt(ast::Stmt stmt)
                     lowerStmt(s->init);
 
                 if (current_) {
-                    current_->terminator = JumpTerminator { condBlock->id, s->pos };
+                    current_->terminator
+                        = JumpTerminator { .target = condBlock->id, .pos = s->pos };
                 }
 
                 current_ = condBlock;
@@ -268,12 +286,15 @@ void Builder::lowerStmt(ast::Stmt stmt)
                 if (!std::holds_alternative<std::monostate>(s->condition)) {
                     flatCond = lowerExpr(s->condition);
                 } else {
-                    flatCond
-                        = BoolConstant { true, reg_.getPrimitive(types::TypeKind::Bool), s->pos };
+                    flatCond = BoolConstant { .value = true,
+                        .type = reg_.getPrimitive(types::TypeKind::Bool),
+                        .pos = s->pos };
                 }
 
-                current_->terminator
-                    = BranchTerminator { flatCond, bodyBlock->id, exitBlock->id, s->pos };
+                current_->terminator = BranchTerminator { .condition = flatCond,
+                    .trueTarget = bodyBlock->id,
+                    .falseTarget = exitBlock->id,
+                    .pos = s->pos };
 
                 loops_.push_back({ postBlock->id, exitBlock->id });
 
@@ -281,14 +302,16 @@ void Builder::lowerStmt(ast::Stmt stmt)
                 if (s->body)
                     lowerStmt(s->body);
                 if (current_ && std::holds_alternative<std::monostate>(current_->terminator)) {
-                    current_->terminator = JumpTerminator { postBlock->id, s->pos };
+                    current_->terminator
+                        = JumpTerminator { .target = postBlock->id, .pos = s->pos };
                 }
 
                 current_ = postBlock;
                 if (!std::holds_alternative<std::monostate>(s->post))
                     lowerStmt(s->post);
                 if (current_ && std::holds_alternative<std::monostate>(current_->terminator)) {
-                    current_->terminator = JumpTerminator { condBlock->id, s->pos };
+                    current_->terminator
+                        = JumpTerminator { .target = condBlock->id, .pos = s->pos };
                 }
 
                 loops_.pop_back();
@@ -394,6 +417,39 @@ Value Builder::addressOf(ast::Expr expr)
                 return emit(
                     IndexAddrInst { ptrTmp, basePtr, sourceType, idxVal, e->exprType, e->pos },
                     ptrTmp, reg_.getPrimitive(types::TypeKind::Ptr));
+            },
+            [&](ast::TaggedUnionAccessExpr* e) -> Value {
+                Value objPtr = addressOf(e->object);
+                const types::Type* layoutType = safeGetExprType(e->object);
+
+                Value rawPayloadAddr = emitFieldAddr(objPtr, layoutType, sym_.intern("payload"), 1,
+                    reg_.getPrimitive(types::TypeKind::Unknown), e->pos);
+
+                SymID castTmp = newPtrTemp();
+                push(BitcastPtrInst { .dst = castTmp,
+                    .src = rawPayloadAddr,
+                    .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                    .pos = e->pos });
+                Value typedPayloadPtr = Register {
+                    .name = castTmp, .type = reg_.getPrimitive(types::TypeKind::Ptr), .pos = e->pos
+                };
+
+                SymID fieldName = sym_.intern("payload_" + std::to_string(e->fieldIndex));
+                const types::Type* fieldType = e->exprType;
+                if (e->payloadStructType && e->payloadStructType->kind == types::TypeKind::Struct) {
+                    const auto& fields
+                        = std::get<types::StructPayload>(e->payloadStructType->payload).fields;
+                    if (static_cast<size_t>(e->fieldIndex) < fields.size()) {
+                        fieldName = fields[e->fieldIndex].name;
+                        if (fields[e->fieldIndex].type) {
+                            fieldType = fields[e->fieldIndex].type;
+                        }
+                    }
+                }
+
+                // Return the memory address of the field instead of loading it
+                return emitFieldAddr(typedPayloadPtr, e->payloadStructType, fieldName,
+                    e->fieldIndex, fieldType, e->pos);
             },
             [&](auto) -> Value {
                 // Should not be reached for valid L-Values
@@ -505,24 +561,50 @@ Value Builder::lowerExpr(ast::Expr expr)
         overloaded { [&](std::monostate) -> Value { return std::monostate {}; },
             [&](ast::BlockStmt* s) -> Value {
                 lowerBlockStmt(s);
-                return std::monostate {};
+
+                // A block used as an expression yields the value of its trailing
+                // YieldStmt/ExprStmt, mirroring how IfExpr extracts branch results.
+                if (!current_ || !s || s->statements.empty()) {
+                    return std::monostate {};
+                }
+
+                return std::visit(
+                    [this](auto&& tailStmt) -> Value {
+                        using T = std::decay_t<decltype(tailStmt)>;
+                        if constexpr (std::is_same_v<T, ast::YieldStmt*>) {
+                            return lowerExpr(tailStmt->value);
+                        } else if constexpr (std::is_same_v<T, ast::ExprStmt*>) {
+                            return lowerExpr(tailStmt->value);
+                        } else {
+                            return std::monostate {};
+                        }
+                    },
+                    s->statements.back());
             },
             [&](ast::Identifier* e) -> Value {
+                // 1. Check if it's a local variable in the environment
                 SymID regName = resolveLocal(e->name);
-                const types::Type* t = locals_[regName];
+                if (locals_.find(regName) != locals_.end()) {
+                    const types::Type* t = locals_[regName];
 
-                // IMPLICIT LOAD: If the MIR tracks a pointer (e.g. mut parameter), load it
-                if (t && e->exprType && t->kind == types::TypeKind::Ptr
-                    && e->exprType->kind != types::TypeKind::Ptr) {
-                    Value ptrReg = Register { regName, t, e->pos };
-                    return emitLoad(ptrReg, e->exprType, e->pos);
+                    if (t && e->exprType && t->kind == types::TypeKind::Ptr
+                        && e->exprType->kind != types::TypeKind::Ptr) {
+                        Value ptrReg = Register { .name = regName, .type = t, .pos = e->pos };
+                        return emitLoad(ptrReg, e->exprType, e->pos);
+                    }
+                    return Register { .name = regName, .type = t, .pos = e->pos };
                 }
-                return Register { regName, t, e->pos };
+
+                // REMOVED: Fallback loop checking for unit Sum Type constructors (None, Red, etc.)
+
+                return Register { .name = regName,
+                    .type = reg_.getPrimitive(types::TypeKind::Unknown),
+                    .pos = e->pos };
             },
             [&](ast::IntLiteral* e) -> Value {
                 const types::Type* ty
                     = e->exprType ? e->exprType : reg_.getPrimitive(types::TypeKind::I64);
-                return IntConstant { e->value, ty, e->pos };
+                return IntConstant { .value = e->value, .type = ty, .pos = e->pos };
             },
             [&](ast::BoolLiteral* e) -> Value {
                 const types::Type* ty
@@ -531,16 +613,18 @@ Value Builder::lowerExpr(ast::Expr expr)
             },
             [&](ast::StringLiteral* e) -> Value {
                 SymID tmp = emitTemp(e->exprType);
-                push(AllocaInst { tmp, e->exprType, e->pos });
-                Value obj = Register { tmp, e->exprType, e->pos };
-                Value rawStrPtr
-                    = StringConstant { e->value, reg_.getPrimitive(types::TypeKind::Ptr), e->pos };
+                push(AllocaInst { .dst = tmp, .type = e->exprType, .pos = e->pos });
+                Value obj = Register { .name = tmp, .type = e->exprType, .pos = e->pos };
+                Value rawStrPtr = StringConstant { .value = e->value,
+                    .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                    .pos = e->pos };
 
                 storeField(obj, e->exprType, rawStrPtr, sym_.intern("ptr"), 0,
                     reg_.getPrimitive(types::TypeKind::Ptr), e->pos);
                 storeField(obj, e->exprType,
-                    IntConstant { static_cast<int64_t>(e->value.length()),
-                        reg_.getPrimitive(types::TypeKind::I32), e->pos },
+                    IntConstant { .value = static_cast<int64_t>(e->value.length()),
+                        .type = reg_.getPrimitive(types::TypeKind::I32),
+                        .pos = e->pos },
                     sym_.intern("len"), 1, reg_.getPrimitive(types::TypeKind::I32), e->pos);
                 storeField(obj, e->exprType,
                     BoolConstant { false, reg_.getPrimitive(types::TypeKind::Bool), e->pos },
@@ -548,38 +632,8 @@ Value Builder::lowerExpr(ast::Expr expr)
                 return obj;
             },
             [&](ast::InfixExpr* e) -> Value {
-                // Short-circuiting for logical operators (Replaces the HIR IfExpr
-                // desugaring)[cite: 3, 4]
-                if (e->op == TokenType::AND || e->op == TokenType::OR) {
-                    Value flatLHS = lowerExpr(e->left);
-                    BasicBlock* rhsBlock = newBlock();
-                    BasicBlock* mergeBlock = newBlock();
-
-                    SymID resTmp = emitTemp(reg_.getPrimitive(types::TypeKind::Bool));
-
-                    if (e->op == TokenType::AND) {
-                        current_->terminator
-                            = BranchTerminator { flatLHS, rhsBlock->id, mergeBlock->id, e->pos };
-                        push(AssignInst { resTmp,
-                            BoolConstant {
-                                false, reg_.getPrimitive(types::TypeKind::Bool), e->pos },
-                            e->pos });
-                    } else {
-                        current_->terminator
-                            = BranchTerminator { flatLHS, mergeBlock->id, rhsBlock->id, e->pos };
-                        push(AssignInst { resTmp,
-                            BoolConstant { true, reg_.getPrimitive(types::TypeKind::Bool), e->pos },
-                            e->pos });
-                    }
-
-                    current_ = rhsBlock;
-                    Value flatRHS = lowerExpr(e->right);
-                    push(AssignInst { resTmp, flatRHS, e->pos });
-                    current_->terminator = JumpTerminator { mergeBlock->id, e->pos };
-
-                    current_ = mergeBlock;
-                    return Register { resTmp, reg_.getPrimitive(types::TypeKind::Bool), e->pos };
-                }
+                // REMOVED: Logical short-circuiting for && and || (now lowered to IfExpr by
+                // hir::Desugarer)
 
                 Value flatLeft = lowerExpr(e->left);
                 Value flatRight = lowerExpr(e->right);
@@ -605,7 +659,8 @@ Value Builder::lowerExpr(ast::Expr expr)
 
                 BasicBlock* thenBlock = newBlock();
                 BasicBlock* mergeBlock = newBlock();
-                BasicBlock* elseBlock = e->alternative ? newBlock() : mergeBlock;
+                BasicBlock* elseBlock
+                    = (e->alternative || e->alternativeIsUnreachable) ? newBlock() : mergeBlock;
 
                 bool isUnit = (e->exprType->kind == types::TypeKind::Unit);
                 SymID resultTemp = NoSymbol;
@@ -639,10 +694,12 @@ Value Builder::lowerExpr(ast::Expr expr)
                                       },
                                       e->consequence->statements.back()));
                         if (!std::holds_alternative<std::monostate>(thenYield))
-                            push(AssignInst { resultTemp, thenYield, e->pos });
+                            push(AssignInst {
+                                .dst = resultTemp, .rValue = thenYield, .pos = e->pos });
                     }
                     if (std::holds_alternative<std::monostate>(current_->terminator))
-                        current_->terminator = JumpTerminator { mergeBlock->id, e->pos };
+                        current_->terminator
+                            = JumpTerminator { .target = mergeBlock->id, .pos = e->pos };
                     mergeReachable = true;
                 }
 
@@ -670,6 +727,11 @@ Value Builder::lowerExpr(ast::Expr expr)
                             current_->terminator = JumpTerminator { mergeBlock->id, e->pos };
                         mergeReachable = true;
                     }
+                } else if (e->alternativeIsUnreachable) {
+                    // Exhaustive match, no wildcard arm: this branch is provably impossible.
+                    // Terminate here instead of silently falling through into mergeBlock.
+                    elseBlock->terminator = UnreachableTerminator { e->pos };
+                    // Contributes nothing reachable — do not set mergeReachable from this path.
                 } else {
                     mergeReachable = true;
                 }
@@ -684,39 +746,17 @@ Value Builder::lowerExpr(ast::Expr expr)
                 return resultReg;
             },
             [&](ast::CallExpr* e) -> Value {
-                // Intrinsics
+                // REMOVED: String-matching intrinsic checks ("yield_now", "len", "delete")
+                // REMOVED: Sum Type constructor variant loop
+
+                // Keep run_executor runtime dispatch if needed by async top-level setup
                 if (auto** idPtr = std::get_if<ast::Identifier*>(&e->function)) {
                     std::string_view fnName = sym_.resolve((*idPtr)->name);
-                    if (fnName == "yield_now") {
-                        emitRuntimeCall(sym_.intern("maml_yield_now"),
-                            reg_.getPrimitive(types::TypeKind::Unit), { currentFuture_ }, e->pos);
-                        current_ = emitCoroSuspend(e->pos);
-                        return std::monostate {};
-                    } else if (fnName == "run_executor") {
+                    if (fnName == "run_executor") {
                         Value flatArg = lowerExpr(e->arguments[0].argument);
                         emitRuntimeCall(sym_.intern("maml_run_executor"),
                             reg_.getPrimitive(types::TypeKind::Ptr), { flatArg }, e->pos);
                         return emitGetFutureResult(flatArg, e->exprType, e->pos);
-                    } else if (fnName == "len") {
-                        Value ptrReg = addressOf(e->arguments[0].argument);
-                        const types::Type* argType = safeGetExprType(e->arguments[0].argument);
-                        if (argType->kind == types::TypeKind::Vector
-                            || argType->kind == types::TypeKind::View)
-                            return emitRuntimeCall(sym_.intern("maml_vec_len"),
-                                reg_.getPrimitive(types::TypeKind::U32), { ptrReg }, e->pos);
-                        if (argType->kind == types::TypeKind::Map)
-                            return emitRuntimeCall(sym_.intern("maml_map_len"),
-                                reg_.getPrimitive(types::TypeKind::U32), { ptrReg }, e->pos);
-                        if (argType->kind == types::TypeKind::String)
-                            return emitRuntimeCall(sym_.intern("maml_str_len"),
-                                reg_.getPrimitive(types::TypeKind::U32), { ptrReg }, e->pos);
-                    } else if (fnName == "delete") {
-                        Value mapPtrReg = addressOf(e->arguments[0].argument);
-                        auto [hashVal, ptrVal, lenVal]
-                            = lowerMapKey(e->arguments[1].argument, e->pos);
-                        return emitRuntimeCall(sym_.intern("maml_map_delete"),
-                            reg_.getPrimitive(types::TypeKind::Unit),
-                            { mapPtrReg, hashVal, ptrVal, lenVal }, e->pos);
                     }
                 }
 
@@ -756,7 +796,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                 Value ptrVal = addressOf(e);
                 const types::Type* sourceType = safeGetExprType(e->left);
 
-                // Map Option Wrapping
+                // Note: Map Option wrapping can remain here unless desugared separately
                 if (sourceType->kind == types::TypeKind::Map) {
                     auto [hashVal, keyPtrVal, lenVal] = lowerMapKey(e->index, e->pos);
                     Value opaquePtr = emitRuntimeCall(sym_.intern("maml_map_get"),
@@ -793,16 +833,29 @@ Value Builder::lowerExpr(ast::Expr expr)
                     current_ = thenBlock;
                     SymID valTmp = emitTemp(valType);
                     push(LoadPtrInst { valTmp, opaquePtr, valType, e->pos });
+                    // Explicit store to structural Option layout instead of emitVariantInit
                     SymID someTmp = emitTemp(e->exprType);
-                    emitVariantInit(thenBlock, someTmp, e->exprType, sym_.intern("Some"), 0,
-                        { Register { valTmp, valType, e->pos } }, e->pos);
+                    push(AllocaInst { .dst = someTmp, .type = e->exprType, .pos = e->pos });
+                    Value somePtr = emitBorrow(someTmp, true, e->pos);
+                    storeField(somePtr, e->exprType,
+                        IntConstant { 0, reg_.getPrimitive(types::TypeKind::I32), e->pos },
+                        sym_.intern("discriminant"), 0, reg_.getPrimitive(types::TypeKind::I32),
+                        e->pos);
+                    storeField(somePtr, e->exprType, Register { valTmp, valType, e->pos },
+                        sym_.intern("payload_0"), 1, valType, e->pos);
+
                     push(AssignInst { resTmp, Register { someTmp, e->exprType, e->pos }, e->pos });
                     thenBlock->terminator = JumpTerminator { mergeBlock->id, e->pos };
 
                     current_ = elseBlock;
                     SymID noneTmp = emitTemp(e->exprType);
-                    emitVariantInit(
-                        elseBlock, noneTmp, e->exprType, sym_.intern("None"), 1, {}, e->pos);
+                    push(AllocaInst { .dst = noneTmp, .type = e->exprType, .pos = e->pos });
+                    Value nonePtr = emitBorrow(noneTmp, true, e->pos);
+                    storeField(nonePtr, e->exprType,
+                        IntConstant { 1, reg_.getPrimitive(types::TypeKind::I32), e->pos },
+                        sym_.intern("discriminant"), 0, reg_.getPrimitive(types::TypeKind::I32),
+                        e->pos);
+
                     push(AssignInst { resTmp, Register { noneTmp, e->exprType, e->pos }, e->pos });
                     elseBlock->terminator = JumpTerminator { mergeBlock->id, e->pos };
 
@@ -923,7 +976,6 @@ Value Builder::lowerExpr(ast::Expr expr)
                         SymID fieldName = NoSymbol;
                         const types::Type* fieldType = nullptr;
 
-                        // Named field: { name: value }
                         if (!std::holds_alternative<std::monostate>(elem.key)) {
                             if (auto idPtr = std::get_if<ast::Identifier*>(&elem.key)) {
                                 fieldName = (*idPtr)->name;
@@ -935,9 +987,7 @@ Value Builder::lowerExpr(ast::Expr expr)
                                     }
                                 }
                             }
-                        }
-                        // Positional field
-                        else if (i < fields.size()) {
+                        } else if (i < fields.size()) {
                             fieldIdx = static_cast<int>(i);
                             fieldName = fields[i].name;
                             fieldType = fields[i].type;
@@ -981,252 +1031,176 @@ Value Builder::lowerExpr(ast::Expr expr)
 
                 return std::monostate {};
             },
-            [&](ast::MatchExpr* e) -> Value {
-                // Direct CFG Unrolling
-                Value subjectVal = lowerExpr(e->subject);
-                const types::Type* subjectType = getTypeOf(subjectVal);
+            [&](ast::TaggedUnionConstructExpr* e) -> Value {
+                // Step 1: Allocate stack space for the layout struct (discriminant + payload array)
+                const types::Type* layoutType = e->exprType;
+                SymID tmp = emitTemp(layoutType);
+                push(AllocaInst { .dst = tmp, .type = layoutType, .pos = e->pos });
+                Value basePtr = emitBorrow(tmp, true, e->pos);
 
-                // Assign subject to a local temp to avoid re-evaluation
-                SymID subjectReg = emitTemp(subjectType);
-                if (subjectType
-                    && (ownsHeapMemory(subjectType) || subjectType->kind == types::TypeKind::Sum
-                        || subjectType->kind == types::TypeKind::Struct)) {
-                    push(AllocaInst { .dst = subjectReg, .type = subjectType, .pos = e->pos });
-                }
-                emitTransfer(subjectReg, subjectVal, e->pos);
-                Value stableSubject
-                    = Register { .name = subjectReg, .type = subjectType, .pos = e->pos };
+                // Step 2: Store the discriminant integer into Field 0 (i32)
+                const types::Type* i32Type = reg_.getPrimitive(types::TypeKind::I32);
+                Value discVal
+                    = IntConstant { .value = e->discriminant, .type = i32Type, .pos = e->pos };
+                storeField(
+                    basePtr, layoutType, discVal, sym_.intern("discriminant"), 0, i32Type, e->pos);
 
-                BasicBlock* mergeBlock = newBlock();
-                bool isUnit = (e->exprType->kind == types::TypeKind::Unit);
-                SymID resultTemp = isUnit ? NoSymbol : emitTemp(e->exprType);
-                if (!isUnit) {
-                    push(AllocaInst { .dst = resultTemp, .type = e->exprType, .pos = e->pos });
-                }
-                bool mergeReachable = false;
+                // Step 3: If this variant has payload arguments, store them into Field 1
+                if (!e->payloadArgs.empty() && e->payloadStructType) {
+                    Value rawPayloadAddr
+                        = emitFieldAddr(basePtr, layoutType, sym_.intern("payload"), 1,
+                            reg_.getPrimitive(types::TypeKind::Unknown), e->pos);
 
-                for (const auto& arm : e->arms) {
-                    BasicBlock* armBodyBlock = newBlock();
-                    BasicBlock* nextCondBlock = newBlock();
+                    // Bitcast the raw byte array pointer to the variant's structural payload struct
+                    SymID castTmp = newPtrTemp();
+                    push(BitcastPtrInst { .dst = castTmp,
+                        .src = rawPayloadAddr,
+                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                        .pos = e->pos });
+                    Value typedPayloadPtr = Register { .name = castTmp,
+                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                        .pos = e->pos };
 
-                    Value condVal = std::monostate {};
-                    std::vector<std::function<void()>>
-                        bindings; // Deferred bindings to inject into the arm body
+                    // Step 4: Evaluate each payload argument and store it into the bitcasted struct
+                    const auto& payloadFields
+                        = std::get<types::StructPayload>(e->payloadStructType->payload).fields;
+                    for (size_t i = 0; i < e->payloadArgs.size(); ++i) {
+                        Value argValue = lowerExpr(e->payloadArgs[i]);
+                        const types::Type* fieldType = (i < payloadFields.size())
+                            ? payloadFields[i].type
+                            : getTypeOf(argValue);
+                        SymID fieldName = (i < payloadFields.size())
+                            ? payloadFields[i].name
+                            : sym_.intern("payload_" + std::to_string(i));
 
-                    // Pattern Matching Logic
-                    std::visit(
-                        overloaded { [&](std::monostate) {},
-                            [&](ast::WildcardPattern* p) {
-                                condVal = BoolConstant { .value = true,
-                                    .type = reg_.getPrimitive(types::TypeKind::Bool),
-                                    .pos = p->pos };
-                            },
-                            [&](ast::LiteralPattern* p) {
-                                Value litVal = lowerExpr(p->value);
-                                SymID condTmp = newTemp();
-                                condVal = emit(BinaryOpInst { .dst = condTmp,
-                                                   .left = stableSubject,
-                                                   .op = TokenType::EQ,
-                                                   .right = litVal,
-                                                   .type = reg_.getPrimitive(types::TypeKind::Bool),
-                                                   .pos = p->pos },
-                                    condTmp, reg_.getPrimitive(types::TypeKind::Bool));
-                            },
-                            [&](ast::IdentifierPattern* p) {
-                                bool isUnitVariant = false;
-                                if (subjectType->kind == types::TypeKind::Sum) {
-                                    const auto& payload
-                                        = std::get<types::SumPayload>(subjectType->payload);
-                                    for (const auto& v : payload.variants) {
-                                        if (v.name == p->name) {
-                                            isUnitVariant = true;
-                                            Value subjectPtr
-                                                = emitBorrow(subjectReg, false, p->pos);
-                                            Value discVal = loadField(subjectPtr, subjectType,
-                                                sym_.intern("discriminant"), 0,
-                                                reg_.getPrimitive(types::TypeKind::I32), p->pos);
-                                            SymID condTmp = newTemp();
-                                            condVal = emit(
-                                                BinaryOpInst { .dst = condTmp,
-                                                    .left = discVal,
-                                                    .op = TokenType::EQ,
-                                                    .right = IntConstant { .value = v.discriminant,
-                                                        .type
-                                                        = reg_.getPrimitive(types::TypeKind::I32),
-                                                        .pos = p->pos },
-                                                    .type
-                                                    = reg_.getPrimitive(types::TypeKind::Bool),
-                                                    .pos = p->pos },
-                                                condTmp, reg_.getPrimitive(types::TypeKind::Bool));
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (!isUnitVariant) {
-                                    condVal = BoolConstant { .value = true,
-                                        .type = reg_.getPrimitive(types::TypeKind::Bool),
-                                        .pos = p->pos };
-                                    bindings.emplace_back(
-                                        [&, name = p->name, t = subjectType, pos = p->pos]() {
-                                            SymID local = defineLocal(name);
-                                            locals_[local] = t;
-                                            emitTransfer(local, stableSubject, pos);
-                                        });
-                                }
-                            },
-                            [&](ast::CompositePattern* p) {
-                                if (!subjectType || subjectType->kind != types::TypeKind::Sum) {
-                                    return;
-                                }
-
-                                // 1. Extract the variant name symbol (e.g. "Some" or "Ok")
-                                SymID variantName = NoSymbol;
-                                if (auto** ntePtr
-                                    = std::get_if<ast::NamedTypeExpr*>(&p->typeExpr)) {
-                                    if (*ntePtr && (*ntePtr)->name) {
-                                        variantName = (*ntePtr)->name->name;
-                                    }
-                                }
-
-                                if (variantName == NoSymbol)
-                                    return;
-                                // 2. Find matching variant in the Sum type payload
-                                const auto& sumPayload
-                                    = std::get<types::SumPayload>(subjectType->payload);
-                                const types::SumVariant* matchedVariant = nullptr;
-                                for (const auto& v : sumPayload.variants) {
-                                    if (v.name == variantName) {
-                                        matchedVariant = &v;
-                                        break;
-                                    }
-                                }
-
-                                if (!matchedVariant)
-                                    return;
-
-                                // 3. Emit discriminant comparison (discriminant ==
-                                // variant.discriminant)
-                                Value discVal = loadField(addressOf(e->subject), subjectType,
-                                    sym_.intern("discriminant"), 0,
-                                    reg_.getPrimitive(types::TypeKind::I32), p->pos);
-
-                                SymID condTmp = newTemp();
-                                condVal = emit(
-                                    BinaryOpInst { .dst = condTmp,
-                                        .left = discVal,
-                                        .op = TokenType::EQ,
-                                        .right
-                                        = IntConstant { .value = matchedVariant->discriminant,
-                                            .type = reg_.getPrimitive(types::TypeKind::I32),
-                                            .pos = p->pos },
-                                        .type = reg_.getPrimitive(types::TypeKind::Bool),
-                                        .pos = p->pos },
-                                    condTmp, reg_.getPrimitive(types::TypeKind::Bool));
-
-                                // 4. Bind payload variables (e.g. `idx` in `Some(idx)`)
-                                bindings.emplace_back([&, p, matchedVariant, variantName,
-                                                          t = subjectType, pos = p->pos]() {
-                                    if (p->elements.empty())
-                                        return;
-
-                                    Value basePtr = emitBorrow(subjectReg, false, pos);
-                                    Value payloadArrPtr
-                                        = emitFieldAddr(basePtr, t, sym_.intern("payload"), 1,
-                                            reg_.getPrimitive(types::TypeKind::Unknown), pos);
-
-                                    const types::Type* variantStructTy
-                                        = getVariantPayloadStructType(t, variantName);
-
-                                    SymID castTmp = newPtrTemp();
-                                    push(BitcastPtrInst { .dst = castTmp,
-                                        .src = payloadArrPtr,
-                                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
-                                        .pos = pos });
-                                    Value castPtr = Register { .name = castTmp,
-                                        .type = reg_.getPrimitive(types::TypeKind::Ptr),
-                                        .pos = pos };
-
-                                    for (size_t i = 0; i < p->elements.size(); ++i) {
-                                        const auto& elemPattern = p->elements[i].pattern;
-                                        if (auto* ip
-                                            = std::get_if<ast::IdentifierPattern*>(&elemPattern)) {
-                                            SymID fieldName
-                                                = sym_.intern("payload_" + std::to_string(i));
-                                            const types::Type* fieldType = nullptr;
-
-                                            if (i < matchedVariant->tupleTypes.size()) {
-                                                fieldType = matchedVariant->tupleTypes[i];
-                                            } else if (i - matchedVariant->tupleTypes.size()
-                                                < matchedVariant->fields.size()) {
-                                                fieldType
-                                                    = matchedVariant
-                                                          ->fields[i
-                                                              - matchedVariant->tupleTypes.size()]
-                                                          .type;
-                                            }
-
-                                            if (!fieldType)
-                                                fieldType = reg_.getPrimitive(types::TypeKind::I64);
-
-                                            Value fieldVal = loadField(castPtr, variantStructTy,
-                                                fieldName, static_cast<int>(i), fieldType, pos);
-
-                                            SymID local = defineLocal((*ip)->name);
-                                            locals_[local] = fieldType;
-                                            emitTransfer(local, fieldVal, pos);
-                                        }
-                                    }
-                                });
-                            } },
-                        arm.pattern);
-
-                    if (!std::holds_alternative<std::monostate>(condVal)) {
-                        current_->terminator = BranchTerminator { condVal, armBodyBlock->id,
-                            nextCondBlock->id, arm.pos };
+                        storeField(typedPayloadPtr, e->payloadStructType, argValue, fieldName,
+                            static_cast<int>(i), fieldType, e->pos);
                     }
+                }
 
-                    current_ = armBodyBlock;
-                    enterScope();
-                    for (auto& bind : bindings)
-                        bind();
-                    lowerExpr(arm.body);
+                return Register { .name = tmp, .type = layoutType, .pos = e->pos };
+            },
+            [&](ast::TaggedUnionAccessExpr* e) -> Value {
+                // Step 1: Get the pointer address of the underlying layout struct
+                Value objPtr = addressOf(e->object);
+                const types::Type* layoutType = safeGetExprType(e->object);
 
-                    if (current_) {
-                        if (!isUnit) {
-                            Value yieldVal = lowerExpr(std::visit(
-                                [](auto&& s) -> ast::Expr {
-                                    using T = std::decay_t<decltype(s)>;
-                                    if constexpr (std::is_same_v<T, ast::YieldStmt*>) {
-                                        return s->value;
-                                    }
-                                    return std::monostate {};
-                                },
-                                std::get<ast::BlockStmt*>(arm.body)->statements.back()));
-                            push(AssignInst { resultTemp, yieldVal, arm.pos });
+                // Step 2: Address Field 1 (payload byte array)
+                Value rawPayloadAddr = emitFieldAddr(objPtr, layoutType, sym_.intern("payload"), 1,
+                    reg_.getPrimitive(types::TypeKind::Unknown), e->pos);
+
+                // Step 3: Bitcast raw byte array pointer to the payload struct pointer
+                SymID castTmp = newPtrTemp();
+                push(BitcastPtrInst { .dst = castTmp,
+                    .src = rawPayloadAddr,
+                    .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                    .pos = e->pos });
+                Value typedPayloadPtr = Register {
+                    .name = castTmp, .type = reg_.getPrimitive(types::TypeKind::Ptr), .pos = e->pos
+                };
+
+                // Step 4: Resolve field name/type and load from the bitcasted payload struct
+                SymID fieldName = sym_.intern("payload_" + std::to_string(e->fieldIndex));
+                const types::Type* fieldType = e->exprType;
+                if (e->payloadStructType && e->payloadStructType->kind == types::TypeKind::Struct) {
+                    const auto& fields
+                        = std::get<types::StructPayload>(e->payloadStructType->payload).fields;
+                    if (static_cast<size_t>(e->fieldIndex) < fields.size()) {
+                        fieldName = fields[e->fieldIndex].name;
+                        if (fields[e->fieldIndex].type) {
+                            fieldType = fields[e->fieldIndex].type;
                         }
-                        if (std::holds_alternative<std::monostate>(current_->terminator))
-                            current_->terminator = JumpTerminator { mergeBlock->id, arm.pos };
-                        mergeReachable = true;
                     }
-                    exitScope();
-
-                    current_ = nextCondBlock;
                 }
 
-                if (!mergeReachable) {
-                    current_ = nullptr;
-                    graph_->blocks.erase(mergeBlock->id);
-                } else {
-                    current_->terminator
-                        = JumpTerminator { mergeBlock->id, e->pos }; // Fallthrough catch
-                    current_ = mergeBlock;
-                }
-
-                return isUnit ? Value(std::monostate {})
-                              : Value(Register { resultTemp, e->exprType, e->pos });
+                return loadField(typedPayloadPtr, e->payloadStructType, fieldName, e->fieldIndex,
+                    fieldType, e->pos);
+            },
+            [&](ast::CastExpr* e) -> Value {
+                Value flatSrc = lowerExpr(e->source);
+                SymID castTmp = emitTemp(e->targetType);
+                return emit(
+                    CastInst {
+                        .dst = castTmp, .src = flatSrc, .type = e->targetType, .pos = e->pos },
+                    castTmp, e->targetType);
+            },
+            [&](ast::IntrinsicCallExpr* e) -> Value {
+                // Dispatched to Phase 3 intrinsic helper
+                return lowerIntrinsicCallExpr(e);
             },
             [&](auto) -> Value { return std::monostate {}; } },
         expr);
+}
+
+// =============================================================================
+// Phase 3: Dedicated Intrinsic Dispatcher
+// =============================================================================
+
+Value Builder::lowerIntrinsicCallExpr(ast::IntrinsicCallExpr* e)
+{
+    std::string_view intrinsicName = sym_.resolve(e->intrinsicSym);
+
+    // 1. Coroutine Suspension: "maml_yield_now"
+    //    Requires passing currentFuture_ and mutating the CFG via emitCoroSuspend.
+    if (intrinsicName == "maml_yield_now") {
+        emitRuntimeCall(sym_.intern("maml_yield_now"), reg_.getPrimitive(types::TypeKind::Unit),
+            { currentFuture_ }, e->pos);
+        current_ = emitCoroSuspend(e->pos);
+        return std::monostate {};
+    }
+
+    // 2. Container Length: "maml_len"
+    //    Requires taking the L-value address of the container operand.
+    if (intrinsicName == "maml_len") {
+        if (e->arguments.empty()) {
+            return std::monostate {};
+        }
+
+        Value ptrReg = addressOf(e->arguments[0]);
+        const types::Type* argType = safeGetExprType(e->arguments[0]);
+        const types::Type* u32Type = reg_.getPrimitive(types::TypeKind::U32);
+
+        if (argType) {
+            if (argType->kind == types::TypeKind::Vector
+                || argType->kind == types::TypeKind::View) {
+                return emitRuntimeCall(sym_.intern("maml_vec_len"), u32Type, { ptrReg }, e->pos);
+            }
+            if (argType->kind == types::TypeKind::Map) {
+                return emitRuntimeCall(sym_.intern("maml_map_len"), u32Type, { ptrReg }, e->pos);
+            }
+            if (argType->kind == types::TypeKind::String) {
+                return emitRuntimeCall(sym_.intern("maml_str_len"), u32Type, { ptrReg }, e->pos);
+            }
+        }
+
+        return IntConstant { .value = 0, .type = u32Type, .pos = e->pos };
+    }
+
+    // 3. Map Key Deletion: "maml_delete"
+    //    Requires taking the map L-value address and lowering key hashing/pointer args.
+    if (intrinsicName == "maml_delete") {
+        if (e->arguments.size() < 2) {
+            return std::monostate {};
+        }
+
+        Value mapPtrReg = addressOf(e->arguments[0]);
+        auto [hashVal, ptrVal, lenVal] = lowerMapKey(e->arguments[1], e->pos);
+
+        return emitRuntimeCall(sym_.intern("maml_map_delete"),
+            reg_.getPrimitive(types::TypeKind::Unit), { mapPtrReg, hashVal, ptrVal, lenVal },
+            e->pos);
+    }
+
+    // 4. Default Fallback: General Runtime / Intrinsic Calls
+    //    Evaluates all arguments by value linearly and dispatches to the C ABI.
+    std::vector<Value> flatArgs;
+    flatArgs.reserve(e->arguments.size());
+
+    for (const auto& argExpr : e->arguments) {
+        flatArgs.push_back(lowerExpr(argExpr));
+    }
+
+    return emitRuntimeCall(e->intrinsicSym, e->exprType, flatArgs, e->pos);
 }
 
 } // namespace maml::mir

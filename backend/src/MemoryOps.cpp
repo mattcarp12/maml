@@ -5,20 +5,23 @@
 #include "ExprGenerator.hpp"
 #include "TypeLowering.hpp"
 #include "mir.h"
+#include "sym.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
-#include "sym.h"
 
 namespace maml {
 
 void handle(CodegenContext& ctx, const mir::AllocaInst& inst)
 {
     llvm::Type* llvmTy = llvmTypeFor(ctx, inst.type);
-    if (!llvmTy)
+    if (!llvmTy || llvmTy->isVoidTy()) {
+        ctx.Error.fatal("alloca: cannot allocate a value of void/unresolved type for '"
+            + std::string(ctx.Sym.resolve(inst.dst)) + "'");
         return;
+    }
 
     // Allocate on the stack and register it in the environment
     llvm::AllocaInst* alloca

@@ -1,7 +1,7 @@
 #include "parser.h"
 #include "arena.h"
 #include "ast.h"
-#include "ast_nodes.h"
+
 #include "sym.h"
 #include "token.h"
 #include <charconv>
@@ -179,8 +179,7 @@ bool Parser::parseCommaSeparatedList(TokenType endToken, auto parseElemCallback)
 
 ast::Program* Parser::parseProgram()
 {
-    auto* prog = arena_.make<ast::Program>();
-    prog->pos = curToken_.pos;
+    auto* prog = makeNode<ast::Program>();
     while (curToken_.type != TokenType::END_OF_FILE) {
         if (errors_.size() >= MAX_ERRORS)
             break;
@@ -196,8 +195,7 @@ ast::Program* Parser::parseProgram()
             nextToken();
         }
     }
-    prog->end = curToken_.pos;
-    return prog;
+    return finishNode(prog);
 }
 
 ast::Decl Parser::parseDecl()
@@ -218,8 +216,7 @@ ast::Decl Parser::parseDecl()
 
 ast::FnDecl* Parser::parseFnDecl()
 {
-    auto* fn = arena_.make<ast::FnDecl>();
-    fn->pos = curToken_.pos;
+    auto* fn = makeNode<ast::FnDecl>();
     fn->isAsync = false;
     fn->isExtern = false;
 
@@ -258,8 +255,7 @@ ast::FnDecl* Parser::parseFnDecl()
         fn->body = parseBlockStmt();
     }
 
-    fn->end = curToken_.pos;
-    return fn;
+    return finishNode(fn);
 }
 
 std::vector<ast::Param> Parser::parseFnParams()
@@ -293,15 +289,13 @@ ast::Param Parser::parseParam()
 
 ast::TypeDecl* Parser::parseTypeDecl()
 {
-    auto* td = arena_.make<ast::TypeDecl>();
-    td->pos = curToken_.pos;
+    auto* td = makeNode<ast::TypeDecl>();
     if (!expectPeek(TokenType::IDENT))
         return nullptr;
 
-    td->name = arena_.make<ast::Identifier>();
+    td->name = makeNode<ast::Identifier>();
     td->name->name = sym_.intern(curToken_.literal);
-    td->name->pos = curToken_.pos;
-    td->name->end = curToken_.pos;
+    finishNode(td->name);
 
     if (!expectPeek(TokenType::ASSIGN))
         return nullptr;
@@ -316,11 +310,8 @@ ast::TypeDecl* Parser::parseTypeDecl()
         return nullptr;
     }
 
-    // Explicit semicolon requirement!
     expectPeek(TokenType::SEMICOLON);
-
-    td->end = curToken_.pos;
-    return td;
+    return finishNode(td);
 }
 
 ast::SumTypeExpr* Parser::parseSumType()
@@ -337,11 +328,13 @@ ast::SumTypeExpr* Parser::parseSumType()
             return nullptr;
         }
         st->variants.push_back(parseSumVariant());
-        nextToken();
-        if (curToken_.type == TokenType::SEPARATOR) {
-            nextToken();
+
+        // Only advance if there is another '|' variant coming
+        if (peekToken_.type == TokenType::SEPARATOR) {
+            nextToken(); // curToken_ is now '|'
+            nextToken(); // curToken_ is now the next variant name
         } else {
-            break;
+            break; // Leaves peekToken_ pointing to ';'
         }
     }
     st->end = curToken_.pos;
@@ -533,31 +526,26 @@ ast::Stmt Parser::parseDeclareStmt()
 
 ast::ReturnStmt* Parser::parseReturnStmt()
 {
-    auto* stmt = arena_.make<ast::ReturnStmt>();
-    stmt->pos = curToken_.pos;
+    auto* stmt = makeNode<ast::ReturnStmt>();
 
     if (peekToken_.type == TokenType::SEMICOLON) {
         nextToken();
         stmt->value = std::monostate {};
-        stmt->end = curToken_.pos;
-        return stmt;
+    } else {
+        nextToken();
+        stmt->value = parseExpression(LOWEST);
+        expectPeek(TokenType::SEMICOLON);
     }
-    nextToken();
-    stmt->value = parseExpression(LOWEST);
-    expectPeek(TokenType::SEMICOLON);
-    stmt->end = curToken_.pos;
-    return stmt;
+    return finishNode(stmt);
 }
 
 ast::YieldStmt* Parser::parseYieldStmt()
 {
-    auto* stmt = arena_.make<ast::YieldStmt>();
-    stmt->pos = curToken_.pos;
+    auto* stmt = makeNode<ast::YieldStmt>();
     nextToken();
     stmt->value = parseExpression(LOWEST);
     expectPeek(TokenType::SEMICOLON);
-    stmt->end = curToken_.pos;
-    return stmt;
+    return finishNode(stmt);
 }
 
 ast::Stmt Parser::parseExpressionStmt()
@@ -672,22 +660,18 @@ ast::ForStmt* Parser::parseForStmt()
 
 ast::BreakStmt* Parser::parseBreakStmt()
 {
-    auto* stmt = arena_.make<ast::BreakStmt>();
-    stmt->pos = curToken_.pos;
+    auto* stmt = makeNode<ast::BreakStmt>();
     stmt->token = curToken_;
     expectPeek(TokenType::SEMICOLON);
-    stmt->end = curToken_.pos;
-    return stmt;
+    return finishNode(stmt);
 }
 
 ast::ContinueStmt* Parser::parseContinueStmt()
 {
-    auto* stmt = arena_.make<ast::ContinueStmt>();
-    stmt->pos = curToken_.pos;
+    auto* stmt = makeNode<ast::ContinueStmt>();
     stmt->token = curToken_;
     expectPeek(TokenType::SEMICOLON);
-    stmt->end = curToken_.pos;
-    return stmt;
+    return finishNode(stmt);
 }
 
 // =============================================================================
@@ -754,30 +738,24 @@ ast::Expr Parser::parseIdentifier()
 
 ast::Expr Parser::parseIntegerLiteral()
 {
-    auto* lit = arena_.make<ast::IntLiteral>();
-    lit->pos = curToken_.pos;
+    auto* lit = makeNode<ast::IntLiteral>();
     std::from_chars(
         curToken_.literal.data(), curToken_.literal.data() + curToken_.literal.size(), lit->value);
-    lit->end = curToken_.pos;
-    return lit;
+    return finishNode(lit);
 }
 
 ast::Expr Parser::parseBooleanLiteral()
 {
-    auto* lit = arena_.make<ast::BoolLiteral>();
-    lit->pos = curToken_.pos;
+    auto* lit = makeNode<ast::BoolLiteral>();
     lit->value = (curToken_.literal == "true");
-    lit->end = curToken_.pos;
-    return lit;
+    return finishNode(lit);
 }
 
 ast::Expr Parser::parseStringLiteral()
 {
-    auto* lit = arena_.make<ast::StringLiteral>();
-    lit->pos = curToken_.pos;
+    auto* lit = makeNode<ast::StringLiteral>();
     lit->value = curToken_.literal;
-    lit->end = curToken_.pos;
-    return lit;
+    return finishNode(lit);
 }
 
 ast::Expr Parser::parsePrefixExpression()
@@ -825,18 +803,12 @@ ast::Expr Parser::parseGroupedExpression()
 
 ast::Expr Parser::parseIfExpression()
 {
-    auto* expr = arena_.make<ast::IfExpr>();
-    expr->pos = curToken_.pos;
+    auto* expr = makeNode<ast::IfExpr>();
 
-    // Enforced parentheses
-    if (!expectPeek(TokenType::LPAREN))
+    expr->condition = parseParenthesized([this] { return parseExpression(LOWEST); });
+    if (std::holds_alternative<std::monostate>(expr->condition))
         return std::monostate {};
-    nextToken();
 
-    expr->condition = parseExpression(LOWEST);
-
-    if (!expectPeek(TokenType::RPAREN))
-        return std::monostate {};
     if (!expectPeek(TokenType::LBRACE))
         return std::monostate {};
 
@@ -847,11 +819,14 @@ ast::Expr Parser::parseIfExpression()
         if (peekToken_.type == TokenType::IF) {
             nextToken();
             ast::Expr innerIf = parseIfExpression();
-            auto* yield = arena_.make<ast::YieldStmt>();
+            auto* yield = makeNode<ast::YieldStmt>();
             yield->value = innerIf;
+            finishNode(yield);
 
-            auto* altBlock = arena_.make<ast::BlockStmt>();
+            auto* altBlock = makeNode<ast::BlockStmt>();
             altBlock->statements.push_back(yield);
+            finishNode(altBlock);
+
             expr->alternative = altBlock;
         } else {
             if (!expectPeek(TokenType::LBRACE))
@@ -862,24 +837,17 @@ ast::Expr Parser::parseIfExpression()
         expr->alternative = nullptr;
     }
 
-    expr->end = curToken_.pos;
-    return expr;
+    return finishNode(expr);
 }
 
 ast::Expr Parser::parseMatchExpression()
 {
-    auto* expr = arena_.make<ast::MatchExpr>();
-    expr->pos = curToken_.pos;
+    auto* expr = makeNode<ast::MatchExpr>();
 
-    // Enforced parentheses (mirrors parseIfExpression/parseForStmt)
-    if (!expectPeek(TokenType::LPAREN))
+    expr->subject = parseParenthesized([this] { return parseExpression(LOWEST); });
+    if (std::holds_alternative<std::monostate>(expr->subject))
         return std::monostate {};
-    nextToken();
 
-    expr->subject = parseExpression(LOWEST);
-
-    if (!expectPeek(TokenType::RPAREN))
-        return std::monostate {};
     if (!expectPeek(TokenType::LBRACE))
         return std::monostate {};
     nextToken();
@@ -889,8 +857,7 @@ ast::Expr Parser::parseMatchExpression()
         nextToken();
     }
 
-    expr->end = curToken_.pos;
-    return expr;
+    return finishNode(expr);
 }
 
 ast::MatchArm Parser::parseMatchArm()
@@ -937,8 +904,11 @@ ast::Pattern Parser::parsePattern()
 
         SymID name = sym_.intern(curToken_.literal);
 
-        // Check if this is a variant/composite pattern like Some(idx)
-        if (peekToken_.type == TokenType::LPAREN) {
+        // Check if this is a variant pattern like Active(level) or Error{code: c}
+        if (peekToken_.type == TokenType::LPAREN || peekToken_.type == TokenType::LBRACE) {
+            bool isBraced = (peekToken_.type == TokenType::LBRACE);
+            TokenType closeToken = isBraced ? TokenType::RBRACE : TokenType::RPAREN;
+
             auto* cp = arena_.make<ast::CompositePattern>();
             cp->pos = pos;
 
@@ -949,28 +919,43 @@ ast::Pattern Parser::parsePattern()
             named->name->pos = pos;
             cp->typeExpr = named;
 
-            nextToken(); // Advance so curToken_ is '('
+            nextToken(); // Advance curToken_ to '(' or '{'
 
-            while (
-                peekToken_.type != TokenType::RPAREN && peekToken_.type != TokenType::END_OF_FILE) {
-                nextToken(); // Advance to the start of the next pattern element
+            while (peekToken_.type != closeToken && peekToken_.type != TokenType::END_OF_FILE) {
+                nextToken(); // Move to the start of the next element/field
 
                 ast::CompositePatternElement el;
                 el.pos = curToken_.pos;
-                el.pattern = parsePattern();
+
+                // Handle key: pattern bindings like `code: c` in struct patterns
+                if (isBraced && peekToken_.type == TokenType::COLON) {
+                    auto* keyId = arena_.make<ast::Identifier>();
+                    keyId->name = sym_.intern(curToken_.literal);
+                    keyId->pos = curToken_.pos;
+                    keyId->end = curToken_.pos;
+                    el.key = keyId;
+
+                    nextToken(); // Advance to ':'
+                    nextToken(); // Advance to value pattern
+                    el.pattern = parsePattern();
+                } else {
+                    el.key = std::monostate {};
+                    el.pattern = parsePattern();
+                }
+
                 el.end = curToken_.pos;
                 cp->elements.push_back(el);
 
                 if (peekToken_.type == TokenType::COMMA) {
-                    nextToken(); // Advance to ','
-                } else if (peekToken_.type != TokenType::RPAREN) {
-                    addError(peekToken_.pos, "expected ',' or ')' in pattern");
+                    nextToken(); // Consume ','
+                } else if (peekToken_.type != closeToken) {
+                    addError(peekToken_.pos, "expected ',' or closing delimiter in pattern");
                     break;
                 }
             }
 
-            if (peekToken_.type == TokenType::RPAREN) {
-                nextToken(); // Advance to ')'
+            if (peekToken_.type == closeToken) {
+                nextToken(); // Consume ')' or '}'
             }
             return cp;
         }

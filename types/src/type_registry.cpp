@@ -1,10 +1,15 @@
 #include "type_registry.h"
 #include "arena.h"
-#include "ast_nodes.h"
+
+#include "ast.h"
 #include "sym.h"
 #include "types.h"
+#include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <format>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -256,6 +261,123 @@ const Type* TypeRegistry::getResult(const Type* val, const Type* err, SymbolTabl
 
     std::vector<SumVariant> variants = { { okId, 0, { val }, {} }, { errId, 1, { err }, {} } };
     return getSum(resId, std::move(variants), { val, err });
+}
+
+size_t TypeRegistry::getTypeSize(const Type* type)
+{
+    if (!type)
+        return 0;
+
+    switch (type->kind) {
+    case TypeKind::I8:
+    case TypeKind::U8:
+    case TypeKind::Bool:
+    case TypeKind::Char:
+        return 1;
+
+    case TypeKind::I16:
+    case TypeKind::U16:
+        return 2;
+
+    case TypeKind::I32:
+    case TypeKind::U32:
+    case TypeKind::F32:
+        return 4;
+
+    case TypeKind::I64:
+    case TypeKind::U64:
+    case TypeKind::F64:
+    case TypeKind::Ptr:
+    case TypeKind::View:
+    case TypeKind::Buffer:
+        return 8; // Assuming a 64-bit target architecture
+
+    case TypeKind::I128:
+    case TypeKind::U128:
+        return 16;
+
+    case TypeKind::Unit:
+    case TypeKind::Any:
+    case TypeKind::Unknown:
+        return 0;
+
+    case TypeKind::Array: {
+        const auto& payload = std::get<ArrayPayload>(type->payload);
+        return payload.size * getTypeSize(payload.base);
+    }
+
+    case TypeKind::Struct: {
+        const auto& payload = std::get<StructPayload>(type->payload);
+        size_t totalSize = 0;
+        for (const auto& field : payload.fields) {
+            // Note: For simplicity, this sums field sizes directly.
+            // If your ABI requires strict struct field alignment padding,
+            // align 'totalSize' to field alignment before adding.
+            totalSize += getTypeSize(field.type);
+        }
+        return totalSize;
+    }
+
+    case TypeKind::Sum: {
+        // The size of a sum type is sizeof(i32) + max payload size
+        const auto& payload = std::get<SumPayload>(type->payload);
+        size_t maxPayloadSize = 0;
+
+        for (const auto& variant : payload.variants) {
+            size_t variantSize = 0;
+            for (const auto* tupleTy : variant.tupleTypes) {
+                variantSize += getTypeSize(tupleTy);
+            }
+            for (const auto& field : variant.fields) {
+                variantSize += getTypeSize(field.type);
+            }
+            maxPayloadSize = std::max(maxPayloadSize, variantSize);
+        }
+        return 4 + maxPayloadSize; // 4 bytes for discriminant + payload
+    }
+
+    default:
+        return 8; // Fallback default for handles/pointers
+    }
+}
+
+const Type* TypeRegistry::getTaggedUnionLayout(const Type* sumType, SymbolTable& sym)
+{
+    assert(sumType && sumType->kind == TypeKind::Sum && "Expected a Sum Type");
+    const auto& sumPayload = std::get<SumPayload>(sumType->payload);
+
+    // 1. Calculate the maximum payload size across all variants
+    size_t maxPayloadSize = 0;
+    for (const auto& variant : sumPayload.variants) {
+        size_t variantSize = 0;
+        for (const auto* tupleTy : variant.tupleTypes) {
+            variantSize += getTypeSize(tupleTy);
+        }
+        for (const auto& field : variant.fields) {
+            variantSize += getTypeSize(field.type);
+        }
+        maxPayloadSize = std::max(maxPayloadSize, variantSize);
+    }
+
+    // 2. Build the structural fields: { discriminant: i32, payload: [maxPayloadSize x u8] }
+    std::vector<StructField> fields;
+
+    // Field 0: discriminant
+    fields.push_back({ .name = sym.intern("discriminant"), .type = getPrimitive(TypeKind::I32) });
+
+    // Field 1: payload array (only add if maxPayloadSize > 0)
+    if (maxPayloadSize > 0) {
+        const Type* u8Type = getPrimitive(TypeKind::U8);
+        const Type* payloadArrayType = getArray(u8Type, static_cast<int>(maxPayloadSize));
+
+        fields.push_back({ .name = sym.intern("payload"), .type = payloadArrayType });
+    }
+
+    // 3. Generate a descriptive interned name for the layout struct
+    SymID layoutName = sym.intern(sumType->toString(sym));
+
+    // 4. Create and return the interned structural struct
+    return getStruct(layoutName, std::move(fields), /*isReprC=*/true);
 }
 
 } // namespace maml::types

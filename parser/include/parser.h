@@ -2,17 +2,19 @@
 
 #include "arena.h"
 #include "ast.h"
-#include "ast_nodes.h"
-#include "lexer.h"
+
 #include "sym.h"
 #include "token.h"
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <format>
+#include <type_traits>
 #include <vector>
 
 namespace maml {
 
-enum Precedence {
+enum Precedence : uint8_t {
     LOWEST = 0,
     OR,
     AND,
@@ -115,6 +117,52 @@ private:
     // Helpers
     bool parseCommaSeparatedList(TokenType endToken, auto parseElemCallback);
     bool looksLikeGenericInstantiation() const;
+
+    // =============================================================================
+    // Helper Utilities
+    // =============================================================================
+
+    // AST Node Allocation & Position Factory
+    template <typename T, typename... Args> T* makeNode(Args&&... args)
+    {
+        auto* node = arena_.make<T>(std::forward<Args>(args)...);
+        node->pos = curToken_.pos;
+        return node;
+    }
+
+    // Marks the end position of a node right before returning
+    template <typename T> T* finishNode(T* node)
+    {
+        if (node) {
+            node->end = curToken_.pos;
+        }
+        return node;
+    }
+
+    // Generic helper for matching enclosed structures: ( expr ), { stmt }, etc.
+    template <typename Fn> auto parseEnclosed(TokenType openToken, TokenType closeToken, Fn&& fn)
+    {
+        using Ret = std::invoke_result_t<Fn>;
+        if (!expectPeek(openToken)) {
+            return Ret {};
+        }
+        nextToken(); // Step inside enclosure
+        auto res = fn();
+        if (!expectPeek(closeToken)) {
+            return Ret {};
+        }
+        return res;
+    }
+
+    template <typename Fn> auto parseParenthesized(Fn&& fn)
+    {
+        return parseEnclosed(TokenType::LPAREN, TokenType::RPAREN, std::forward<Fn>(fn));
+    }
+
+    template <typename Fn> auto parseBraced(Fn&& fn)
+    {
+        return parseEnclosed(TokenType::LBRACE, TokenType::RBRACE, std::forward<Fn>(fn));
+    }
 };
 
 } // namespace maml

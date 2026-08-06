@@ -1,12 +1,10 @@
 #include "TypeLowering.hpp"
 #include "CodegenContext.hpp"
 #include "types.h"
-#include "llvm/IR/Type.h"
 #include <cstdint>
-#include <llvm-19/llvm/IR/DerivedTypes.h>
-#include <llvm-19/llvm/IR/Type.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Type.h>
 #include <string>
 #include <vector>
 
@@ -71,9 +69,9 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
     case types::TypeKind::Bool:
         return llvm::Type::getInt1Ty(ctx.Context);
     case types::TypeKind::Unit:
-        // TODO: Think about how we want the Unit type handled in MAML - 
+        // TODO: Think about how we want the Unit type handled in MAML -
         // is it a "first class type" or is it just a placeholder for "no value"?
-        return llvm::Type::getVoidTy(ctx.Context);    
+        return llvm::Type::getVoidTy(ctx.Context);
     // return llvm::StructType::get(ctx.Context, {}); // Prevent void in structs
     case types::TypeKind::Char:
         return llvm::Type::getInt32Ty(ctx.Context);
@@ -128,7 +126,9 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
 
     case types::TypeKind::Sum: {
         const auto& payload = std::get<types::SumPayload>(type->payload);
-        std::string baseName = std::string(ctx.Sym.resolve(payload.baseName));
+        // std::string baseName = std::string(ctx.Sym.resolve(payload.baseName));
+
+        std::string baseName = type->toString(ctx.Sym);
 
         llvm::StructType* st = llvm::StructType::getTypeByName(ctx.Context, baseName);
         if (st) {

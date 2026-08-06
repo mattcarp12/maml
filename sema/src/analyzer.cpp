@@ -1,7 +1,18 @@
 #include "analyzer.h"
-#include "ast_nodes.h"
+#include "ast.h"
+
+#include "scope.h"
+#include "sym.h"
+#include "token.h"
+#include "type_registry.h"
+#include "types.h"
+#include <cstddef>
 #include <format>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace maml::sema {
 
@@ -261,6 +272,8 @@ const types::Type* Analyzer::resolveAstType(ast::TypeExpr expr)
             resolved = registry_.getPrimitive(types::TypeKind::Any);
         else if (const types::Type* custom = lookupCustomType(e->name->name)) {
             resolved = custom;
+        } else if (Symbol* sym = resolve(e->name->name); sym && sym->kind == SymbolKind::Variant) {
+            resolved = sym->sumType;
         } else {
             addError(e->pos, "unknown type '{}'", nameStr);
             resolved = registry_.getPrimitive(types::TypeKind::Unknown);
@@ -444,22 +457,48 @@ static bool isCompatible(const types::Type* expected, const types::Type* actual)
 }
 
 const types::Type* mergeTypes(
-    const types::Type* t1, const types::Type* t2, types::TypeRegistry& reg)
+    const types::Type* t1, const types::Type* t2, types::TypeRegistry& reg, SymbolTable& sym)
 {
     if (!t1 || !t2)
         return nullptr;
     if (t1 == t2)
         return t1;
 
-    if (isCompatible(t1, t2)) {
-        // Prefer the concrete type (the one with fewer 'any' arguments)
-        if (t1->kind == types::TypeKind::Sum) {
-            const auto& p1 = std::get<types::SumPayload>(t1->payload);
-            for (const auto* arg : p1.typeArgs) {
-                if (arg->kind == types::TypeKind::Any)
-                    return t2;
+    // Component-wise merge for Generic Sum Types (e.g. Option, Result)
+    if (t1->kind == types::TypeKind::Sum && t2->kind == types::TypeKind::Sum) {
+        const auto& p1 = std::get<types::SumPayload>(t1->payload);
+        const auto& p2 = std::get<types::SumPayload>(t2->payload);
+
+        if (p1.baseName == p2.baseName && p1.typeArgs.size() == p2.typeArgs.size()) {
+            std::vector<const types::Type*> mergedArgs;
+            bool ok = true;
+            for (size_t i = 0; i < p1.typeArgs.size(); ++i) {
+                const types::Type* m = mergeTypes(p1.typeArgs[i], p2.typeArgs[i], reg, sym);
+                if (!m || m->kind == types::TypeKind::Unknown) {
+                    ok = false;
+                    break;
+                }
+                mergedArgs.push_back(m);
+            }
+            if (ok) {
+                std::string_view baseStr = sym.resolve(p1.baseName);
+                if (baseStr == "Option" && mergedArgs.size() == 1) {
+                    return reg.getOption(mergedArgs[0], sym);
+                }
+                if (baseStr == "Result" && mergedArgs.size() == 2) {
+                    return reg.getResult(mergedArgs[0], mergedArgs[1], sym);
+                }
+                return reg.getSum(p1.baseName, p1.variants, mergedArgs);
             }
         }
+    }
+
+    if (isCompatible(t1, t2)) {
+        // Fallback for non-sum types with 'any'
+        if (t1->kind == types::TypeKind::Any)
+            return t2;
+        if (t2->kind == types::TypeKind::Any)
+            return t1;
         return t1;
     }
 
@@ -467,6 +506,23 @@ const types::Type* mergeTypes(
         return reg.getPrimitive(types::TypeKind::Unknown); // Conflict
     }
     return t1->kind == types::TypeKind::Unknown ? t2 : t1;
+}
+
+const types::Type* coerceGenericSum(const types::Type* exprType, const types::Type* expectedType)
+{
+    if (!exprType || !expectedType)
+        return exprType;
+
+    // If expression is Option<Any> and expected is Option<i64>, refine to Option<i64>
+    if (exprType->kind == types::TypeKind::Sum && expectedType->kind == types::TypeKind::Sum) {
+        const auto& ep = std::get<types::SumPayload>(exprType->payload);
+        const auto& expP = std::get<types::SumPayload>(expectedType->payload);
+
+        if (ep.baseName == expP.baseName) {
+            return expectedType; // Adopt the fully concrete expected type
+        }
+    }
+    return exprType;
 }
 
 // =============================================================================
@@ -606,14 +662,11 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                 }
             },
             [&](ast::AssignStmt* assign) {
+                // 1. Analyze the left-hand side first
                 analyzeExpr(assign->lValue);
-                analyzeExpr(assign->rValue);
-
                 const types::Type* lType = exprTypeOf(assign->lValue);
-                const types::Type* rType = exprTypeOf(assign->rValue);
 
-                // --- Map Assignment Bypass ---
-                // If we are assigning to a map index, we expect the raw value type, not an Option
+                // 2. --- Map Assignment Bypass ---
                 if (auto** idxPtr = std::get_if<ast::IndexExpr*>(&assign->lValue)) {
                     const types::Type* leftType = exprTypeOf((*idxPtr)->left);
                     if (leftType && leftType->kind == types::TypeKind::Map) {
@@ -621,6 +674,11 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                     }
                 }
 
+                // 3. Analyze the right-hand side, passing lType down as expectedType!
+                analyzeExpr(assign->rValue, lType);
+                const types::Type* rType = exprTypeOf(assign->rValue);
+
+                // 4. Compatibility check
                 if (lType && rType && !isCompatible(lType, rType)
                     && lType->kind != types::TypeKind::Unknown
                     && rType->kind != types::TypeKind::Unknown) {
@@ -628,7 +686,7 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                         rType->toString(sym_), lType->toString(sym_));
                 }
 
-                // AssignLValueMustBeSymbol & Mutability Check
+                // 5. AssignLValueMustBeSymbol & Mutability Check
                 if (std::holds_alternative<ast::Identifier*>(assign->lValue)) {
                     Symbol* rootSym = getRootSymbol(assign->lValue);
                     if (!rootSym) {
@@ -639,7 +697,7 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
                     }
                 }
 
-                // CannotReassignBorrow
+                // 6. CannotReassignBorrow
                 if (auto** idPtr = std::get_if<ast::Identifier*>(&assign->lValue)) {
                     Symbol* sym = resolve((*idPtr)->name);
                     if (sym && sym->cap == ast::Capability::Ro) {
@@ -651,13 +709,17 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
             [&](ast::ReturnStmt* ret) {
                 const types::Type* retType = registry_.getPrimitive(types::TypeKind::Unit);
                 if (!std::holds_alternative<std::monostate>(ret->value)) {
-                    analyzeExpr(ret->value);
+                    analyzeExpr(ret->value, expectedReturn_);
                     retType = exprTypeOf(ret->value);
                 }
 
                 const types::Type* expected = expectedReturn_
                     ? expectedReturn_
                     : registry_.getPrimitive(types::TypeKind::Unit);
+
+                if (expectedReturn_ && retType) {
+                    retType = coerceGenericSum(retType, expectedReturn_);
+                }
 
                 // CannotReturnView
                 if (retType && containsView(retType)) {
@@ -698,7 +760,7 @@ void Analyzer::analyzeStmt(ast::Stmt stmt)
 // Pass 2: Expression Analysis
 // =============================================================================
 
-void Analyzer::analyzeExpr(ast::Expr expr)
+void Analyzer::analyzeExpr(ast::Expr expr, const types::Type* expectedType)
 {
     std::visit(
         overloaded {
@@ -710,6 +772,26 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     id->exprType = registry_.getPrimitive(types::TypeKind::Unknown);
                     return;
                 }
+
+                // --- Unit Variant Leaf Adoption ('None', etc.) ---
+                if (sym->kind == SymbolKind::Variant) {
+                    if (expectedType && expectedType->kind == types::TypeKind::Sum) {
+                        const auto& expectedPayload
+                            = std::get<types::SumPayload>(expectedType->payload);
+                        const auto& symPayload = std::get<types::SumPayload>(sym->sumType->payload);
+
+                        // Compare interned SymID baseNames (e.g., "Option" == "Option").
+                        // If they belong to the same sum type family, adopt expectedType directly!
+                        if (expectedPayload.baseName == symPayload.baseName) {
+                            id->exprType = expectedType;
+                            return;
+                        }
+                    }
+                    // Fallback to the symbol's default sumType (e.g., Option<Any>) if no context
+                    id->exprType = sym->sumType;
+                    return;
+                }
+
                 id->exprType = sym->type;
             },
             [&](ast::IntLiteral* lit) {
@@ -789,15 +871,124 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                 }
             },
             [&](ast::CallExpr* call) {
+                // 1. Analyze the callee expression first
                 analyzeExpr(call->function);
-                for (auto& arg : call->arguments) {
-                    analyzeExpr(arg.argument);
-                }
 
-                // --- Variant Constructor Intercept ---
+                // 2. --- Variant Constructor Intercept ---
                 if (auto** funcIdPtr = std::get_if<ast::Identifier*>(&call->function)) {
                     Symbol* sym = resolve((*funcIdPtr)->name);
                     if (sym && sym->kind == SymbolKind::Variant) {
+                        std::string_view varName = sym_.resolve(sym->name);
+
+                        // A. Specialization for intrinsic generic variants: 'Some'
+                        if (varName == "Some") {
+                            if (call->arguments.size() != 1) {
+                                addError(call->pos, "variant 'Some' expects 1 argument, got {}",
+                                    call->arguments.size());
+                                call->exprType = registry_.getPrimitive(types::TypeKind::Unknown);
+                                return;
+                            }
+                            // 1. Unpack 'T' from expected 'Option<T>' if available
+                            const types::Type* expectedT = nullptr;
+                            if (expectedType && expectedType->kind == types::TypeKind::Sum) {
+                                const auto& payload
+                                    = std::get<types::SumPayload>(expectedType->payload);
+                                if (sym_.resolve(payload.baseName) == "Option"
+                                    && !payload.typeArgs.empty()) {
+                                    expectedT = payload.typeArgs[0];
+                                }
+                            }
+
+                            // 2. Analyze argument with expectedT pushed down
+                            analyzeExpr(call->arguments[0].argument, expectedT);
+                            const types::Type* argType = exprTypeOf(call->arguments[0].argument);
+
+                            // 3. --- Leaf Adoption for 'Some' ---
+                            // Adopt expectedType wholesale only if argType is compatible with T!
+                            if (expectedType && expectedT && isCompatible(expectedT, argType)) {
+                                call->exprType = expectedType;
+                                return;
+                            }
+
+                            // Fallback to bottom-up construction if incompatible or
+                            // uncontextualized
+                            call->exprType = registry_.getOption(argType, sym_);
+                            return;
+                        }
+
+                        // B. Specialization for intrinsic generic variants: 'Ok'
+                        if (varName == "Ok") {
+                            if (call->arguments.size() != 1) {
+                                addError(call->pos, "variant 'Ok' expects 1 argument, got {}",
+                                    call->arguments.size());
+                                call->exprType = registry_.getPrimitive(types::TypeKind::Unknown);
+                                return;
+                            }
+                            // 1. Unpack 'T' from expected 'Result<T, E>' if available
+                            const types::Type* expectedT = nullptr;
+                            if (expectedType && expectedType->kind == types::TypeKind::Sum) {
+                                const auto& payload
+                                    = std::get<types::SumPayload>(expectedType->payload);
+                                if (sym_.resolve(payload.baseName) == "Result"
+                                    && !payload.typeArgs.empty()) {
+                                    expectedT = payload.typeArgs[0];
+                                }
+                            }
+
+                            // 2. Analyze argument with expectedT pushed down
+                            analyzeExpr(call->arguments[0].argument, expectedT);
+                            const types::Type* valType = exprTypeOf(call->arguments[0].argument);
+
+                            // 3. --- Leaf Adoption for 'Ok' ---
+                            if (expectedType && expectedT && isCompatible(expectedT, valType)) {
+                                call->exprType = expectedType;
+                                return;
+                            }
+
+                            // Fallback to Result<T, Any>
+                            const types::Type* anyType
+                                = registry_.getPrimitive(types::TypeKind::Any);
+                            call->exprType = registry_.getResult(valType, anyType, sym_);
+                            return;
+                        }
+
+                        // C. Specialization for intrinsic generic variants: 'Err'
+                        if (varName == "Err") {
+                            if (call->arguments.size() != 1) {
+                                addError(call->pos, "variant 'Err' expects 1 argument, got {}",
+                                    call->arguments.size());
+                                call->exprType = registry_.getPrimitive(types::TypeKind::Unknown);
+                                return;
+                            }
+                            // 1. Unpack 'E' from expected 'Result<T, E>' if available
+                            const types::Type* expectedE = nullptr;
+                            if (expectedType && expectedType->kind == types::TypeKind::Sum) {
+                                const auto& payload
+                                    = std::get<types::SumPayload>(expectedType->payload);
+                                if (sym_.resolve(payload.baseName) == "Result"
+                                    && payload.typeArgs.size() >= 2) {
+                                    expectedE = payload.typeArgs[1];
+                                }
+                            }
+
+                            // 2. Analyze argument with expectedE pushed down
+                            analyzeExpr(call->arguments[0].argument, expectedE);
+                            const types::Type* errType = exprTypeOf(call->arguments[0].argument);
+
+                            // 3. --- Leaf Adoption for 'Err' ---
+                            if (expectedType && expectedE && isCompatible(expectedE, errType)) {
+                                call->exprType = expectedType;
+                                return;
+                            }
+
+                            // Fallback to Result<Any, E>
+                            const types::Type* anyType
+                                = registry_.getPrimitive(types::TypeKind::Any);
+                            call->exprType = registry_.getResult(anyType, errType, sym_);
+                            return;
+                        }
+
+                        // D. Standard user-defined non-generic sum types
                         const types::Type* sumType = sym->sumType;
                         const auto& payload = std::get<types::SumPayload>(sumType->payload);
                         const types::SumVariant* targetVariant = nullptr;
@@ -822,10 +1013,12 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                             return;
                         }
 
+                        // Evaluate variant arguments only after resolving targetVariant
                         for (size_t i = 0; i < call->arguments.size(); ++i) {
+                            const types::Type* expectedType = targetVariant->tupleTypes[i];
+                            analyzeExpr(call->arguments[i].argument, expectedType);
                             const types::Type* argType = exprTypeOf(call->arguments[i].argument);
 
-                            const types::Type* expectedType = targetVariant->tupleTypes[i];
                             if (argType && argType != expectedType
                                 && argType->kind != types::TypeKind::Unknown
                                 && expectedType->kind != types::TypeKind::Unknown
@@ -842,6 +1035,7 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     }
                 }
 
+                // 3. --- Standard Function Call Path ---
                 const types::Type* fnType = exprTypeOf(call->function);
 
                 if (!fnType || fnType->kind != types::TypeKind::Function) {
@@ -856,34 +1050,6 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                 const auto& fnPayload = std::get<types::FunctionPayload>(fnType->payload);
                 call->exprType = fnPayload.returnType;
 
-                // handleRunExecutor
-                if (auto** funcIdPtr = std::get_if<ast::Identifier*>(&call->function)) {
-                    if (sym_.resolve((*funcIdPtr)->name) == "run_executor") {
-                        if (call->arguments.size() != 1) {
-                            addError(call->pos, "'run_executor' expects exactly 1 argument");
-                        } else {
-                            const types::Type* argType = exprTypeOf(call->arguments[0].argument);
-                            if (argType && argType->kind == types::TypeKind::Future) {
-                                call->exprType
-                                    = std::get<types::FuturePayload>(argType->payload).base;
-                            } else if (argType && argType->kind != types::TypeKind::Unknown) {
-                                addError(call->pos, "'run_executor' expects a Future, got '{}'",
-                                    argType->toString(sym_));
-                            }
-                        }
-                    }
-                }
-
-                // No Bare Call Trap
-                bool isAsyncCall = (fnPayload.returnType->kind == types::TypeKind::Future);
-                if (isAsyncCall && !allowAsyncCall_) {
-                    std::string fnName = "async function";
-                    if (auto** idPtr = std::get_if<ast::Identifier*>(&call->function)) {
-                        fnName = "'" + std::string(sym_.resolve((*idPtr)->name)) + "'";
-                    }
-                    addError(call->pos, "{} must be called with 'await' or 'spawn'", fnName);
-                }
-
                 // CallArgumentCount
                 if (call->arguments.size() != fnPayload.params.size()) {
                     addError(call->pos, "wrong number of arguments: expected {}, got {}",
@@ -891,12 +1057,14 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     return;
                 }
 
-                // CallArgumentTypeCompatibility
+                // CallArgumentTypeCompatibility & Evaluation
                 for (size_t i = 0; i < call->arguments.size(); ++i) {
+                    const types::Type* expectedType = fnPayload.params[i];
+                    // [Step 4/5 Integration]: Pass expectedType down:
+                    analyzeExpr(call->arguments[i].argument, expectedType);
                     const types::Type* argType = exprTypeOf(call->arguments[i].argument);
                     ast::Capability actualCap = call->arguments[i].cap;
                     ast::Capability expectedCap = fnPayload.caps[i];
-                    const types::Type* expectedType = fnPayload.params[i];
 
                     // --- Literal Auto-Coercion ---
                     bool isLiteral
@@ -943,6 +1111,34 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                         }
                     }
                 }
+
+                // handleRunExecutor
+                if (auto** funcIdPtr = std::get_if<ast::Identifier*>(&call->function)) {
+                    if (sym_.resolve((*funcIdPtr)->name) == "run_executor") {
+                        if (call->arguments.size() != 1) {
+                            addError(call->pos, "'run_executor' expects exactly 1 argument");
+                        } else {
+                            const types::Type* argType = exprTypeOf(call->arguments[0].argument);
+                            if (argType && argType->kind == types::TypeKind::Future) {
+                                call->exprType
+                                    = std::get<types::FuturePayload>(argType->payload).base;
+                            } else if (argType && argType->kind != types::TypeKind::Unknown) {
+                                addError(call->pos, "'run_executor' expects a Future, got '{}'",
+                                    argType->toString(sym_));
+                            }
+                        }
+                    }
+                }
+
+                // No Bare Call Trap
+                bool isAsyncCall = (fnPayload.returnType->kind == types::TypeKind::Future);
+                if (isAsyncCall && !allowAsyncCall_) {
+                    std::string fnName = "async function";
+                    if (auto** idPtr = std::get_if<ast::Identifier*>(&call->function)) {
+                        fnName = "'" + std::string(sym_.resolve((*idPtr)->name)) + "'";
+                    }
+                    addError(call->pos, "{} must be called with 'await' or 'spawn'", fnName);
+                }
             },
             [&](ast::IfExpr* ifExpr) {
                 analyzeExpr(ifExpr->condition);
@@ -964,7 +1160,7 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     ? ifExpr->alternative->exprType
                     : registry_.getPrimitive(types::TypeKind::Unit);
 
-                ifExpr->exprType = mergeTypes(consType, altType, registry_);
+                ifExpr->exprType = mergeTypes(consType, altType, registry_, sym_);
                 if (ifExpr->exprType->kind == types::TypeKind::Unknown
                     && consType->kind != types::TypeKind::Unknown
                     && altType->kind != types::TypeKind::Unknown) {
@@ -1319,15 +1515,19 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                     if (!resultType) {
                         resultType = armType;
                     } else {
-                        const types::Type* merged = mergeTypes(resultType, armType, registry_);
-                        if (!merged && armType && armType->kind != types::TypeKind::Unknown
-                            && resultType->kind != types::TypeKind::Unknown) {
-                            addError(arm.pos,
-                                "match arm has incompatible type: expected '{}', got '{}'",
-                                resultType->toString(sym_), armType->toString(sym_));
-                        }
-                        if (merged)
+                        const types::Type* merged
+                            = mergeTypes(resultType, armType, registry_, sym_);
+                        if (!merged) {
+                            if (armType && armType->kind != types::TypeKind::Unknown
+                                && resultType->kind != types::TypeKind::Unknown) {
+                                addError(arm.pos,
+                                    "match arm has incompatible type: expected '{}', got '{}'",
+                                    resultType->toString(sym_), armType->toString(sym_));
+                            }
+                            resultType = registry_.getPrimitive(types::TypeKind::Unknown);
+                        } else {
                             resultType = merged;
+                        }
                     }
                 }
                 match->exprType
@@ -1469,6 +1669,10 @@ void Analyzer::analyzeExpr(ast::Expr expr)
                 addError(tw->pos, "internal error: TypeExprWrapper leaked into expression context");
                 tw->exprType = registry_.getPrimitive(types::TypeKind::Unknown);
             },
+            [&](ast::TaggedUnionConstructExpr* tuce) {},
+            [&](ast::TaggedUnionAccessExpr* tuae) {},
+            [&](ast::IntrinsicCallExpr* ice) {},
+            [&](ast::CastExpr* ce) {},
         },
         expr);
 }

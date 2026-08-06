@@ -1,7 +1,8 @@
 #pragma once
 #include "ast.h"
-#include "ast_nodes.h"
 #include "scope.h"
+#include "sym.h"
+#include "token.h"
 #include "type_registry.h"
 #include <format>
 #include <vector>
@@ -62,7 +63,7 @@ private:
     // --- Pass 2: AST Decoration & Rule Checking (Implemented in Phase 4) ---
     void analyzeDecl(ast::Decl decl);
     void analyzeStmt(ast::Stmt stmt);
-    void analyzeExpr(ast::Expr expr);
+    void analyzeExpr(ast::Expr expr, const types::Type* expectedType = nullptr);
     void analyzePattern(ast::Pattern pattern, const types::Type* subjectType);
 };
 

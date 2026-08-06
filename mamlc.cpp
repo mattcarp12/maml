@@ -1,9 +1,11 @@
 #include "ast.h"
+#include "cfg.h"
 #include "sym.h"
 #include "token.h"
 #include "type_registry.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/FileSystem.h>
+#include <llvm/Support/ManagedStatic.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -11,8 +13,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
-#include <stdlib.h>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -26,15 +28,41 @@
 #include "ProgramGenerator.hpp"
 #include "analyzer.h"
 #include "arena.h"
+#include "ast_printer.h"
 #include "builder.h"
 #include "embedded_externs.hpp"
-#include "embedded_stdlib.hpp" 
+#include "embedded_stdlib.hpp"
+#include "hir_desugarer.h"
 #include "lexer.h"
 #include "mir_dump.h"
 #include "parser.h"
 #include "pipeline.h"
 #include "reachability.h"
 
+// -----------------------------------------------------------------------------
+// Driver Options
+// -----------------------------------------------------------------------------
+struct CompilerOptions {
+    std::string inputPath;
+    std::string outputPath = "a.out";
+    bool runDirectly = false;
+
+    bool dumpAst = false;
+    std::string dumpAstPath = "maml_ast.txt";
+
+    bool dumpHir = false;
+    std::string dumpHirPath = "maml_hir.txt";
+
+    bool dumpIr = false;
+    std::string dumpIrPath = "maml_llvmir.txt";
+
+    bool dumpMir = false;
+    std::string dumpMirPath = "maml_mir.txt";
+};
+
+// -----------------------------------------------------------------------------
+// Utilities & Helper Logic
+// -----------------------------------------------------------------------------
 static std::string readFile(const std::string& path)
 {
     std::ifstream f(path);
@@ -43,17 +71,6 @@ static std::string readFile(const std::string& path)
     std::ostringstream ss;
     ss << f.rdbuf();
     return ss.str();
-}
-
-static bool invokeClang(
-    const std::string& llPath, const std::string& outPath, const std::string& runtimeLib)
-{
-    std::string cmd = "clang++ -Os --target=x86_64-linux-musl -static "
-                      "-ffunction-sections -fdata-sections -fno-rtti -fno-exceptions "
-                      "-flto -Wl,--gc-sections -Wl,-s "
-                      "-Wno-override-module \""
-        + llPath + "\" \"" + runtimeLib + "\" -o \"" + outPath + "\"";
-    return std::system(cmd.c_str()) == 0;
 }
 
 static std::string_view getStdlib() { return maml::embedded::STDLIB_MAML; }
@@ -66,95 +83,90 @@ static void printUsage(const char* progName)
               << "  " << progName << " run <input.maml>\n\n"
               << "Options:\n"
               << "  -r, --run               Compile and execute immediately\n"
+              << "  -a, --dump-ast [file]    Dump generated AST (default: maml_ast.txt)\n"
               << "  -d, --dump-ir [file]    Dump generated LLVM IR (default: maml_dump.txt)\n"
               << "  --dump-mir [file]       Dump generated MIR (default: maml_mir.txt)\n"
               << "  -h, --help              Show usage information\n";
 }
 
-int main(int argc, char* argv[])
+// -----------------------------------------------------------------------------
+// Stage 1: CLI Argument Parsing
+// -----------------------------------------------------------------------------
+static bool parseCommandLine(int argc, char* argv[], CompilerOptions& opts)
 {
     if (argc < 2) {
         printUsage(argv[0]);
-        return 1;
+        return false;
     }
 
-    bool runDirectly = false;
-    bool dumpIr = false;
-    std::string dumpIrPath = "maml_dump.txt";
-    std::string inputPath = "";
-    std::string outputPath = "a.out";
-    bool dumpMir = false;
-    std::string dumpMirPath = "maml_mir.txt";
-
-    // -------------------------------------------------------------------------
-    // CLI Argument Parsing
-    // -------------------------------------------------------------------------
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
             printUsage(argv[0]);
-            return 0;
+            return false;
         } else if (arg == "run" && i == 1) {
-            runDirectly = true;
+            opts.runDirectly = true;
         } else if (arg == "--run" || arg == "-r") {
-            runDirectly = true;
+            opts.runDirectly = true;
         } else if (arg == "--dump-ir" || arg == "-d") {
-            dumpIr = true;
+            opts.dumpIr = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') {
-                if (i + 2 == argc && inputPath.empty()) {
-                    // Next arg is the last arg, leave it alone for inputPath
-                } else {
-                    dumpIrPath = argv[++i];
+                if (!(i + 2 == argc && opts.inputPath.empty())) {
+                    opts.dumpIrPath = argv[++i];
                 }
             }
         } else if (arg == "--dump-mir") {
-            dumpMir = true;
+            opts.dumpMir = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') {
-                if (i + 2 == argc && inputPath.empty()) {
-                    // Next arg is the last arg, leave it alone for inputPath
-                } else {
-                    dumpMirPath = argv[++i];
+                if (!(i + 2 == argc && opts.inputPath.empty())) {
+                    opts.dumpMirPath = argv[++i];
                 }
             }
-        } else if (inputPath.empty()) {
-            inputPath = arg;
-        } else if (outputPath == "a.out") {
-            outputPath = arg;
+        } else if (arg == "--dump-ast" || arg == "-a") {
+            opts.dumpAst = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                if (!(i + 2 == argc && opts.inputPath.empty())) {
+                    opts.dumpAstPath = argv[++i];
+                }
+            }
+        } else if (arg == "--dump-hir" || arg == "-h") {
+            opts.dumpHir = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                if (!(i + 2 == argc && opts.inputPath.empty())) {
+                    opts.dumpHirPath = argv[++i];
+                }
+            }
+        } else if (opts.inputPath.empty()) {
+            opts.inputPath = arg;
+        } else if (opts.outputPath == "a.out") {
+            opts.outputPath = arg;
         }
     }
 
-    if (inputPath.empty()) {
+    if (opts.inputPath.empty()) {
         std::cerr << "Error: No input file specified.\n";
         printUsage(argv[0]);
-        return 1;
+        return false;
     }
 
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-    llvm::InitializeNativeTargetAsmParser();
+    return true;
+}
 
-    // -------------------------------------------------------------------------
-    // 1. Read source & access embedded prelude
-    // -------------------------------------------------------------------------
-    std::string userSource = readFile(inputPath);
+// -----------------------------------------------------------------------------
+// Stage 2: Frontend & Middle-End (Lexing -> Parsing -> Sema -> MIR)
+// -----------------------------------------------------------------------------
+static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const CompilerOptions& opts,
+    maml::Arena& arena, maml::SymbolTable& sym, maml::types::TypeRegistry& reg)
+{
+    std::string userSource = readFile(opts.inputPath);
     if (userSource.empty()) {
-        std::cerr << "Error: cannot read " << inputPath << "\n";
-        return 1;
+        std::cerr << "Error: cannot read " << opts.inputPath << "\n";
+        return nullptr;
     }
 
-    std::string_view externsSrc = getExterns();
-    std::string_view stdlibSrc = getStdlib();
-
-    // -------------------------------------------------------------------------
-    // 2. Lex & Parse
-    // -------------------------------------------------------------------------
-    maml::Arena arena;
-    maml::SymbolTable sym;
-    maml::types::TypeRegistry reg(arena);
-
+    // 1. Lexing
     std::vector<maml::Token> allTokens;
-
     auto lexFile = [&](std::string_view text, std::string_view filename) {
         maml::Lexer lexer(text, filename);
         maml::Token tok = lexer.nextToken();
@@ -164,24 +176,23 @@ int main(int argc, char* argv[])
         }
     };
 
-    lexFile(externsSrc, "_runtime_externs.maml");
-    lexFile(stdlibSrc, "stdlib.maml");
-    lexFile(userSource, inputPath);
+    lexFile(getExterns(), "_runtime_externs.maml");
+    lexFile(getStdlib(), "stdlib.maml");
+    lexFile(userSource, opts.inputPath);
+    allTokens.push_back(
+        { maml::TokenType::END_OF_FILE, "", { .filename = opts.inputPath, .line = 0, .col = 0 } });
 
-    allTokens.push_back({ maml::TokenType::END_OF_FILE, "", { inputPath, 0, 0 } });
-
+    // 2. Parsing
     maml::Parser parser(allTokens, sym, arena);
     auto astProg = parser.parseProgram();
     if (!parser.getErrors().empty()) {
         for (const auto& err : parser.getErrors()) {
             std::cerr << err << "\n";
         }
-        return 1;
+        return nullptr;
     }
 
-    // -------------------------------------------------------------------------
     // 3. Semantic Analysis
-    // -------------------------------------------------------------------------
     maml::sema::Analyzer analyzer(reg, sym);
     analyzer.analyze(astProg);
     auto semaErrors = analyzer.getErrors();
@@ -189,22 +200,54 @@ int main(int argc, char* argv[])
         for (const auto& err : semaErrors) {
             std::cerr << err << "\n";
         }
-        return 1;
+        return nullptr;
     }
 
-    // -------------------------------------------------------------------------
+    if (opts.dumpAst) {
+        if (opts.dumpAstPath == "-") {
+            maml::ast::AstPrinter printer(sym, std::cout);
+            printer.print(astProg);
+        } else {
+            std::ofstream astStream(opts.dumpAstPath);
+            if (!astStream.is_open()) {
+                std::cerr << "Error writing AST dump to " << opts.dumpAstPath << "\n";
+            } else {
+                maml::ast::AstPrinter printer(sym, astStream);
+                printer.print(astProg);
+                std::cout << "📄 AST dumped to " << opts.dumpAstPath << "\n";
+            }
+        }
+    }
+
+    // 3.5 HIR Desugaring Pass
+    maml::hir::Desugarer desugarer(reg, sym, arena);
+    desugarer.desugar(astProg);
+
+    if (opts.dumpHir) {
+        if (opts.dumpHirPath == "-") {
+            maml::ast::AstPrinter printer(sym, std::cout);
+            printer.print(astProg);
+        } else {
+            std::ofstream astStream(opts.dumpHirPath);
+            if (!astStream.is_open()) {
+                std::cerr << "Error writing AST dump to " << opts.dumpHirPath << "\n";
+            } else {
+                maml::ast::AstPrinter printer(sym, astStream);
+                printer.print(astProg);
+                std::cout << "📄 HIR dumped to " << opts.dumpHirPath << "\n";
+            }
+        }
+    }
+
     // 4. MIR Generation
-    // -------------------------------------------------------------------------
     maml::mir::Builder builder(reg, sym);
     auto mirProg = builder.buildProgram(astProg);
     if (!mirProg) {
         std::cerr << "Error: MIR generation failed.\n";
-        return 1;
+        return nullptr;
     }
 
-    // -------------------------------------------------------------------------
-    // 5. MIR Passes (per-function)
-    // -------------------------------------------------------------------------
+    // 5. MIR Optimization Passes
     auto passesCfg = maml::passes::defaultConfig();
     std::vector<maml::ast::CompileError> allErrors;
 
@@ -219,89 +262,100 @@ int main(int argc, char* argv[])
         for (const auto& err : allErrors) {
             std::cerr << err << std::endl;
         }
-        return 1;
+        return nullptr;
     }
 
     maml::passes::eliminateDeadFunctions(mirProg.get(), sym);
 
-    // -------------------------------------------------------------------------
-    // Optional: Dump MIR to File or Terminal
-    // -------------------------------------------------------------------------
-    if (dumpMir) {
-        if (dumpMirPath == "-") {
+    // Optional MIR Dump
+    if (opts.dumpMir) {
+        if (opts.dumpMirPath == "-") {
             maml::mir::dumpProgramMIR(std::cout, *mirProg, sym);
         } else {
-            std::ofstream mirStream(dumpMirPath);
+            std::ofstream mirStream(opts.dumpMirPath);
             if (!mirStream.is_open()) {
-                std::cerr << "Error writing MIR dump to " << dumpMirPath << "\n";
+                std::cerr << "Error writing MIR dump to " << opts.dumpMirPath << "\n";
             } else {
                 maml::mir::dumpProgramMIR(mirStream, *mirProg, sym);
-                std::cout << "📄 MIR dumped to " << dumpMirPath << "\n";
+                std::cout << "📄 MIR dumped to " << opts.dumpMirPath << "\n";
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // 6. LLVM Code Generation
-    // -------------------------------------------------------------------------
+    return mirProg;
+}
+
+// -----------------------------------------------------------------------------
+// Stage 3: LLVM Backend Code Generation & Emission
+// -----------------------------------------------------------------------------
+static bool runBackendCodegen(const CompilerOptions& opts, maml::mir::Program& mirProg,
+    maml::SymbolTable& sym, const std::string& llPath)
+{
     maml::CodegenContext ctx("maml_core_module", sym);
-    maml::compileProgram(ctx, *mirProg);
+    maml::compileProgram(ctx, mirProg);
 
     if (ctx.Error.hasErrors()) {
         std::cerr << "LLVM lowering errors.\n";
-        return 1;
+        return false;
     }
 
-    // -------------------------------------------------------------------------
-    // Optional: Dump LLVM IR to File
-    // -------------------------------------------------------------------------
-    if (dumpIr) {
+    // Optional LLVM IR Dump
+    if (opts.dumpIr) {
         std::error_code dumpEc;
-        llvm::raw_fd_ostream dumpStream(dumpIrPath, dumpEc, llvm::sys::fs::OpenFlags::OF_Text);
+        llvm::raw_fd_ostream dumpStream(opts.dumpIrPath, dumpEc, llvm::sys::fs::OpenFlags::OF_Text);
         if (dumpEc) {
-            std::cerr << "Error writing IR dump to " << dumpIrPath << ": " << dumpEc.message()
+            std::cerr << "Error writing IR dump to " << opts.dumpIrPath << ": " << dumpEc.message()
                       << "\n";
         } else {
             ctx.Module->print(dumpStream, nullptr);
             dumpStream.flush();
-            std::cout << "📄 LLVM IR dumped to " << dumpIrPath << "\n";
+            std::cout << "📄 LLVM IR dumped to " << opts.dumpIrPath << "\n";
         }
     }
 
-    // -------------------------------------------------------------------------
-    // 7. Write LLVM IR to temp file
-    // -------------------------------------------------------------------------
-    std::string tempDir = std::filesystem::temp_directory_path().string();
-    std::string llPath = tempDir + "/maml_output.ll";
-
+    // Output temporary IR file
     std::error_code ec;
     llvm::raw_fd_ostream irStream(llPath, ec, llvm::sys::fs::OpenFlags::OF_Text);
     if (ec) {
         std::cerr << "Error writing IR: " << ec.message() << "\n";
-        return 1;
+        return false;
     }
     ctx.Module->print(irStream, nullptr);
     irStream.flush();
+    llvm::llvm_shutdown();
+    return true;
+}
 
-    // -------------------------------------------------------------------------
-    // 8. Invoke clang++ to link with runtime
-    // -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Stage 4: Subprocess Linker & Execution
+// -----------------------------------------------------------------------------
+static bool invokeClangOnLlvmIr(
+    const std::string& llPath, const std::string& outPath, const std::string& runtimeLib)
+{
+    std::string cmd = "clang++ -Os --target=x86_64-linux-musl -static "
+                      "-ffunction-sections -fdata-sections -fno-rtti -fno-exceptions "
+                      "-flto -Wl,--gc-sections -Wl,-s "
+                      "-Wno-override-module \""
+        + llPath + "\" \"" + runtimeLib + "\" -o \"" + outPath + "\"";
+    return std::system(cmd.c_str()) == 0;
+}
+
+static int linkAndExecute(const CompilerOptions& opts, const std::string& llPath)
+{
     std::string runtimeLib = "./build/runtime/lib/libmamlrt.a";
     if (const char* root = std::getenv("MAML_ROOT")) {
         runtimeLib = std::string(root) + "/build/runtime/lib/libmamlrt.a";
     }
 
-    std::string targetExec = runDirectly ? (tempDir + "/maml_run_bin") : outputPath;
+    std::string tempDir = std::filesystem::temp_directory_path().string();
+    std::string targetExec = opts.runDirectly ? (tempDir + "/maml_run_bin") : opts.outputPath;
 
-    if (!invokeClang(llPath, targetExec, runtimeLib)) {
+    if (!invokeClangOnLlvmIr(llPath, targetExec, runtimeLib)) {
         std::cerr << "Linking failed.\n";
         return 1;
     }
 
-    // -------------------------------------------------------------------------
-    // 9. Execute directly if requested
-    // -------------------------------------------------------------------------
-    if (runDirectly) {
+    if (opts.runDirectly) {
         int exitStatus = std::system(targetExec.c_str());
         std::filesystem::remove(targetExec);
 
@@ -313,6 +367,47 @@ int main(int argc, char* argv[])
         return exitStatus;
     }
 
-    std::cout << "✅ Build successful: " << outputPath << "\n";
+    std::cout << "✅ Build successful: " << opts.outputPath << "\n";
     return 0;
+}
+
+// -----------------------------------------------------------------------------
+// Main Entry Point
+// -----------------------------------------------------------------------------
+int main(int argc, char* argv[])
+{
+    CompilerOptions opts;
+    if (!parseCommandLine(argc, argv, opts)) {
+        return 1;
+    }
+
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    llvm::InitializeNativeTargetAsmParser();
+
+    maml::Arena arena;
+    maml::SymbolTable sym;
+    maml::types::TypeRegistry reg(arena);
+
+    // 1. AST & MIR Pipeline
+    auto mirProg = runFrontendAndMiddleEnd(opts, arena, sym, reg);
+    if (!mirProg) {
+        return 1;
+    }
+
+    // 2. LLVM IR Generation
+    std::string tempDir = std::filesystem::temp_directory_path().string();
+    std::string tempLlPath = tempDir + "/maml_output.ll";
+
+    if (!runBackendCodegen(opts, *mirProg, sym, tempLlPath)) {
+        return 1;
+    }
+
+    // 3. Clang Link & Run
+    int exitCode = linkAndExecute(opts, tempLlPath);
+
+    // Temp file cleanup
+    std::filesystem::remove(tempLlPath);
+
+    return exitCode;
 }

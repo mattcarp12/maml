@@ -40,6 +40,9 @@ fn test_vectors() int {
 fn test_maps() int {
     mut m := Map<string, int>{};
 
+    // Stack: {ptr, len, cap, ..}
+    // Heap: [(k,v), (k,v)]
+
     // 1. Test insertion and length
     m["alice"] = 10;
     m["bob"] = 20;
