@@ -1,0 +1,2 @@
+add_library(maml_core INTERFACE)
+target_include_directories(maml_core INTERFACE include)

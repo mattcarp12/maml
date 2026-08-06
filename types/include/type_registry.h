@@ -1,6 +1,6 @@
 #pragma once
 #include "arena.h"
-#include "ast.h"
+#include "capability.h"
 #include "sym.h"
 #include "types.h"
 #include <cstddef>
@@ -8,6 +8,11 @@
 
 namespace maml::types {
 
+// TypeRegistry's only job is: "given a structural type description, return
+// the canonical `const Type*` for it." It knows nothing about
+// language-level concepts like Option/Result or ABI lowering — see
+// TypeLowering for those. It also doesn't know how to read AST syntax into
+// a type — see TypeResolver for that.
 class TypeRegistry {
 public:
     explicit TypeRegistry(Arena& arena);
@@ -32,12 +37,11 @@ public:
     void updateStruct(const Type* structType, std::vector<StructField> fields);
     void updateSum(const Type* sumType, std::vector<SumVariant> variants);
     const Type* getFunction(
-        std::vector<const Type*> params, std::vector<ast::Capability> caps, const Type* returnType);
+        std::vector<const Type*> params, std::vector<Capability> caps, const Type* returnType);
 
-    // Helpers
-    const Type* getOption(const Type* base, SymbolTable& sym);
-    const Type* getResult(const Type* val, const Type* err, SymbolTable& sym);
-    const Type* getTaggedUnionLayout(const Type* sumType, SymbolTable& sym);
+    // Purely structural: size of a canonical type on the target ABI.
+    // Kept here (rather than in TypeLowering) because it doesn't require
+    // any language-level knowledge, just the Type's own structure.
     size_t getTypeSize(const Type* type);
 
 private:

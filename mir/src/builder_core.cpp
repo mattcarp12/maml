@@ -1,12 +1,13 @@
-
 #include "ast.h"
 #include "builder.h"
 #include "cfg.h"
+#include "compiler_context.h"
 #include "mir.h"
 #include "sym.h"
 #include "token.h"
 #include "type_registry.h"
 #include "types.h"
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -15,12 +16,10 @@
 
 namespace maml::mir {
 
-const Target DefaultTarget = { 8, 8, 8 };
-
-Builder::Builder(types::TypeRegistry& reg, SymbolTable& sym, const Target& target)
-    : reg_(reg)
-    , sym_(sym)
-    , target_(target)
+Builder::Builder(CompilerContext& ctx)
+    : ctx_(ctx)
+    , reg_(ctx.types.registry)
+    , sym_(ctx.symbols)
 {
 }
 
@@ -67,12 +66,12 @@ void Builder::buildFn(ast::FnDecl* fn, Program& prog)
     // Resolve return type from semantic pass decoration
     mirFn.returnType = reg_.getPrimitive(types::TypeKind::Unit);
     if (!std::holds_alternative<std::monostate>(fn->returnType)) {
-        mirFn.returnType = safeGetExprType(fn->returnType);
+        mirFn.returnType = typeOf(fn->returnType);
     }
 
     // 3. Populate parameters for ALL functions
     for (const auto& p : fn->params) {
-        const types::Type* baseType = safeGetExprType(p.type);
+        const types::Type* baseType = typeOf(p.type);
         const types::Type* loweredType = lowerParamType(baseType, p.cap);
 
         // For extern functions, keep original names; otherwise register via defineLocal
@@ -214,9 +213,7 @@ Value Builder::emit(Instruction inst, SymID dst, const types::Type* t)
 {
     locals_[dst] = t;
     push(inst);
-    return Register {
-        dst, t, mir::getPosOf(inst)
-    }; // Need pos helper on instruction? Just pulling from args in callers is easier.
+    return Register { dst, t, mir::getPosOf(inst) };
 }
 
 Value Builder::emitLoad(Value ptr, const types::Type* t, Position pos)
@@ -326,22 +323,22 @@ void Builder::emitTransfer(SymID dst, Value val, Position pos)
     push(AssignInst { dst, val, pos });
 }
 
-void Builder::emitCapTransfer(SymID dst, SymID src, ast::Capability cap, Position pos)
+void Builder::emitCapTransfer(SymID dst, SymID src, Capability cap, Position pos)
 {
     const types::Type* dstType = locals_[dst];
     bool isPtr = (dstType->kind == types::TypeKind::Ptr);
 
     switch (cap) {
-    case ast::Capability::Mut:
+    case Capability::Mut:
         push(BorrowInst { dst, true, src, pos });
         break;
-    case ast::Capability::Ro:
+    case Capability::Ro:
         if (isPtr)
             push(BorrowInst { dst, false, src, pos });
         else
             push(CopyInst { dst, src, pos });
         break;
-    case ast::Capability::Own:
+    case Capability::Own:
         push(MoveInst { dst, src, pos });
         break;
     default:
@@ -350,11 +347,11 @@ void Builder::emitCapTransfer(SymID dst, SymID src, ast::Capability cap, Positio
     }
 }
 
-const types::Type* Builder::lowerParamType(const types::Type* t, ast::Capability cap)
+const types::Type* Builder::lowerParamType(const types::Type* t, Capability cap)
 {
-    if (cap == ast::Capability::Mut)
+    if (cap == Capability::Mut)
         return reg_.getPrimitive(types::TypeKind::Ptr);
-    if (cap == ast::Capability::Ro && ownsHeapMemory(t))
+    if (cap == Capability::Ro && ownsHeapMemory(t))
         return reg_.getPrimitive(types::TypeKind::Ptr);
     return t;
 }

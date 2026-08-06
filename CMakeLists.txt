@@ -37,6 +37,7 @@ embed_file(
 # =============================================================================
 # Component Subdirectories
 # =============================================================================
+add_subdirectory(core)
 add_subdirectory(parser)
 add_subdirectory(types)
 add_subdirectory(sema)
@@ -44,6 +45,7 @@ add_subdirectory(mir)
 add_subdirectory(passes)
 add_subdirectory(backend)
 add_subdirectory(runtime)
+add_subdirectory(compiler)
 
 # =============================================================================
 # Executable

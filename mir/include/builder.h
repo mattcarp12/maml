@@ -1,11 +1,15 @@
 #pragma once
 
 #include "ast.h"
+#include "capability.h"
 #include "cfg.h"
+#include "compiler_context.h"
 #include "mir.h"
 #include "sym.h"
 #include "token.h"
 #include "type_registry.h"
+#include "types.h"
+
 #include <memory>
 #include <tuple>
 #include <type_traits>
@@ -15,59 +19,63 @@
 
 namespace maml::mir {
 
-struct Target {
-    int pointerSize = 8;
-    int pointerAlign = 8;
-    int intSize = 8;
-};
-
-extern const Target DefaultTarget;
-
 struct LoopTracker {
     BlockID header;
     BlockID exit;
 };
 
-// Trait to detect whether an AST node has exprType
-template <typename T> struct HasExprType {
-private:
-    template <typename U>
-    static auto test(int) -> decltype(std::declval<U*>()->exprType, std::true_type());
-    template <typename> static std::false_type test(...);
-
-public:
-    static constexpr bool value = decltype(test<T>(0))::value;
-};
-
-// Safely extract exprType from an AST expression variant
-template <typename Variant> const types::Type* safeGetExprType(const Variant& v)
-{
-    return std::visit(
-        [](auto&& e) -> const types::Type* {
-            using T = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<T, std::monostate>) {
-                return nullptr;
-            } else if constexpr (std::is_same_v<T, ast::TypeExprWrapper*>) {
-                return e ? e->exprType : nullptr;
-            } else if constexpr (HasExprType<std::remove_pointer_t<T>>::value) {
-                return e ? e->exprType : nullptr;
-            } else {
-                return nullptr;
-            }
-        },
-        v);
-}
-
 class Builder {
 public:
-    Builder(types::TypeRegistry& reg, SymbolTable& sym, const Target& target = DefaultTarget);
+    explicit Builder(CompilerContext& ctx);
 
     std::unique_ptr<Program> buildProgram(ast::Program* astProg);
 
+    // --- Type Resolution Helpers ---
+    [[nodiscard]] const types::Type* typeOf(const void* ptr) const
+    {
+        if (!ptr)
+            return nullptr;
+        return ctx_.semantic.typeOf(ptr);
+    }
+
+    template <typename T>
+        requires(!std::is_same_v<std::decay_t<T>, void>)
+    [[nodiscard]] const types::Type* typeOf(const T* node) const
+    {
+        if (!node)
+            return nullptr;
+        return ctx_.semantic.typeOf(static_cast<const void*>(node));
+    }
+
+    [[nodiscard]] const types::Type* typeOf(const ast::TypeExprWrapper* tw) const
+    {
+        if (!tw)
+            return nullptr;
+        if (auto* t = ctx_.semantic.typeOf(static_cast<const void*>(tw))) {
+            return t;
+        }
+        return typeOf(tw->typeExpr);
+    }
+
+    template <typename... Ts>
+    [[nodiscard]] const types::Type* typeOf(const std::variant<Ts...>& var) const
+    {
+        return std::visit(
+            [this](auto&& node) -> const types::Type* {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::monostate>) {
+                    return nullptr;
+                } else {
+                    return this->typeOf(node);
+                }
+            },
+            var);
+    }
+
 private:
+    CompilerContext& ctx_;
     types::TypeRegistry& reg_;
     SymbolTable& sym_;
-    const Target& target_;
 
     // Per-function CFG state
     Graph* graph_ = nullptr;
@@ -109,12 +117,12 @@ private:
 
     Value emitBorrow(SymID src, bool isMut, Position pos);
     void emitTransfer(SymID dst, Value val, Position pos);
-    void emitCapTransfer(SymID dst, SymID src, ast::Capability cap, Position pos);
+    void emitCapTransfer(SymID dst, SymID src, Capability cap, Position pos);
     BasicBlock* emitCoroSuspend(Position pos);
     Value emitCompoundMath(
         Value ptrVal, TokenType op, ast::Expr rhsExpr, const types::Type* elemType, Position pos);
 
-    const types::Type* lowerParamType(const types::Type* t, ast::Capability cap);
+    const types::Type* lowerParamType(const types::Type* t, Capability cap);
     bool ownsHeapMemory(const types::Type* t) const;
     static bool isAggregateType(const types::Type* t);
     Value boxScalar(Value val, const types::Type* t, Position pos);
@@ -125,7 +133,6 @@ private:
     void lowerStmt(ast::Stmt stmt);
     void lowerBlockStmt(ast::BlockStmt* block);
     Value addressOf(ast::Expr expr);
-    Value lowerIntrinsicCallExpr(ast::IntrinsicCallExpr* e);
 
     // Extracted Intrinsic and ABI Calls
     Value EmitMamlVecPush(Value vec, Value element, Position pos);

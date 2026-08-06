@@ -1,4 +1,3 @@
-
 #include "ast.h"
 #include "builder.h"
 #include "mir.h"
@@ -12,8 +11,6 @@ namespace maml::mir {
 // =============================================================================
 // Runtime Function Emitters
 // =============================================================================
-// These helpers generate the CallInst nodes mapped to the external C ABI
-// provided by the maml runtime library.
 
 Value Builder::EmitMamlVecPush(Value vec, Value element, Position pos)
 {
@@ -47,51 +44,6 @@ Value Builder::EmitMamlMapGet(Value m, Value key_hash, Value key_ptr, Value key_
 }
 
 // =============================================================================
-// Layout Helpers
-// =============================================================================
-
-// Simplified SizeOf estimator for the ABI structs.
-// In a full implementation, this bridges to layout.go logic.
-int sizeOfDynamic(const types::Type* t, const Target& target)
-{
-    if (!t)
-        return 0;
-    switch (t->kind) {
-    case types::TypeKind::I8:
-    case types::TypeKind::U8:
-    case types::TypeKind::Bool:
-        return 1;
-    case types::TypeKind::I16:
-    case types::TypeKind::U16:
-        return 2;
-    case types::TypeKind::I32:
-    case types::TypeKind::U32:
-    case types::TypeKind::F32:
-    case types::TypeKind::Char:
-        return 4;
-    case types::TypeKind::I64:
-    case types::TypeKind::U64:
-    case types::TypeKind::F64:
-        return 8;
-    case types::TypeKind::I128:
-    case types::TypeKind::U128:
-        return 16;
-    case types::TypeKind::String:
-        return 16; // STRING_SIZE
-    case types::TypeKind::Vector:
-        return 24; // VECTOR_SIZE
-    case types::TypeKind::View:
-        return 16; // VIEW_SIZE
-    case types::TypeKind::Map:
-        return 32; // MAP_SIZE
-    case types::TypeKind::Ptr:
-        return target.pointerSize;
-    default:
-        return target.pointerSize; // Fallback for composites
-    }
-}
-
-// =============================================================================
 // Composite Literal Lowering (Vec and Map)
 // =============================================================================
 
@@ -116,7 +68,8 @@ Value Builder::lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* reso
         IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
         sym_.intern("len"), 2, reg_.getPrimitive(types::TypeKind::U32), e->pos);
 
-    int elemSize = sizeOfDynamic(baseType, target_);
+    // Phase 5: Query type size directly from TypeRegistry
+    int elemSize = static_cast<int>(reg_.getTypeSize(baseType));
     storeField(obj, resolvedType,
         IntConstant {
             .value = elemSize, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
@@ -171,7 +124,8 @@ Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* reso
         IntConstant { .value = 0, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },
         sym_.intern("cap"), 3, reg_.getPrimitive(types::TypeKind::U32), e->pos);
 
-    int valSize = sizeOfDynamic(valType, target_);
+    // Phase 5: Query type size directly from TypeRegistry
+    int valSize = static_cast<int>(reg_.getTypeSize(valType));
     storeField(obj, resolvedType,
         IntConstant {
             .value = valSize, .type = reg_.getPrimitive(types::TypeKind::U32), .pos = e->pos },

@@ -1,5 +1,5 @@
 #pragma once
-#include "ast.h"
+#include "capability.h"
 #include "sym.h"
 #include <cstdint>
 #include <string>
@@ -92,7 +92,7 @@ struct SumPayload {
 
 struct FunctionPayload {
     std::vector<const Type*> params;
-    std::vector<ast::Capability> caps;
+    std::vector<Capability> caps;
     const Type* returnType;
 };
 

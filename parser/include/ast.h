@@ -1,6 +1,7 @@
 // ast.h
 #pragma once
 
+#include "capability.h"
 #include "sym.h"
 #include "token.h"
 
@@ -13,29 +14,20 @@
 #include <variant>
 #include <vector>
 
-namespace maml::types {
-struct Type;
-}
-
 namespace maml::ast {
 
-// =============================================================================
-// 1. Enums & Utility Structs
-// =============================================================================
+// --- Node Identification & Source Positions ---
 
-enum class Capability : uint8_t { Mut, Own, Ro };
+using NodeID = uint32_t;
+constexpr NodeID NoNode = 0;
 
-inline Capability parseCapability(std::string_view literal)
-{
-    if (literal == "mut")
-        return Capability::Mut;
-    if (literal == "own")
-        return Capability::Own;
-    if (literal == "ro")
-        return Capability::Ro;
-    assert(false && "parseCapability called with non-capability literal");
-    return Capability::Ro;
-}
+struct NodeBase {
+    NodeID id = NoNode;
+    Position pos {};
+    Position end {};
+};
+
+// --- Common Utilities & Error Handling ---
 
 struct CompileError {
     std::string stage;
@@ -55,9 +47,7 @@ inline std::ostream& operator<<(std::ostream& os, const CompileError& err)
     return os;
 }
 
-// =============================================================================
-// 2. Forward Declarations
-// =============================================================================
+// --- Forward Declarations ---
 
 // Expressions
 struct Identifier;
@@ -76,11 +66,7 @@ struct FieldAccess;
 struct IndexExpr;
 struct SliceExpr;
 struct TypeExprWrapper;
-struct BlockStmt; // Acts as both Stmt and Expr
-struct TaggedUnionConstructExpr;
-struct TaggedUnionAccessExpr;
-struct IntrinsicCallExpr;
-struct CastExpr;
+struct BlockStmt; // Serves as both Stmt and Expr
 
 // Statements
 struct DeclareStmt;
@@ -112,14 +98,11 @@ struct LiteralPattern;
 struct CompositePattern;
 struct WildcardPattern;
 
-// =============================================================================
-// 3. Variant Definitions (AST Node Interfaces)
-// =============================================================================
+// --- AST Variant Handles ---
 
 using Expr = std::variant<std::monostate, Identifier*, IntLiteral*, BoolLiteral*, StringLiteral*,
     InfixExpr*, PrefixExpr*, CallExpr*, IfExpr*, MatchExpr*, AwaitExpr*, SpawnExpr*,
-    CompositeLiteral*, FieldAccess*, IndexExpr*, SliceExpr*, TypeExprWrapper*, BlockStmt*,
-    TaggedUnionConstructExpr*, TaggedUnionAccessExpr*, IntrinsicCallExpr*, CastExpr*>;
+    CompositeLiteral*, FieldAccess*, IndexExpr*, SliceExpr*, TypeExprWrapper*, BlockStmt*>;
 
 using Stmt = std::variant<std::monostate, BlockStmt*, DeclareStmt*, AssignStmt*, ExprStmt*,
     ReturnStmt*, YieldStmt*, ForStmt*, BreakStmt*, ContinueStmt*, AliasDecl*, VecPushStmt*>;
@@ -132,9 +115,7 @@ using TypeExpr = std::variant<std::monostate, NamedTypeExpr*, ArrayTypeExpr*, St
 using Pattern = std::variant<std::monostate, IdentifierPattern*, LiteralPattern*, CompositePattern*,
     WildcardPattern*>;
 
-// =============================================================================
-// 4. Helper Sub-structs
-// =============================================================================
+// --- Helper Syntax Structures ---
 
 struct CallArg {
     Position pos;
@@ -146,7 +127,7 @@ struct CallArg {
 struct CompositeElement {
     Position pos;
     Position end;
-    Expr key; // std::monostate if purely positional
+    Expr key; // std::monostate if positional
     Expr value;
 };
 
@@ -187,321 +168,142 @@ struct VariantTypeExpr {
     std::vector<TypeExpr> tupleFields;
 };
 
-// =============================================================================
-// 5. AST Node Definitions
-// =============================================================================
+// --- Concrete Node Definitions ---
 
-// --- Expressions ---
-
-struct Identifier {
-    Position pos;
-    Position end;
+// Expressions
+struct Identifier : NodeBase {
     SymID name;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct IntLiteral {
-    Position pos;
-    Position end;
+struct IntLiteral : NodeBase {
     int64_t value;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct BoolLiteral {
-    Position pos;
-    Position end;
+struct BoolLiteral : NodeBase {
     bool value;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct StringLiteral {
-    Position pos;
-    Position end;
+struct StringLiteral : NodeBase {
     std::string_view value;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct InfixExpr {
-    Position pos;
-    Position end;
+struct InfixExpr : NodeBase {
     Expr left;
     TokenType op;
     Expr right;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct PrefixExpr {
-    Position pos;
-    Position end;
+struct PrefixExpr : NodeBase {
     TokenType op;
     Expr right;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct CallExpr {
-    Position pos;
-    Position end;
+struct CallExpr : NodeBase {
     Expr function;
     std::vector<CallArg> arguments;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct IfExpr {
-    Position pos;
-    Position end;
+struct IfExpr : NodeBase {
     Expr condition;
     BlockStmt* consequence;
     BlockStmt* alternative;
-    const maml::types::Type* exprType = nullptr;
-
-    bool alternativeIsUnreachable = false;
 };
 
-struct MatchExpr {
-    Position pos;
-    Position end;
+struct MatchExpr : NodeBase {
     Expr subject;
     std::vector<MatchArm> arms;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct AwaitExpr {
-    Position pos;
-    Position end;
+struct AwaitExpr : NodeBase {
     Expr value;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct SpawnExpr {
-    Position pos;
-    Position end;
+struct SpawnExpr : NodeBase {
     CallExpr* value;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct CompositeLiteral {
-    Position pos;
-    Position end;
+struct CompositeLiteral : NodeBase {
     TypeExpr typeExpr;
     std::vector<CompositeElement> elements;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct FieldAccess {
-    Position pos;
-    Position end;
+struct FieldAccess : NodeBase {
     Expr object;
     Identifier* field;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct IndexExpr {
-    Position pos;
-    Position end;
+struct IndexExpr : NodeBase {
     Expr left;
     Expr index;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct SliceExpr {
-    Position pos;
-    Position end;
+struct SliceExpr : NodeBase {
     Expr left;
     Expr low;
     Expr high;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct TypeExprWrapper {
-    Position pos;
-    Position end;
+struct TypeExprWrapper : NodeBase {
     TypeExpr typeExpr;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct TaggedUnionConstructExpr {
-    Position pos;
-    Position end;
-    const maml::types::Type* exprType = nullptr; // The lowered Tagged Union layout struct
-    int discriminant; // The tag value (0, 1, 2...)
-    std::vector<Expr> payloadArgs; // Evaluated payload arguments
-    const maml::types::Type* payloadStructType = nullptr; // Variant payload struct type
-};
-
-struct TaggedUnionAccessExpr {
-    Position pos;
-    Position end;
-    const maml::types::Type* exprType = nullptr; // The extracted field's type
-    Expr object; // The tagged union expression
-    int fieldIndex; // Index inside the payload struct
-    const maml::types::Type* payloadStructType = nullptr;
-};
-
-struct IntrinsicCallExpr {
-    Position pos;
-    Position end;
-    const maml::types::Type* exprType = nullptr;
-    SymID intrinsicSym; // Interned intrinsic name (e.g., "maml_vec_len")
-    std::vector<Expr> arguments;
-};
-
-struct CastExpr {
-    Position pos;
-    Position end;
-    const maml::types::Type* exprType = nullptr;
-    Expr source;
-    const maml::types::Type* targetType = nullptr;
-};
-
-// --- Statements ---
-
-struct BlockStmt {
-    Position pos;
-    Position end;
+// Statements
+struct BlockStmt : NodeBase {
     std::vector<Stmt> statements;
-    const maml::types::Type* exprType = nullptr;
 };
 
-struct DeclareStmt {
-    Position pos;
-    Position end;
+struct DeclareStmt : NodeBase {
     bool isMutable;
     SymID name;
     Expr value;
 };
 
-struct AssignStmt {
-    Position pos;
-    Position end;
+struct AssignStmt : NodeBase {
     Expr lValue;
     TokenType op;
     Expr rValue;
 };
 
-struct ExprStmt {
-    Position pos;
-    Position end;
+struct ExprStmt : NodeBase {
     Expr value;
 };
 
-struct ReturnStmt {
-    Position pos;
-    Position end;
+struct ReturnStmt : NodeBase {
     Expr value;
 };
 
-struct YieldStmt {
-    Position pos;
-    Position end;
+struct YieldStmt : NodeBase {
     Expr value;
 };
 
-struct ForStmt {
-    Position pos;
-    Position end;
+struct ForStmt : NodeBase {
     Stmt init;
     Expr condition;
     Stmt post;
     BlockStmt* body;
 };
 
-struct BreakStmt {
-    Position pos;
-    Position end;
+struct BreakStmt : NodeBase {
     Token token;
 };
 
-struct ContinueStmt {
-    Position pos;
-    Position end;
+struct ContinueStmt : NodeBase {
     Token token;
 };
 
-struct AliasDecl {
-    Position pos;
-    Position end;
+struct AliasDecl : NodeBase {
     Capability cap = Capability::Ro;
     SymID name;
     Expr value;
 };
 
-struct VecPushStmt {
-    Position pos;
-    Position end;
+struct VecPushStmt : NodeBase {
     Expr lValue;
     Expr rValue;
 };
 
-// --- Type Expressions ---
-
-struct NamedTypeExpr {
-    Position pos;
-    Position end;
-    Identifier* name;
-    const maml::types::Type* exprType = nullptr;
-};
-
-struct ArrayTypeExpr {
-    Position pos;
-    Position end;
-    TypeExpr base;
-    int size;
-    const maml::types::Type* exprType = nullptr;
-};
-
-struct StructTypeExpr {
-    Position pos;
-    Position end;
-    SymID name;
-    std::vector<StructTypeField> fields;
-};
-
-struct SumTypeExpr {
-    Position pos;
-    Position end;
-    SymID name;
-    std::vector<VariantTypeExpr> variants;
-};
-
-struct GenericTypeExpr {
-    Position pos;
-    Position end;
-    Identifier* name;
-    std::vector<TypeExpr> args;
-    const maml::types::Type* exprType = nullptr;
-};
-
-// --- Patterns ---
-
-struct IdentifierPattern {
-    Position pos;
-    Position end;
-    SymID name;
-};
-
-struct LiteralPattern {
-    Position pos;
-    Position end;
-    Expr value;
-};
-
-struct CompositePattern {
-    Position pos;
-    Position end;
-    TypeExpr typeExpr;
-    std::vector<CompositePatternElement> elements;
-};
-
-struct WildcardPattern {
-    Position pos;
-    Position end;
-};
-
-// --- Top-Level Declarations ---
-
-struct FnDecl {
-    Position pos;
-    Position end;
+// Declarations
+struct FnDecl : NodeBase {
     SymID name;
     std::vector<Param> params;
     TypeExpr returnType;
@@ -510,17 +312,54 @@ struct FnDecl {
     bool isExtern;
 };
 
-struct TypeDecl {
-    Position pos;
-    Position end;
+struct TypeDecl : NodeBase {
     Identifier* name;
     TypeExpr rhs;
 };
 
-struct Program {
-    Position pos;
-    Position end;
+struct Program : NodeBase {
     std::vector<Decl> decls;
+};
+
+// Patterns
+struct IdentifierPattern : NodeBase {
+    SymID name;
+};
+
+struct LiteralPattern : NodeBase {
+    Expr value;
+};
+
+struct CompositePattern : NodeBase {
+    TypeExpr typeExpr;
+    std::vector<CompositePatternElement> elements;
+};
+
+struct WildcardPattern : NodeBase { };
+
+// Type Expressions
+struct NamedTypeExpr : NodeBase {
+    Identifier* name;
+};
+
+struct ArrayTypeExpr : NodeBase {
+    TypeExpr base;
+    int size;
+};
+
+struct StructTypeExpr : NodeBase {
+    SymID name;
+    std::vector<StructTypeField> fields;
+};
+
+struct SumTypeExpr : NodeBase {
+    SymID name;
+    std::vector<VariantTypeExpr> variants;
+};
+
+struct GenericTypeExpr : NodeBase {
+    Identifier* name;
+    std::vector<TypeExpr> args;
 };
 
 } // namespace maml::ast

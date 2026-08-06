@@ -2,7 +2,6 @@
 
 #include "CodegenContext.hpp"
 #include "types.h"
-#include <llvm-19/llvm/IR/Type.h>
 #include <llvm/IR/Type.h>
 
 namespace maml {

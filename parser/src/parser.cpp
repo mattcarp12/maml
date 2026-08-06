@@ -2,6 +2,7 @@
 #include "arena.h"
 #include "ast.h"
 
+#include "capability.h"
 #include "sym.h"
 #include "token.h"
 #include <charconv>
@@ -272,7 +273,7 @@ ast::Param Parser::parseParam()
 
     if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
         || curToken_.type == TokenType::RO) {
-        p.cap = ast::parseCapability(curToken_.literal);
+        p.cap = parseCapability(curToken_.literal);
         nextToken();
     }
 
@@ -316,7 +317,7 @@ ast::TypeDecl* Parser::parseTypeDecl()
 
 ast::SumTypeExpr* Parser::parseSumType()
 {
-    auto* st = arena_.make<ast::SumTypeExpr>();
+    auto* st = makeNode<ast::SumTypeExpr>();
     st->pos = curToken_.pos;
 
     if (curToken_.type == TokenType::SEPARATOR)
@@ -375,7 +376,7 @@ ast::VariantTypeExpr Parser::parseSumVariant()
 
 ast::StructTypeExpr* Parser::parseProductType()
 {
-    auto* pt = arena_.make<ast::StructTypeExpr>();
+    auto* pt = makeNode<ast::StructTypeExpr>();
     pt->pos = curToken_.pos;
 
     if (peekToken_.type == TokenType::RBRACE) {
@@ -413,7 +414,7 @@ ast::StructTypeExpr* Parser::parseProductType()
 
 ast::BlockStmt* Parser::parseBlockStmt()
 {
-    auto* block = arena_.make<ast::BlockStmt>();
+    auto* block = makeNode<ast::BlockStmt>();
     block->pos = curToken_.pos;
     nextToken();
 
@@ -489,12 +490,12 @@ ast::Stmt Parser::parseDeclareStmt()
     nextToken();
 
     bool isAlias = false;
-    ast::Capability cap = ast::Capability::Ro; // only meaningful when isAlias == true
+    Capability cap = Capability::Ro; // only meaningful when isAlias == true
 
     if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
         || curToken_.type == TokenType::RO) {
         isAlias = true;
-        cap = ast::parseCapability(curToken_.literal);
+        cap = parseCapability(curToken_.literal);
         nextToken();
     }
 
@@ -506,7 +507,7 @@ ast::Stmt Parser::parseDeclareStmt()
             addError(curToken_.pos, "Alias Declarations not allowed to be mutable.");
             return std::monostate {};
         }
-        auto* alias = arena_.make<ast::AliasDecl>();
+        auto* alias = makeNode<ast::AliasDecl>();
         alias->pos = pos;
         alias->end = curToken_.pos;
         alias->cap = cap;
@@ -515,7 +516,7 @@ ast::Stmt Parser::parseDeclareStmt()
         return alias;
     }
 
-    auto* decl = arena_.make<ast::DeclareStmt>();
+    auto* decl = makeNode<ast::DeclareStmt>();
     decl->pos = pos;
     decl->end = curToken_.pos;
     decl->isMutable = isMutable;
@@ -568,7 +569,7 @@ ast::Stmt Parser::parseExpressionStmt()
             expectPeek(TokenType::SEMICOLON);
         }
 
-        auto* assign = arena_.make<ast::AssignStmt>();
+        auto* assign = makeNode<ast::AssignStmt>();
         assign->pos = pos;
         assign->end = curToken_.pos;
         assign->lValue = expr;
@@ -587,7 +588,7 @@ ast::Stmt Parser::parseExpressionStmt()
             expectPeek(TokenType::SEMICOLON);
         }
 
-        auto* push = arena_.make<ast::VecPushStmt>();
+        auto* push = makeNode<ast::VecPushStmt>();
         push->pos = pos;
         push->end = curToken_.pos;
         push->lValue = expr;
@@ -608,7 +609,7 @@ ast::Stmt Parser::parseExpressionStmt()
         nextToken(); // tolerate an optional semicolon
     }
 
-    auto* estmt = arena_.make<ast::ExprStmt>();
+    auto* estmt = makeNode<ast::ExprStmt>();
     estmt->pos = pos;
     estmt->end = curToken_.pos;
     estmt->value = expr;
@@ -617,7 +618,7 @@ ast::Stmt Parser::parseExpressionStmt()
 
 ast::ForStmt* Parser::parseForStmt()
 {
-    auto* stmt = arena_.make<ast::ForStmt>();
+    auto* stmt = makeNode<ast::ForStmt>();
     stmt->pos = curToken_.pos;
 
     // We now enforce parentheses around the condition/init block
@@ -707,13 +708,13 @@ ast::Expr Parser::parseIdentifier()
     SymID name = sym_.intern(curToken_.literal);
 
     if (peekToken_.type == TokenType::LBRACE) {
-        auto* named = arena_.make<ast::NamedTypeExpr>();
+        auto* named = makeNode<ast::NamedTypeExpr>();
         named->pos = pos;
-        named->name = arena_.make<ast::Identifier>();
+        named->name = makeNode<ast::Identifier>();
         named->name->name = name;
         named->name->pos = pos;
 
-        auto* wrapper = arena_.make<ast::TypeExprWrapper>();
+        auto* wrapper = makeNode<ast::TypeExprWrapper>();
         wrapper->pos = pos;
         wrapper->typeExpr = named;
         return wrapper;
@@ -723,13 +724,13 @@ ast::Expr Parser::parseIdentifier()
         nextToken(); // Advance so curToken_ is '<'
         auto* genType = parseGenericTypeExpr(name, pos);
 
-        auto* wrapper = arena_.make<ast::TypeExprWrapper>();
+        auto* wrapper = makeNode<ast::TypeExprWrapper>();
         wrapper->pos = pos;
         wrapper->typeExpr = genType;
         return wrapper;
     }
 
-    auto* id = arena_.make<ast::Identifier>();
+    auto* id = makeNode<ast::Identifier>();
     id->name = name;
     id->pos = pos;
     id->end = curToken_.pos;
@@ -760,7 +761,7 @@ ast::Expr Parser::parseStringLiteral()
 
 ast::Expr Parser::parsePrefixExpression()
 {
-    auto* expr = arena_.make<ast::PrefixExpr>();
+    auto* expr = makeNode<ast::PrefixExpr>();
     expr->pos = curToken_.pos;
     expr->op = curToken_.type;
     nextToken();
@@ -771,7 +772,7 @@ ast::Expr Parser::parsePrefixExpression()
 
 ast::Expr Parser::parseInfixExpression(ast::Expr left)
 {
-    auto* expr = arena_.make<ast::InfixExpr>();
+    auto* expr = makeNode<ast::InfixExpr>();
     expr->pos = std::visit(
         [](auto&& arg) -> Position {
             using T = std::decay_t<decltype(arg)>;
@@ -879,8 +880,8 @@ ast::MatchArm Parser::parseMatchArm()
         nextToken();
         ast::Expr yieldVal = parseExpression(LOWEST);
         expectPeek(TokenType::SEMICOLON); // Need semicolon for one-liners
-        auto* block = arena_.make<ast::BlockStmt>();
-        auto* ys = arena_.make<ast::YieldStmt>();
+        auto* block = makeNode<ast::BlockStmt>();
+        auto* ys = makeNode<ast::YieldStmt>();
         ys->value = yieldVal;
         block->statements.push_back(ys);
         arm.body = block;
@@ -897,7 +898,7 @@ ast::Pattern Parser::parsePattern()
     Position pos = curToken_.pos;
     if (curToken_.type == TokenType::IDENT) {
         if (curToken_.literal == "_") {
-            auto* w = arena_.make<ast::WildcardPattern>();
+            auto* w = makeNode<ast::WildcardPattern>();
             w->pos = pos;
             return w;
         }
@@ -909,12 +910,12 @@ ast::Pattern Parser::parsePattern()
             bool isBraced = (peekToken_.type == TokenType::LBRACE);
             TokenType closeToken = isBraced ? TokenType::RBRACE : TokenType::RPAREN;
 
-            auto* cp = arena_.make<ast::CompositePattern>();
+            auto* cp = makeNode<ast::CompositePattern>();
             cp->pos = pos;
 
-            auto* named = arena_.make<ast::NamedTypeExpr>();
+            auto* named = makeNode<ast::NamedTypeExpr>();
             named->pos = pos;
-            named->name = arena_.make<ast::Identifier>();
+            named->name = makeNode<ast::Identifier>();
             named->name->name = name;
             named->name->pos = pos;
             cp->typeExpr = named;
@@ -929,7 +930,7 @@ ast::Pattern Parser::parsePattern()
 
                 // Handle key: pattern bindings like `code: c` in struct patterns
                 if (isBraced && peekToken_.type == TokenType::COLON) {
-                    auto* keyId = arena_.make<ast::Identifier>();
+                    auto* keyId = makeNode<ast::Identifier>();
                     keyId->name = sym_.intern(curToken_.literal);
                     keyId->pos = curToken_.pos;
                     keyId->end = curToken_.pos;
@@ -961,12 +962,12 @@ ast::Pattern Parser::parsePattern()
         }
 
         // Standard identifier pattern
-        auto* ip = arena_.make<ast::IdentifierPattern>();
+        auto* ip = makeNode<ast::IdentifierPattern>();
         ip->pos = pos;
         ip->name = name;
         return ip;
     } else if (curToken_.type == TokenType::INT) {
-        auto* lit = arena_.make<ast::LiteralPattern>();
+        auto* lit = makeNode<ast::LiteralPattern>();
         lit->pos = pos;
         lit->value = parseIntegerLiteral();
         return lit;
@@ -978,7 +979,7 @@ ast::Pattern Parser::parsePattern()
 
 ast::Expr Parser::parseCallExpression(ast::Expr function)
 {
-    auto* expr = arena_.make<ast::CallExpr>();
+    auto* expr = makeNode<ast::CallExpr>();
     expr->pos = curToken_.pos;
     expr->function = function;
 
@@ -987,7 +988,7 @@ ast::Expr Parser::parseCallExpression(ast::Expr function)
         arg.pos = curToken_.pos;
         if (curToken_.type == TokenType::MUT || curToken_.type == TokenType::OWN
             || curToken_.type == TokenType::RO) {
-            arg.cap = ast::parseCapability(curToken_.literal);
+            arg.cap = parseCapability(curToken_.literal);
             nextToken();
         }
         arg.argument = parseExpression(LOWEST);
@@ -1000,7 +1001,7 @@ ast::Expr Parser::parseCallExpression(ast::Expr function)
 
 ast::Expr Parser::parseCompositeLiteral(ast::Expr left)
 {
-    auto* cl = arena_.make<ast::CompositeLiteral>();
+    auto* cl = makeNode<ast::CompositeLiteral>();
     cl->pos = curToken_.pos;
     cl->typeExpr = extractTypeExpr(left);
 
@@ -1057,13 +1058,13 @@ bool Parser::looksLikeGenericInstantiation() const
 
 ast::Expr Parser::parseFieldAccess(ast::Expr left)
 {
-    auto* fa = arena_.make<ast::FieldAccess>();
+    auto* fa = makeNode<ast::FieldAccess>();
     fa->pos = curToken_.pos;
     fa->object = left;
 
     if (!expectPeek(TokenType::IDENT))
         return std::monostate {};
-    fa->field = arena_.make<ast::Identifier>();
+    fa->field = makeNode<ast::Identifier>();
     fa->field->name = sym_.intern(curToken_.literal);
     fa->field->pos = curToken_.pos;
     fa->end = curToken_.pos;
@@ -1087,7 +1088,7 @@ ast::Expr Parser::parseIndexExpression(ast::Expr left)
             high = parseExpression(LOWEST);
         }
         expectPeek(TokenType::RBRACKET);
-        auto* slice = arena_.make<ast::SliceExpr>();
+        auto* slice = makeNode<ast::SliceExpr>();
         slice->left = left;
         slice->low = low;
         slice->high = high;
@@ -1095,7 +1096,7 @@ ast::Expr Parser::parseIndexExpression(ast::Expr left)
     }
 
     expectPeek(TokenType::RBRACKET);
-    auto* idx = arena_.make<ast::IndexExpr>();
+    auto* idx = makeNode<ast::IndexExpr>();
     idx->left = left;
     idx->index = low;
     return idx;
@@ -1103,7 +1104,7 @@ ast::Expr Parser::parseIndexExpression(ast::Expr left)
 
 ast::Expr Parser::parseAwaitExpression()
 {
-    auto* aw = arena_.make<ast::AwaitExpr>();
+    auto* aw = makeNode<ast::AwaitExpr>();
     aw->pos = curToken_.pos;
     nextToken();
     aw->value = parseExpression(PREFIX);
@@ -1112,7 +1113,7 @@ ast::Expr Parser::parseAwaitExpression()
 
 ast::Expr Parser::parseSpawnExpression()
 {
-    auto* sp = arena_.make<ast::SpawnExpr>();
+    auto* sp = makeNode<ast::SpawnExpr>();
     sp->pos = curToken_.pos;
     nextToken();
     ast::Expr val = parseExpression(PREFIX);
@@ -1126,7 +1127,7 @@ ast::Expr Parser::parseSpawnExpression()
 
 ast::Expr Parser::parseArrayTypePrefix()
 {
-    auto* tw = arena_.make<ast::TypeExprWrapper>();
+    auto* tw = makeNode<ast::TypeExprWrapper>();
     tw->pos = curToken_.pos;
     tw->typeExpr = parseTypeExpr();
     return tw;
@@ -1149,7 +1150,7 @@ ast::TypeExpr Parser::parseTypeExpr()
         if (!expectPeek(TokenType::RBRACKET))
             return std::monostate {};
         nextToken();
-        auto* arr = arena_.make<ast::ArrayTypeExpr>();
+        auto* arr = makeNode<ast::ArrayTypeExpr>();
         arr->size = size;
         arr->base = parseTypeExpr();
         return arr;
@@ -1161,9 +1162,9 @@ ast::TypeExpr Parser::parseTypeExpr()
             nextToken();
             return parseGenericTypeExpr(name, pos);
         }
-        auto* named = arena_.make<ast::NamedTypeExpr>();
+        auto* named = makeNode<ast::NamedTypeExpr>();
         named->pos = pos;
-        named->name = arena_.make<ast::Identifier>();
+        named->name = makeNode<ast::Identifier>();
         named->name->name = name;
         named->name->pos = pos;
         return named;
@@ -1174,9 +1175,9 @@ ast::TypeExpr Parser::parseTypeExpr()
 
 ast::GenericTypeExpr* Parser::parseGenericTypeExpr(SymID name, Position pos)
 {
-    auto* gen = arena_.make<ast::GenericTypeExpr>();
+    auto* gen = makeNode<ast::GenericTypeExpr>();
     gen->pos = pos;
-    gen->name = arena_.make<ast::Identifier>();
+    gen->name = makeNode<ast::Identifier>();
     gen->name->name = name;
 
     nextToken();
@@ -1197,7 +1198,7 @@ ast::TypeExpr Parser::extractTypeExpr(ast::Expr expr)
     if (auto* w = std::get_if<ast::TypeExprWrapper*>(&expr))
         return (*w)->typeExpr;
     if (auto* id = std::get_if<ast::Identifier*>(&expr)) {
-        auto* named = arena_.make<ast::NamedTypeExpr>();
+        auto* named = makeNode<ast::NamedTypeExpr>();
         named->name = *id;
         return named;
     }

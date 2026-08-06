@@ -55,6 +55,8 @@ private:
     std::array<InfixFn, 256> infixParseFns_ {};
     std::array<Precedence, 256> precedences_ {};
 
+    ast::NodeID nextNodeId_ = 1; // 0 == ast::NoNode
+
     // Core Setup
     void nextToken();
     // Error handling
@@ -126,6 +128,7 @@ private:
     template <typename T, typename... Args> T* makeNode(Args&&... args)
     {
         auto* node = arena_.make<T>(std::forward<Args>(args)...);
+        node->id = nextNodeId_++;
         node->pos = curToken_.pos;
         return node;
     }

@@ -1,15 +1,13 @@
 #include "type_registry.h"
 #include "arena.h"
 
-#include "ast.h"
+#include "capability.h"
 #include "sym.h"
 #include "types.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <format>
-#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -37,12 +35,13 @@ const Type* TypeRegistry::getPrimitive(TypeKind kind)
     return nullptr;
 }
 
+// type_registry.cpp (isPayloadEqual updated snippet)
 bool TypeRegistry::isPayloadEqual(const TypePayload& a, const TypePayload& b, TypeKind kind) const
 {
     switch (kind) {
     case TypeKind::Array: {
-        auto pa = std::get<ArrayPayload>(a);
-        auto pb = std::get<ArrayPayload>(b);
+        const auto& pa = std::get<ArrayPayload>(a);
+        const auto& pb = std::get<ArrayPayload>(b);
         return pa.base == pb.base && pa.size == pb.size;
     }
     case TypeKind::Vector:
@@ -52,29 +51,22 @@ bool TypeRegistry::isPayloadEqual(const TypePayload& a, const TypePayload& b, Ty
     case TypeKind::Future:
         return std::get<FuturePayload>(a).base == std::get<FuturePayload>(b).base;
     case TypeKind::View: {
-        auto pa = std::get<ViewPayload>(a);
-        auto pb = std::get<ViewPayload>(b);
+        const auto& pa = std::get<ViewPayload>(a);
+        const auto& pb = std::get<ViewPayload>(b);
         return pa.base == pb.base && pa.isMut == pb.isMut;
     }
     case TypeKind::Map: {
-        auto pa = std::get<MapPayload>(a);
-        auto pb = std::get<MapPayload>(b);
+        const auto& pa = std::get<MapPayload>(a);
+        const auto& pb = std::get<MapPayload>(b);
         return pa.key == pb.key && pa.value == pb.value;
     }
     case TypeKind::Struct:
-        // Since names must be unique in scope, checking the SymID is sufficient for structs
         return std::get<StructPayload>(a).name == std::get<StructPayload>(b).name;
     case TypeKind::Sum: {
-        auto pa = std::get<SumPayload>(a);
-        auto pb = std::get<SumPayload>(b);
+        const auto& pa = std::get<SumPayload>(a);
+        const auto& pb = std::get<SumPayload>(b);
 
-        // 1. Check the base name
-        if (pa.baseName != pb.baseName) {
-            return false;
-        }
-
-        // 2. Check that the generic arguments match exactly
-        if (pa.typeArgs.size() != pb.typeArgs.size()) {
+        if (pa.baseName != pb.baseName || pa.typeArgs.size() != pb.typeArgs.size()) {
             return false;
         }
         for (size_t i = 0; i < pa.typeArgs.size(); ++i) {
@@ -85,8 +77,8 @@ bool TypeRegistry::isPayloadEqual(const TypePayload& a, const TypePayload& b, Ty
         return true;
     }
     case TypeKind::Function: {
-        auto pa = std::get<FunctionPayload>(a);
-        auto pb = std::get<FunctionPayload>(b);
+        const auto& pa = std::get<FunctionPayload>(a);
+        const auto& pb = std::get<FunctionPayload>(b);
         return pa.returnType == pb.returnType && pa.params == pb.params && pa.caps == pb.caps;
     }
     default:
@@ -227,7 +219,7 @@ void TypeRegistry::updateSum(const Type* sumType, std::vector<SumVariant> varian
 }
 
 const Type* TypeRegistry::getFunction(
-    std::vector<const Type*> params, std::vector<ast::Capability> caps, const Type* returnType)
+    std::vector<const Type*> params, std::vector<Capability> caps, const Type* returnType)
 {
     TypePayload p = FunctionPayload { std::move(params), std::move(caps), returnType };
     for (const auto* t : composites_) {
@@ -239,28 +231,6 @@ const Type* TypeRegistry::getFunction(
     t->payload = std::move(p);
     composites_.push_back(t);
     return t;
-}
-
-const Type* TypeRegistry::getOption(const Type* base, SymbolTable& sym)
-{
-    // Emulates the NewOptionType logic
-    SymID someId = sym.intern("Some");
-    SymID noneId = sym.intern("None");
-    SymID optId = sym.intern("Option");
-
-    std::vector<SumVariant> variants = { { someId, 0, { base }, {} }, { noneId, 1, {}, {} } };
-    return getSum(optId, std::move(variants), { base });
-}
-
-const Type* TypeRegistry::getResult(const Type* val, const Type* err, SymbolTable& sym)
-{
-    // Emulates the NewResultType logic
-    SymID okId = sym.intern("Ok");
-    SymID errId = sym.intern("Err");
-    SymID resId = sym.intern("Result");
-
-    std::vector<SumVariant> variants = { { okId, 0, { val }, {} }, { errId, 1, { err }, {} } };
-    return getSum(resId, std::move(variants), { val, err });
 }
 
 size_t TypeRegistry::getTypeSize(const Type* type)
@@ -339,45 +309,6 @@ size_t TypeRegistry::getTypeSize(const Type* type)
     default:
         return 8; // Fallback default for handles/pointers
     }
-}
-
-const Type* TypeRegistry::getTaggedUnionLayout(const Type* sumType, SymbolTable& sym)
-{
-    assert(sumType && sumType->kind == TypeKind::Sum && "Expected a Sum Type");
-    const auto& sumPayload = std::get<SumPayload>(sumType->payload);
-
-    // 1. Calculate the maximum payload size across all variants
-    size_t maxPayloadSize = 0;
-    for (const auto& variant : sumPayload.variants) {
-        size_t variantSize = 0;
-        for (const auto* tupleTy : variant.tupleTypes) {
-            variantSize += getTypeSize(tupleTy);
-        }
-        for (const auto& field : variant.fields) {
-            variantSize += getTypeSize(field.type);
-        }
-        maxPayloadSize = std::max(maxPayloadSize, variantSize);
-    }
-
-    // 2. Build the structural fields: { discriminant: i32, payload: [maxPayloadSize x u8] }
-    std::vector<StructField> fields;
-
-    // Field 0: discriminant
-    fields.push_back({ .name = sym.intern("discriminant"), .type = getPrimitive(TypeKind::I32) });
-
-    // Field 1: payload array (only add if maxPayloadSize > 0)
-    if (maxPayloadSize > 0) {
-        const Type* u8Type = getPrimitive(TypeKind::U8);
-        const Type* payloadArrayType = getArray(u8Type, static_cast<int>(maxPayloadSize));
-
-        fields.push_back({ .name = sym.intern("payload"), .type = payloadArrayType });
-    }
-
-    // 3. Generate a descriptive interned name for the layout struct
-    SymID layoutName = sym.intern(sumType->toString(sym));
-
-    // 4. Create and return the interned structural struct
-    return getStruct(layoutName, std::move(fields), /*isReprC=*/true);
 }
 
 } // namespace maml::types

@@ -26,18 +26,18 @@
 
 #include "CodegenContext.hpp"
 #include "ProgramGenerator.hpp"
-#include "analyzer.h"
 #include "arena.h"
 #include "ast_printer.h"
 #include "builder.h"
+#include "compiler_context.h"
 #include "embedded_externs.hpp"
 #include "embedded_stdlib.hpp"
-#include "hir_desugarer.h"
 #include "lexer.h"
 #include "mir_dump.h"
 #include "parser.h"
 #include "pipeline.h"
 #include "reachability.h"
+#include "semantic_analyzer.h"
 
 // -----------------------------------------------------------------------------
 // Driver Options
@@ -49,9 +49,6 @@ struct CompilerOptions {
 
     bool dumpAst = false;
     std::string dumpAstPath = "maml_ast.txt";
-
-    bool dumpHir = false;
-    std::string dumpHirPath = "maml_hir.txt";
 
     bool dumpIr = false;
     std::string dumpIrPath = "maml_llvmir.txt";
@@ -130,13 +127,6 @@ static bool parseCommandLine(int argc, char* argv[], CompilerOptions& opts)
                     opts.dumpAstPath = argv[++i];
                 }
             }
-        } else if (arg == "--dump-hir" || arg == "-h") {
-            opts.dumpHir = true;
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                if (!(i + 2 == argc && opts.inputPath.empty())) {
-                    opts.dumpHirPath = argv[++i];
-                }
-            }
         } else if (opts.inputPath.empty()) {
             opts.inputPath = arg;
         } else if (opts.outputPath == "a.out") {
@@ -156,8 +146,8 @@ static bool parseCommandLine(int argc, char* argv[], CompilerOptions& opts)
 // -----------------------------------------------------------------------------
 // Stage 2: Frontend & Middle-End (Lexing -> Parsing -> Sema -> MIR)
 // -----------------------------------------------------------------------------
-static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const CompilerOptions& opts,
-    maml::Arena& arena, maml::SymbolTable& sym, maml::types::TypeRegistry& reg)
+static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(
+    const CompilerOptions& opts, maml::CompilerContext& ctx)
 {
     std::string userSource = readFile(opts.inputPath);
     if (userSource.empty()) {
@@ -183,7 +173,7 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const Compile
         { maml::TokenType::END_OF_FILE, "", { .filename = opts.inputPath, .line = 0, .col = 0 } });
 
     // 2. Parsing
-    maml::Parser parser(allTokens, sym, arena);
+    maml::Parser parser(allTokens, ctx.symbols, ctx.arena);
     auto astProg = parser.parseProgram();
     if (!parser.getErrors().empty()) {
         for (const auto& err : parser.getErrors()) {
@@ -192,55 +182,33 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const Compile
         return nullptr;
     }
 
-    // 3. Semantic Analysis
-    maml::sema::Analyzer analyzer(reg, sym);
-    analyzer.analyze(astProg);
-    auto semaErrors = analyzer.getErrors();
-    if (!semaErrors.empty()) {
-        for (const auto& err : semaErrors) {
-            std::cerr << err << "\n";
+    // 3. Semantic Analysis (5-Pass Pipeline)
+    maml::sema::SemanticAnalyzer analyzer(ctx);
+    if (!analyzer.analyze(astProg) || ctx.diagnostics.hasErrors()) {
+        for (const auto& diag : ctx.diagnostics.all()) {
+            std::cerr << diag << "\n";
         }
         return nullptr;
     }
 
     if (opts.dumpAst) {
         if (opts.dumpAstPath == "-") {
-            maml::ast::AstPrinter printer(sym, std::cout);
+            maml::ast::AstPrinter printer(ctx.symbols, std::cout);
             printer.print(astProg);
         } else {
             std::ofstream astStream(opts.dumpAstPath);
             if (!astStream.is_open()) {
                 std::cerr << "Error writing AST dump to " << opts.dumpAstPath << "\n";
             } else {
-                maml::ast::AstPrinter printer(sym, astStream);
+                maml::ast::AstPrinter printer(ctx.symbols, astStream);
                 printer.print(astProg);
                 std::cout << "📄 AST dumped to " << opts.dumpAstPath << "\n";
             }
         }
     }
 
-    // 3.5 HIR Desugaring Pass
-    maml::hir::Desugarer desugarer(reg, sym, arena);
-    desugarer.desugar(astProg);
-
-    if (opts.dumpHir) {
-        if (opts.dumpHirPath == "-") {
-            maml::ast::AstPrinter printer(sym, std::cout);
-            printer.print(astProg);
-        } else {
-            std::ofstream astStream(opts.dumpHirPath);
-            if (!astStream.is_open()) {
-                std::cerr << "Error writing AST dump to " << opts.dumpHirPath << "\n";
-            } else {
-                maml::ast::AstPrinter printer(sym, astStream);
-                printer.print(astProg);
-                std::cout << "📄 HIR dumped to " << opts.dumpHirPath << "\n";
-            }
-        }
-    }
-
     // 4. MIR Generation
-    maml::mir::Builder builder(reg, sym);
+    maml::mir::Builder builder(ctx);
     auto mirProg = builder.buildProgram(astProg);
     if (!mirProg) {
         std::cerr << "Error: MIR generation failed.\n";
@@ -253,7 +221,8 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const Compile
 
     for (auto& fn : mirProg->functions) {
         if (fn.graph) {
-            auto errs = maml::passes::runPasses(fn.graph.get(), fn.locals, sym, reg, passesCfg);
+            auto errs = maml::passes::runPasses(
+                fn.graph.get(), fn.locals, ctx.symbols, ctx.types.registry, passesCfg);
             allErrors.insert(allErrors.end(), errs.begin(), errs.end());
         }
     }
@@ -265,18 +234,18 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(const Compile
         return nullptr;
     }
 
-    maml::passes::eliminateDeadFunctions(mirProg.get(), sym);
+    maml::passes::eliminateDeadFunctions(mirProg.get(), ctx.symbols);
 
     // Optional MIR Dump
     if (opts.dumpMir) {
         if (opts.dumpMirPath == "-") {
-            maml::mir::dumpProgramMIR(std::cout, *mirProg, sym);
+            maml::mir::dumpProgramMIR(std::cout, *mirProg, ctx.symbols);
         } else {
             std::ofstream mirStream(opts.dumpMirPath);
             if (!mirStream.is_open()) {
                 std::cerr << "Error writing MIR dump to " << opts.dumpMirPath << "\n";
             } else {
-                maml::mir::dumpProgramMIR(mirStream, *mirProg, sym);
+                maml::mir::dumpProgramMIR(mirStream, *mirProg, ctx.symbols);
                 std::cout << "📄 MIR dumped to " << opts.dumpMirPath << "\n";
             }
         }
@@ -387,10 +356,10 @@ int main(int argc, char* argv[])
 
     maml::Arena arena;
     maml::SymbolTable sym;
-    maml::types::TypeRegistry reg(arena);
+    maml::CompilerContext ctx(arena, sym);
 
     // 1. AST & MIR Pipeline
-    auto mirProg = runFrontendAndMiddleEnd(opts, arena, sym, reg);
+    auto mirProg = runFrontendAndMiddleEnd(opts, ctx);
     if (!mirProg) {
         return 1;
     }
@@ -399,7 +368,7 @@ int main(int argc, char* argv[])
     std::string tempDir = std::filesystem::temp_directory_path().string();
     std::string tempLlPath = tempDir + "/maml_output.ll";
 
-    if (!runBackendCodegen(opts, *mirProg, sym, tempLlPath)) {
+    if (!runBackendCodegen(opts, *mirProg, ctx.symbols, tempLlPath)) {
         return 1;
     }
 
