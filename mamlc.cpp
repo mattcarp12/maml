@@ -2,7 +2,6 @@
 #include "cfg.h"
 #include "sym.h"
 #include "token.h"
-#include "type_registry.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/ManagedStatic.h>
@@ -173,6 +172,7 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(
         { maml::TokenType::END_OF_FILE, "", { .filename = opts.inputPath, .line = 0, .col = 0 } });
 
     // 2. Parsing
+    ctx.diagnostics.setStage("Parser");
     maml::Parser parser(allTokens, ctx.symbols, ctx.arena);
     auto astProg = parser.parseProgram();
     if (!parser.getErrors().empty()) {
@@ -183,6 +183,7 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(
     }
 
     // 3. Semantic Analysis (5-Pass Pipeline)
+    ctx.diagnostics.setStage("Sema");
     maml::sema::SemanticAnalyzer analyzer(ctx);
     if (!analyzer.analyze(astProg) || ctx.diagnostics.hasErrors()) {
         for (const auto& diag : ctx.diagnostics.all()) {
@@ -208,6 +209,7 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(
     }
 
     // 4. MIR Generation
+    ctx.diagnostics.setStage("MIR");
     maml::mir::Builder builder(ctx);
     auto mirProg = builder.buildProgram(astProg);
     if (!mirProg) {

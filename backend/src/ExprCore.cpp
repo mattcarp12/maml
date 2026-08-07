@@ -48,7 +48,11 @@ llvm::Value* evaluateValue(CodegenContext& ctx, const mir::Value& val)
                 if (llvm::isa<llvm::AllocaInst>(rawSym)) {
                     llvm::Value* basePtr = ctx.getMemoryBase(arg.name);
                     llvm::Type* ty = ctx.SymbolTypes[arg.name];
-
+                    if (!ty) {
+                        ctx.Error.fatal("evaluateValue: missing type entry for symbol '"
+                            + std::string(nameStr) + "'");
+                        return nullptr;
+                    }
                     if (ty && ty->isArrayTy()) {
                         // Arrays evaluate to their memory pointer in MAML[cite: 3]
                         return basePtr;
@@ -73,9 +77,8 @@ llvm::Value* evaluateValue(CodegenContext& ctx, const mir::Value& val)
                 // directly if supported
                 llvm::Constant* strConst
                     = llvm::ConstantDataArray::getString(ctx.Context, arg.value, true);
-                auto* globalVar
-                    = new llvm::GlobalVariable(*ctx.Module, strConst->getType(), true,
-                        llvm::GlobalValue::PrivateLinkage, strConst, "str_lit");
+                auto* globalVar = new llvm::GlobalVariable(*ctx.Module, strConst->getType(), true,
+                    llvm::GlobalValue::PrivateLinkage, strConst, "str_lit");
                 return ctx.Builder->CreatePointerCast(
                     globalVar, llvm::PointerType::getUnqual(ctx.Context));
             } },

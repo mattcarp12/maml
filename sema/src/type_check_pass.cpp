@@ -80,6 +80,58 @@ static bool containsView(const types::Type* t)
     }
 }
 
+static int getIntBitWidth(types::TypeKind k)
+{
+    switch (k) {
+    case types::TypeKind::I8:
+    case types::TypeKind::U8:
+        return 8;
+    case types::TypeKind::I16:
+    case types::TypeKind::U16:
+        return 16;
+    case types::TypeKind::I32:
+    case types::TypeKind::U32:
+        return 32;
+    case types::TypeKind::I64:
+    case types::TypeKind::U64:
+        return 64;
+    case types::TypeKind::I128:
+    case types::TypeKind::U128:
+        return 128;
+    default:
+        return 0;
+    }
+}
+
+static bool isUnsignedInt(types::TypeKind k)
+{
+    return k == types::TypeKind::U8 || k == types::TypeKind::U16 || k == types::TypeKind::U32
+        || k == types::TypeKind::U64 || k == types::TypeKind::U128;
+}
+
+// Returns the promoted common integer type if safe and lossless, or nullptr if incompatible.
+static const types::Type* tryPromoteIntegers(const types::Type* a, const types::Type* b)
+{
+    if (!a || !b || !a->isInteger() || !b->isInteger())
+        return nullptr;
+    if (a == b)
+        return a;
+
+    int widthA = getIntBitWidth(a->kind);
+    int widthB = getIntBitWidth(b->kind);
+    bool unsignA = isUnsignedInt(a->kind);
+    bool unsignB = isUnsignedInt(b->kind);
+
+    // Rule 1: Smaller unsigned integers can safely widen to any larger signed or unsigned integer.
+    // Rule 2: Smaller signed integers can safely widen to larger signed integers.
+    if (widthA < widthB && (unsignA || unsignA == unsignB))
+        return b;
+    if (widthB < widthA && (unsignB || unsignA == unsignB))
+        return a;
+
+    return nullptr; // Incompatible (e.g., same-width signed vs. unsigned, or lossy narrowing)
+}
+
 static bool isCompatible(const types::Type* expected, const types::Type* actual)
 {
     if (!expected || !actual)
@@ -538,11 +590,18 @@ void TypeCheckPass::visit(ast::InfixExpr& infix)
         return;
     }
 
+    // Check for safe integer widening before reporting a type mismatch
+    const types::Type* commonType = lType;
     if (lType != rType) {
-        ctx_.diagnostics.error(infix.pos, "type mismatch: cannot apply operator to '{}' and '{}'",
-            lType->toString(ctx_.symbols), rType->toString(ctx_.symbols));
-        ctx_.semantic.setTypeOf(&infix, ctx_.types.registry.getPrimitive(types::TypeKind::Unknown));
-        return;
+        commonType = tryPromoteIntegers(lType, rType);
+        if (!commonType) {
+            ctx_.diagnostics.error(infix.pos,
+                "type mismatch: cannot apply operator to '{}' and '{}'",
+                lType->toString(ctx_.symbols), rType->toString(ctx_.symbols));
+            ctx_.semantic.setTypeOf(
+                &infix, ctx_.types.registry.getPrimitive(types::TypeKind::Unknown));
+            return;
+        }
     }
 
     switch (infix.op) {
@@ -551,11 +610,12 @@ void TypeCheckPass::visit(ast::InfixExpr& infix)
     case TokenType::MULTIPLY:
     case TokenType::DIVIDE:
     case TokenType::MODULO:
-        if (!lType->isInteger()) {
+        if (!commonType->isInteger()) {
             ctx_.diagnostics.error(infix.pos, "operator requires integer operands, got '{}'",
-                lType->toString(ctx_.symbols));
+                commonType->toString(ctx_.symbols));
         }
-        ctx_.semantic.setTypeOf(&infix, lType);
+        // Set the expression type to the promoted common type (e.g., i64 for u8 + i64)
+        ctx_.semantic.setTypeOf(&infix, commonType);
         break;
     case TokenType::EQ:
     case TokenType::NOT_EQ:
@@ -959,7 +1019,7 @@ void TypeCheckPass::visit(ast::IndexExpr& idx)
         else if (leftType->kind == types::TypeKind::View)
             ctx_.semantic.setTypeOf(&idx, std::get<types::ViewPayload>(leftType->payload).base);
         else
-            ctx_.semantic.setTypeOf(&idx, ctx_.types.registry.getPrimitive(types::TypeKind::I64));
+            ctx_.semantic.setTypeOf(&idx, ctx_.types.registry.getPrimitive(types::TypeKind::U8));
     } else if (leftType->kind == types::TypeKind::Map) {
         const auto& mapPayload = std::get<types::MapPayload>(leftType->payload);
         if (idxType && idxType != mapPayload.key && idxType->kind != types::TypeKind::Unknown) {
@@ -1029,7 +1089,7 @@ void TypeCheckPass::visit(ast::SliceExpr& slice)
 
 void TypeCheckPass::visit(ast::CompositeLiteral& comp)
 {
-    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols);
+    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols, ctx_.globalScope);
     const types::Type* resolvedType = resolver.resolve(comp.typeExpr, ctx_.diagnostics);
     ctx_.semantic.setTypeOf(&comp, resolvedType);
     ctx_.semantic.setValueCategory(&comp, ValueCategory::RValue);
@@ -1231,6 +1291,29 @@ void TypeCheckPass::visit(ast::CompositePattern& p)
             }
             tupleIdx++;
         }
+    }
+}
+
+void TypeCheckPass::visit(ast::VecPushStmt& v)
+{
+    checkExpr(v.lValue);
+    const types::Type* lType = exprTypeOf(v.lValue);
+
+    const types::Type* elemType = nullptr;
+    if (lType && lType->kind == types::TypeKind::Vector) {
+        elemType = std::get<types::VectorPayload>(lType->payload).base;
+    } else if (lType && lType->kind != types::TypeKind::Unknown) {
+        ctx_.diagnostics.error(
+            v.pos, "cannot push to non-vector type '{}'", lType->toString(ctx_.symbols));
+    }
+
+    checkExpr(v.rValue, elemType);
+    const types::Type* rType = exprTypeOf(v.rValue);
+
+    if (elemType && rType && !isCompatible(elemType, rType)
+        && elemType->kind != types::TypeKind::Unknown && rType->kind != types::TypeKind::Unknown) {
+        ctx_.diagnostics.error(v.pos, "type mismatch: cannot push '{}' to vector of '{}'",
+            rType->toString(ctx_.symbols), elemType->toString(ctx_.symbols));
     }
 }
 

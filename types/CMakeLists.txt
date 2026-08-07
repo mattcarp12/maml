@@ -5,4 +5,4 @@ add_library(maml_types STATIC
     src/type_resolver.cpp
 )
 target_include_directories(maml_types PUBLIC include)
-target_link_libraries(maml_types PUBLIC maml_parser maml_core)
+target_link_libraries(maml_types PUBLIC maml_sema maml_parser maml_core)

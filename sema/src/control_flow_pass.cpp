@@ -156,6 +156,13 @@ void ControlFlowPass::checkExhaustiveness(ast::MatchExpr& match, const types::Ty
         return;
     }
 
+    if (match.arms.empty()) {
+        ctx_.diagnostics.error(match.pos,
+            "non-exhaustive match: matching on type '{}' requires at least one match arm",
+            subjectType->toString(ctx_.symbols));
+        return;
+    }
+
     if (subjectType->kind == types::TypeKind::Sum) {
         const auto& payload = std::get<types::SumPayload>(subjectType->payload);
         std::vector<bool> covered(payload.variants.size(), false);
@@ -175,6 +182,8 @@ void ControlFlowPass::checkExhaustiveness(ast::MatchExpr& match, const types::Ty
                     }
                 }
                 if (!isUnitVariant) {
+                    // Identifier does not match a unit variant name; treat as catch-all variable
+                    // binding
                     hasWildcard = true;
                     break;
                 }

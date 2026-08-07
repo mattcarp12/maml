@@ -90,7 +90,7 @@ fn str_to_int(s string) Option<int> {
     return Some(result);
 }
 
-fn is_whitespace(ch int) bool {
+fn is_whitespace(ch u8) bool {
     // Space (32), Tab (9), LF (10), CR (13)
     return ch == 32 || ch == 9 || ch == 10 || ch == 13;
 }

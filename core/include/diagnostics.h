@@ -16,6 +16,7 @@ enum class DiagSeverity : uint8_t { Error, Warning, Note };
 
 struct Diagnostic {
     DiagSeverity severity;
+    std::string stage; // Compiler phase (e.g., "Parser", "Sema", "CodeGen")
     Position pos {};
     std::string message;
 
@@ -34,10 +35,13 @@ struct Diagnostic {
             break;
         }
 
+        std::string prefix
+            = stage.empty() ? std::format("[{}]", sevStr) : std::format("[{} {}]", stage, sevStr);
+
         if (pos.filename.empty() && pos.line == 0) {
-            return std::format("[{}] {}", sevStr, message);
+            return std::format("{} {}", prefix, message);
         }
-        return std::format("[{}] {}:{}:{}: {}", sevStr, pos.filename, pos.line, pos.col, message);
+        return std::format("{} {}:{}:{}: {}", prefix, pos.filename, pos.line, pos.col, message);
     }
 };
 
@@ -49,18 +53,21 @@ inline std::ostream& operator<<(std::ostream& os, const Diagnostic& diag)
 
 class Diagnostics {
 public:
+    void setStage(std::string stage) { currentStage_ = std::move(stage); }
+    [[nodiscard]] const std::string& getStage() const { return currentStage_; }
+
     // --- Positional diagnostics ---
     void error(Position pos, std::string message)
     {
-        diags_.push_back({ DiagSeverity::Error, pos, std::move(message) });
+        diags_.push_back({ DiagSeverity::Error, currentStage_, pos, std::move(message) });
     }
     void warning(Position pos, std::string message)
     {
-        diags_.push_back({ DiagSeverity::Warning, pos, std::move(message) });
+        diags_.push_back({ DiagSeverity::Warning, currentStage_, pos, std::move(message) });
     }
     void note(Position pos, std::string message)
     {
-        diags_.push_back({ DiagSeverity::Note, pos, std::move(message) });
+        diags_.push_back({ DiagSeverity::Note, currentStage_, pos, std::move(message) });
     }
 
     // Variadic std::format ergonomics for positional errors
@@ -85,15 +92,15 @@ public:
     // --- Unpositioned diagnostics ---
     void error(std::string message)
     {
-        diags_.push_back({ DiagSeverity::Error, {}, std::move(message) });
+        diags_.push_back({ DiagSeverity::Error, currentStage_, {}, std::move(message) });
     }
     void warning(std::string message)
     {
-        diags_.push_back({ DiagSeverity::Warning, {}, std::move(message) });
+        diags_.push_back({ DiagSeverity::Warning, currentStage_, {}, std::move(message) });
     }
     void note(std::string message)
     {
-        diags_.push_back({ DiagSeverity::Note, {}, std::move(message) });
+        diags_.push_back({ DiagSeverity::Note, currentStage_, {}, std::move(message) });
     }
 
     // Variadic std::format ergonomics for unpositioned errors
@@ -124,6 +131,7 @@ public:
     [[nodiscard]] const std::vector<Diagnostic>& all() const { return diags_; }
 
 private:
+    std::string currentStage_;
     std::vector<Diagnostic> diags_;
 };
 

@@ -43,7 +43,7 @@ void TypeResolutionPass::visit(ast::TypeDecl& node)
         return; // Error already reported during DeclarationPass
     }
 
-    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols);
+    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols, ctx_.globalScope);
 
     if (auto** structPtr = std::get_if<ast::StructTypeExpr*>(&node.rhs); structPtr && *structPtr) {
         ast::StructTypeExpr* rhs = *structPtr;
@@ -106,7 +106,7 @@ void TypeResolutionPass::visit(ast::TypeDecl& node)
 
 void TypeResolutionPass::visit(ast::FnDecl& node)
 {
-    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols);
+    types::TypeResolver resolver(ctx_.types.registry, ctx_.symbols, ctx_.globalScope);
 
     std::vector<const types::Type*> paramTypes;
     std::vector<Capability> caps;
@@ -114,13 +114,23 @@ void TypeResolutionPass::visit(ast::FnDecl& node)
     caps.reserve(node.params.size());
 
     for (const auto& p : node.params) {
-        paramTypes.push_back(resolver.resolve(p.type, ctx_.diagnostics));
+        const types::Type* resolved = resolver.resolve(p.type, ctx_.diagnostics);
+        ctx_.semantic.setTypeOf(&p, resolved); // <-- Record in semantic table
+        paramTypes.push_back(resolved);
         caps.push_back(p.cap);
     }
 
     const types::Type* returnType = ctx_.types.registry.getPrimitive(types::TypeKind::Unit);
     if (!std::holds_alternative<std::monostate>(node.returnType)) {
         returnType = resolver.resolve(node.returnType, ctx_.diagnostics);
+        std::visit(
+            [&](auto&& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (!std::is_same_v<T, std::monostate>) {
+                    ctx_.semantic.setTypeOf(n, returnType);
+                }
+            },
+            node.returnType);
     }
 
     if (node.isAsync) {

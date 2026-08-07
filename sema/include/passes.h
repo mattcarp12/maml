@@ -83,6 +83,7 @@ public:
     void visit(ast::ExprStmt& node) override;
     void visit(ast::YieldStmt& node) override;
     void visit(ast::ForStmt& node) override;
+    void visit(ast::VecPushStmt& node) override;
 
     // Expressions
     void visit(ast::Identifier& node) override;

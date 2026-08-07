@@ -36,6 +36,10 @@ void handle(CodegenContext& ctx, const mir::CoroPromisePtrInst& inst);
 
 void compileInstruction(CodegenContext& ctx, const mir::Instruction& inst)
 {
+    // -- ADD DEBUG PRINT --
+    // llvm::errs() << "[DEBUG compileInstruction] Line: " << getPosOf(inst).line
+    //              << " | Variant Index: " << inst.index() << "\n";
+
     std::visit(
         [&](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;

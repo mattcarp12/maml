@@ -6,6 +6,7 @@
 #include "sym.h"
 #include "token.h"
 #include "type_registry.h"
+#include "type_resolver.h"
 #include "types.h"
 
 #include <memory>
@@ -69,12 +70,24 @@ void Builder::buildFn(ast::FnDecl* fn, Program& prog)
         mirFn.returnType = typeOf(fn->returnType);
     }
 
+    types::TypeResolver resolver(reg_, sym_, ctx_.globalScope);
+
+    mirFn.returnType = reg_.getPrimitive(types::TypeKind::Unit);
+    if (!std::holds_alternative<std::monostate>(fn->returnType)) {
+        mirFn.returnType = typeOf(fn->returnType);
+        if (!mirFn.returnType) {
+            mirFn.returnType = resolver.resolve(fn->returnType, ctx_.diagnostics);
+        }
+    }
+
     // 3. Populate parameters for ALL functions
     for (const auto& p : fn->params) {
         const types::Type* baseType = typeOf(p.type);
+        if (!baseType) {
+            baseType = resolver.resolve(p.type, ctx_.diagnostics);
+        }
         const types::Type* loweredType = lowerParamType(baseType, p.cap);
 
-        // For extern functions, keep original names; otherwise register via defineLocal
         SymID paramName = fn->isExtern ? p.name : defineLocal(p.name);
         locals_[paramName] = loweredType;
 
@@ -105,6 +118,7 @@ void Builder::buildFn(ast::FnDecl* fn, Program& prog)
 
     lowerBlockStmt(fn->body);
 
+    // --- FIX #2: Handle unterminated blocks based on return type ---
     if (current_ != nullptr && std::holds_alternative<std::monostate>(current_->terminator)) {
         if (fn->isAsync) {
             BasicBlock* suspendBlock = newBlock();
@@ -114,10 +128,15 @@ void Builder::buildFn(ast::FnDecl* fn, Program& prog)
                 cleanupBlock->id, fn->end };
             cleanupBlock->terminator = CoroYieldTerminator { fn->end };
             suspendBlock->terminator = UnreachableTerminator { fn->end };
+        } else if (mirFn.returnType && mirFn.returnType->kind != types::TypeKind::Unit) {
+            // Non-void function reached end of block without a terminator.
+            // Emit unreachable instead of a void ReturnTerminator to prevent LLVM 'ret void' crash.
+            current_->terminator = UnreachableTerminator { fn->end };
         } else {
             current_->terminator = ReturnTerminator { std::monostate {}, fn->end };
         }
     }
+    // ---------------------------------------------------------------
 
     exitScope();
 

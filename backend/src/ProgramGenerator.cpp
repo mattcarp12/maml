@@ -11,14 +11,14 @@
 #include "StmtGenerator.hpp"
 #include "TypeLowering.hpp"
 #include "cfg.h"
+#include "mir.h"
+#include "sym.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mir.h"
-#include "sym.h"
 
 namespace maml {
 
@@ -161,8 +161,15 @@ void declareFunction(CodegenContext& ctx, const mir::Function& fn)
     }
 
     std::vector<llvm::Type*> paramTypes;
-    for (const auto& p : fn.params)
-        paramTypes.push_back(llvmTypeFor(ctx, p.type));
+    for (const auto& p : fn.params) {
+        llvm::Type* pTy = llvmTypeFor(ctx, p.type);
+        if (!pTy || pTy->isVoidTy()) {
+            ctx.Error.fatal("Function '" + fnName + "' parameter '"
+                + std::string(ctx.Sym.resolve(p.name)) + "' resolved to void/null type!");
+            return;
+        }
+        paramTypes.push_back(pTy);
+    }
 
     llvm::FunctionType* FT = llvm::FunctionType::get(retType, paramTypes, false);
     llvm::Function* F
@@ -175,6 +182,10 @@ void compileFunction(CodegenContext& ctx, const mir::Function& fn)
 {
     ctx.CurrentFunctionName = fn.name;
     std::string fnName = std::string(ctx.Sym.resolve(fn.name));
+
+    // -- ADD DEBUG PRINT --
+    // llvm::errs() << "\n[DEBUG compileFunction] Entering: " << fnName << "\n";
+    // ---------------------
 
     // Reset coroutine context members between functions
     ctx.CurrentCoroHandle = nullptr;
@@ -273,6 +284,10 @@ void compileFunction(CodegenContext& ctx, const mir::Function& fn)
     ctx.popScope();
     ctx.Blocks.clear();
 
+    // -- ADD THIS LINE TO PRINT THE LLVM IR --
+    // F->print(llvm::errs());
+    // ----------------------------------------
+
     if (llvm::verifyFunction(*F, &llvm::errs())) {
         ctx.Error.fatal("LLVM Verification failed for function: " + fnName);
     }
@@ -291,6 +306,10 @@ void compileProgram(CodegenContext& ctx, const mir::Program& prog)
     for (const auto& fn : prog.functions) {
         compileFunction(ctx, fn);
     }
+
+    // -- ADD THIS LINE TO PRINT THE LLVM IR --
+    // ctx.Module->print(llvm::errs(), nullptr);
+    // ----------------------------------------
 
     // --- Final Module Verification ---
     if (llvm::verifyModule(*ctx.Module, &llvm::errs())) {

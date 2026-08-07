@@ -57,7 +57,7 @@ public:
     // Custom Type Management
     void defineType(SymID name, const types::Type* type) { types_[name] = type; }
 
-    const types::Type* resolveType(SymID name)
+    const types::Type* resolveType(SymID name) const
     {
         auto it = types_.find(name);
         if (it != types_.end()) {

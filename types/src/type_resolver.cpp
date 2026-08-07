@@ -1,8 +1,8 @@
-
-
 #include "type_resolver.h"
 #include "ast.h"
 #include "diagnostics.h"
+#include "scope.h"
+#include "type_lowering.h"
 #include "types.h"
 #include <format>
 #include <string_view>
@@ -20,17 +20,6 @@ const Type* TypeResolver::resolve(const ast::TypeExpr& expr, Diagnostics& diags)
             if constexpr (std::is_same_v<T, std::monostate> || !std::is_pointer_v<T>) {
                 return registry_.getPrimitive(TypeKind::Unknown);
             } else if (!arg) {
-                return registry_.getPrimitive(TypeKind::Unknown);
-            } else if constexpr (std::is_same_v<T, ast::NamedTypeExpr*>) {
-                if (!arg->name) {
-                    diags.error(arg->pos, "anonymous named type expression");
-                    return registry_.getPrimitive(TypeKind::Unknown);
-                }
-                std::string_view nameStr = sym_.resolve(arg->name->name);
-                if (const Type* prim = resolvePrimitive(nameStr)) {
-                    return prim;
-                }
-                diags.error(arg->pos, std::format("unresolved type name '{}'", nameStr));
                 return registry_.getPrimitive(TypeKind::Unknown);
             } else if constexpr (std::is_same_v<T, ast::ArrayTypeExpr*>) {
                 const Type* base = this->resolve(arg->base, diags);
@@ -78,14 +67,38 @@ const Type* TypeResolver::resolve(const ast::TypeExpr& expr, Diagnostics& diags)
                     const Type* v = this->resolve(arg->args[1], diags);
                     return registry_.getMap(k, v);
                 }
+                if (name == "Option" && arg->args.size() == 1) {
+                    TypeLowering lowering(registry_, sym_);
+                    return lowering.getOption(this->resolve(arg->args[0], diags));
+                }
+                if (name == "Result" && arg->args.size() == 2) {
+                    TypeLowering lowering(registry_, sym_);
+                    return lowering.getResult(
+                        this->resolve(arg->args[0], diags), this->resolve(arg->args[1], diags));
+                }
 
                 diags.error(arg->pos, std::format("unknown generic type construction '{}'", name));
+                return registry_.getPrimitive(TypeKind::Unknown);
+            } else if constexpr (std::is_same_v<T, ast::NamedTypeExpr*>) {
+                if (!arg->name) {
+                    diags.error(arg->pos, "anonymous named type expression");
+                    return registry_.getPrimitive(TypeKind::Unknown);
+                }
+                std::string_view nameStr = sym_.resolve(arg->name->name);
+                if (const Type* prim = resolvePrimitive(nameStr)) {
+                    return prim;
+                }
+                if (scope_) {
+                    if (const Type* customType = scope_->resolveType(arg->name->name)) {
+                        return customType;
+                    }
+                }
+                diags.error(arg->pos, std::format("unresolved type name '{}'", nameStr));
                 return registry_.getPrimitive(TypeKind::Unknown);
             }
         },
         expr);
 }
-
 const Type* TypeResolver::resolvePrimitive(std::string_view name)
 {
     if (name == "i8")
@@ -94,7 +107,7 @@ const Type* TypeResolver::resolvePrimitive(std::string_view name)
         return registry_.getPrimitive(TypeKind::I16);
     if (name == "i32")
         return registry_.getPrimitive(TypeKind::I32);
-    if (name == "i64")
+    if (name == "i64" || name == "int")
         return registry_.getPrimitive(TypeKind::I64);
     if (name == "i128")
         return registry_.getPrimitive(TypeKind::I128);

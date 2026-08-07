@@ -294,8 +294,8 @@ void DesugarPass::extractPatternBindings(ast::BlockStmt* block, const ast::Patte
 
     std::vector<types::StructField> payloadFields;
     for (size_t i = 0; i < variant.tupleTypes.size(); ++i) {
-        payloadFields.push_back(
-            { .name = ctx_.symbols.intern(std::format("_{}", i)), .type = variant.tupleTypes[i] });
+        payloadFields.push_back({ .name = ctx_.symbols.intern(std::format("payload_{}", i)),
+            .type = variant.tupleTypes[i] });
     }
     for (const auto& field : variant.fields) {
         payloadFields.push_back(field);
@@ -391,7 +391,7 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
         ident->pos = match->pos;
         ident->end = match->pos;
         ident->name = subjSym;
-        ctx_.semantic.setTypeOf(ident, ctx_.types.lowering.getTaggedUnionLayout(originalSumType));
+        ctx_.semantic.setTypeOf(ident, originalSumType);
         return ident;
     };
 
@@ -407,11 +407,6 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
             consequenceBlock = *block;
         } else {
             consequenceBlock = makeExprBlock(desugaredArmBody, matchRetType, arm.pos);
-        }
-
-        if (std::holds_alternative<ast::WildcardPattern*>(arm.pattern) && i == match->arms.size()) {
-            currentElse = consequenceBlock;
-            continue;
         }
 
         SymID variantName = NoSymbol;
@@ -440,8 +435,19 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
             }
         }
 
+        // Extract pattern bindings into the consequence block for this arm
         extractPatternBindings(consequenceBlock, arm.pattern, makeSubjectRef(), originalSumType,
             variantIndex, arm.pos);
+
+        // --- THE CLEAN FIX ---
+        // Since ControlFlowPass guarantees exhaustiveness, the final arm in the match
+        // (whether wildcard '_' or the last variant) becomes our unconditional fallback 'else'
+        // block!
+        if (i == match->arms.size()) {
+            currentElse = consequenceBlock;
+            continue;
+        }
+        // ---------------------
 
         auto* ifExpr = ctx_.arena.make<ast::IfExpr>();
         ifExpr->pos = arm.pos;

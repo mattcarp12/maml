@@ -23,7 +23,6 @@ void handle(CodegenContext& ctx, const mir::AllocaInst& inst)
         return;
     }
 
-    // Allocate on the stack and register it in the environment
     llvm::AllocaInst* alloca
         = ctx.Builder->CreateAlloca(llvmTy, nullptr, ctx.Sym.resolve(inst.dst));
     ctx.SymbolEnv.back()[inst.dst] = alloca;
@@ -32,7 +31,8 @@ void handle(CodegenContext& ctx, const mir::AllocaInst& inst)
 
 void handle(CodegenContext& ctx, const mir::AddressOfInst& inst)
 {
-    llvm::Value* srcSlot = ctx.resolveSymbol(inst.src);
+    // Use evaluateAddress so pointer-lowered parameters are properly loaded
+    llvm::Value* srcSlot = evaluateAddress(ctx, mir::Register { inst.src, nullptr, inst.pos });
     if (!srcSlot) {
         ctx.Error.fatal("address_of: undefined variable " + std::string(ctx.Sym.resolve(inst.src)));
         return;
@@ -151,12 +151,14 @@ void handle(CodegenContext& ctx, const mir::CastInst& inst)
         return;
     }
     ctx.SymbolEnv.back()[inst.dst] = castVal;
+    ctx.SymbolTypes[inst.dst] = targetTy;
 }
 
 void handle(CodegenContext& ctx, const mir::BitcastPtrInst& inst)
 {
     llvm::Value* srcPtr = evaluateValue(ctx, inst.src);
     ctx.SymbolEnv.back()[inst.dst] = srcPtr;
+    ctx.SymbolTypes[inst.dst] = llvmTypeFor(ctx, inst.type);
 }
 
 void handle(CodegenContext& ctx, const mir::CoroPrologueInst& inst)

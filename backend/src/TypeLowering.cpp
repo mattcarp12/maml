@@ -38,6 +38,11 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         return llvm::Type::getVoidTy(ctx.Context);
     }
 
+    // -- DROP THIS DEBUG PRINT --
+    // llvm::errs() << "[DEBUG llvmTypeFor] Kind: " << static_cast<int>(type->kind)
+    //              << " | Name: " << type->toString(ctx.Sym) << "\n";
+    // ---------------------------
+
     switch (type->kind) {
     // --- Primitives ---
     case types::TypeKind::I8:

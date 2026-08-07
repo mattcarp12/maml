@@ -366,6 +366,10 @@ Value Builder::addressOf(ast::Expr expr)
 
                 // Phase 4: Sum-kind handling for pattern-bound match arm fields
                 if (objType && objType->kind == types::TypeKind::Sum) {
+                    if (e->field->name == sym_.intern("discriminant")) {
+                        const types::Type* i32Type = reg_.getPrimitive(types::TypeKind::I32);
+                        return emitFieldAddr(basePtr, objType, e->field->name, 0, i32Type, e->pos);
+                    }
                     const auto& sumPayload = std::get<types::SumPayload>(objType->payload);
                     Value rawPayloadAddr = emitFieldAddr(basePtr, objType, sym_.intern("payload"),
                         1, reg_.getPrimitive(types::TypeKind::Unknown), e->pos);
@@ -660,6 +664,20 @@ Value Builder::lowerExpr(ast::Expr expr)
                     && (e->op == TokenType::EQ || e->op == TokenType::NOT_EQ)) {
                     return flattenStringEq(e, flatLeft, flatRight);
                 }
+
+                // Coerce operands to the promoted expression type via explicit MIR CastInst
+                auto coerceOperand = [&](Value val, const types::Type* targetTy) -> Value {
+                    const types::Type* valTy = getTypeOf(val);
+                    if (valTy && targetTy && valTy != targetTy && valTy->isInteger()
+                        && targetTy->isInteger()) {
+                        SymID castTmp = newTemp();
+                        return emit(CastInst { castTmp, val, targetTy, e->pos }, castTmp, targetTy);
+                    }
+                    return val;
+                };
+
+                flatLeft = coerceOperand(flatLeft, exprTy);
+                flatRight = coerceOperand(flatRight, exprTy);
 
                 SymID tmp = newTemp();
                 return emit(
@@ -982,10 +1000,6 @@ Value Builder::lowerExpr(ast::Expr expr)
                 }
 
                 Value rawVal = emitLoad(ptrVal, exprTy, e->pos);
-                if (sourceType && sourceType->kind == types::TypeKind::String) {
-                    SymID castTmp = newTemp();
-                    return emit(CastInst { castTmp, rawVal, exprTy, e->pos }, castTmp, exprTy);
-                }
                 return rawVal;
             },
             [&](ast::SliceExpr* e) -> Value {
