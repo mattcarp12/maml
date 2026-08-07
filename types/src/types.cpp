@@ -59,6 +59,65 @@ bool Type::isCopyable() const
     return false;
 }
 
+bool Type::isAggregate() const
+{
+    switch (kind) {
+    // Multi-word runtime structs and composites that require stack allocation
+    case TypeKind::String:
+    case TypeKind::Vector:
+    case TypeKind::Map:
+    case TypeKind::View:
+    case TypeKind::Buffer:
+    case TypeKind::Struct:
+    case TypeKind::Array:
+    case TypeKind::Sum:
+        return true;
+
+    // Scalars, pointers, functions, and Future handles fit in standard registers/slots
+    default:
+        return false;
+    }
+}
+
+bool Type::ownsHeapMemory() const
+{
+    switch (kind) {
+    // Heap-backed runtime containers and coroutine frames
+    case TypeKind::Vector:
+    case TypeKind::Map:
+    case TypeKind::String:
+    case TypeKind::Future:
+        return true;
+
+    // Recursively check structural fields
+    case TypeKind::Struct:
+        for (const auto& f : std::get<StructPayload>(payload).fields) {
+            if (f.type->ownsHeapMemory())
+                return true;
+        }
+        return false;
+
+    case TypeKind::Array:
+        return std::get<ArrayPayload>(payload).base->ownsHeapMemory();
+
+    case TypeKind::Sum:
+        for (const auto& v : std::get<SumPayload>(payload).variants) {
+            for (const auto& f : v.fields) {
+                if (f.type->ownsHeapMemory())
+                    return true;
+            }
+            for (const auto* tt : v.tupleTypes) {
+                if (tt->ownsHeapMemory())
+                    return true;
+            }
+        }
+        return false;
+
+    default:
+        return false;
+    }
+}
+
 std::string Type::toString(const SymbolTable& sym) const
 {
     switch (kind) {
@@ -149,6 +208,5 @@ std::string Type::toString(const SymbolTable& sym) const
     }
     return "";
 }
-
 
 } // namespace maml::types

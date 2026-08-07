@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cstddef>
 #include <format>
+#include <string>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -752,10 +753,49 @@ ast::Expr Parser::parseBooleanLiteral()
     return finishNode(lit);
 }
 
+static std::string unescapeString(std::string_view raw)
+{
+    std::string result;
+    result.reserve(raw.size());
+
+    for (size_t i = 0; i < raw.size(); ++i) {
+        if (raw[i] == '\\' && i + 1 < raw.size()) {
+            ++i; // Step past the backslash
+            switch (raw[i]) {
+            case 'n':
+                result.push_back('\n');
+                break;
+            case 't':
+                result.push_back('\t');
+                break;
+            case 'r':
+                result.push_back('\r');
+                break;
+            case '0':
+                result.push_back('\0');
+                break;
+            case '\\':
+                result.push_back('\\');
+                break;
+            case '"':
+                result.push_back('"');
+                break;
+            default:
+                result.push_back(raw[i]);
+                break;
+            }
+        } else {
+            result.push_back(raw[i]);
+        }
+    }
+
+    return result;
+}
+
 ast::Expr Parser::parseStringLiteral()
 {
     auto* lit = makeNode<ast::StringLiteral>();
-    lit->value = curToken_.literal;
+    lit->value = unescapeString(curToken_.literal);
     return finishNode(lit);
 }
 

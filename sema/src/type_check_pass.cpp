@@ -1148,6 +1148,91 @@ void TypeCheckPass::visit(ast::CompositeLiteral& comp)
             }
         }
     }
+
+    if (resolvedType->kind == types::TypeKind::Vector
+        || resolvedType->kind == types::TypeKind::Array) {
+        const types::Type* elemType = nullptr;
+        if (resolvedType->kind == types::TypeKind::Vector) {
+            elemType = std::get<types::VectorPayload>(resolvedType->payload).base;
+        } else {
+            elemType = std::get<types::ArrayPayload>(resolvedType->payload).base;
+        }
+
+        for (auto& el : comp.elements) {
+            checkExpr(el.value, elemType);
+            const types::Type* valType = exprTypeOf(el.value);
+            if (elemType && valType && !isCompatible(elemType, valType)
+                && elemType->kind != types::TypeKind::Unknown
+                && valType->kind != types::TypeKind::Unknown) {
+                ctx_.diagnostics.error(el.pos,
+                    "type mismatch in collection literal: expected '{}', got '{}'",
+                    elemType->toString(ctx_.symbols), valType->toString(ctx_.symbols));
+            }
+        }
+        return;
+    }
+
+    if (resolvedType->kind == types::TypeKind::Map) {
+        const auto& mapPayload = std::get<types::MapPayload>(resolvedType->payload);
+        for (auto& el : comp.elements) {
+            if (!std::holds_alternative<std::monostate>(el.key)) {
+                checkExpr(el.key, mapPayload.key);
+            }
+            checkExpr(el.value, mapPayload.value);
+        }
+        return;
+    }
+
+    if (resolvedType->kind == types::TypeKind::Sum) {
+        SymID variantName = NoSymbol;
+        if (auto* namedTy = std::get_if<ast::NamedTypeExpr*>(&comp.typeExpr)) {
+            if (namedTy && *namedTy && (*namedTy)->name) {
+                variantName = (*namedTy)->name->name;
+            }
+        }
+        const auto& sumPayload = std::get<types::SumPayload>(resolvedType->payload);
+        for (const auto& variant : sumPayload.variants) {
+            if (variant.name == variantName) {
+                for (auto& el : comp.elements) {
+                    auto** keyIdentPtr = std::get_if<ast::Identifier*>(&el.key);
+                    if (!keyIdentPtr) {
+                        ctx_.diagnostics.error(
+                            el.pos, "variant fields must be keyed with identifiers");
+                        checkExpr(el.value);
+                        continue;
+                    }
+                    SymID fieldName = (*keyIdentPtr)->name;
+                    checkExpr(el.value);
+                    const types::Type* valType = exprTypeOf(el.value);
+
+                    int foundIdx = -1;
+                    for (size_t i = 0; i < variant.fields.size(); ++i) {
+                        if (variant.fields[i].name == fieldName) {
+                            foundIdx = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                    if (foundIdx == -1) {
+                        ctx_.diagnostics.error(el.pos, "field '{}' does not exist on variant '{}'",
+                            ctx_.symbols.resolve(fieldName), ctx_.symbols.resolve(variant.name));
+                    } else {
+                        const types::Type* expectedType = variant.fields[foundIdx].type;
+                        if (valType && valType != expectedType
+                            && valType->kind != types::TypeKind::Unknown
+                            && expectedType->kind != types::TypeKind::Unknown) {
+                            ctx_.diagnostics.error(el.pos,
+                                "type mismatch for field '{}': expected '{}', got '{}'",
+                                ctx_.symbols.resolve(fieldName),
+                                expectedType->toString(ctx_.symbols),
+                                valType->toString(ctx_.symbols));
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        return;
+    }
 }
 
 void TypeCheckPass::visit(ast::MatchExpr& match)
@@ -1290,6 +1375,33 @@ void TypeCheckPass::visit(ast::CompositePattern& p)
                 }
             }
             tupleIdx++;
+        } else if (auto* keyId = std::get_if<ast::Identifier*>(&elem.key)) {
+            SymID fieldName = (*keyId)->name;
+            const types::Type* fieldType = nullptr;
+            for (const auto& f : targetVariant->fields) {
+                if (f.name == fieldName) {
+                    fieldType = f.type;
+                    break;
+                }
+            }
+            if (!fieldType) {
+                ctx_.diagnostics.error(elem.pos, "field '{}' does not exist on variant '{}'",
+                    ctx_.symbols.resolve(fieldName), ctx_.symbols.resolve(variantName));
+                fieldType = ctx_.types.registry.getPrimitive(types::TypeKind::Unknown);
+            }
+            if (auto* identPat = std::get_if<ast::IdentifierPattern*>(&elem.pattern)) {
+                if (currentScope_ && currentScope_->resolveSymbol((*identPat)->name)) {
+                    ctx_.diagnostics.error(elem.pos,
+                        "variable '{}' is already bound in this pattern",
+                        ctx_.symbols.resolve((*identPat)->name));
+                } else if (currentScope_) {
+                    Symbol sym;
+                    sym.kind = SymbolKind::Var;
+                    sym.name = (*identPat)->name;
+                    sym.type = fieldType;
+                    currentScope_->defineSymbol((*identPat)->name, sym);
+                }
+            }
         }
     }
 }

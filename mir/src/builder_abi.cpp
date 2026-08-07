@@ -81,7 +81,7 @@ Value Builder::lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* reso
         for (const auto& elem : e->elements) {
             Value flatElem = lowerExpr(elem.value);
             Value boxedElem;
-            if (baseType && isAggregateType(baseType)) {
+            if (baseType && baseType->isAggregate()) {
                 if (auto* reg = std::get_if<Register>(&flatElem)) {
                     boxedElem = emitBorrow(reg->name, true, elem.pos);
                 } else {
@@ -142,7 +142,7 @@ Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* reso
             Value flatVal = lowerExpr(kv.value);
             auto [hashVal, ptrVal, lenVal] = lowerMapKey(kv.key, kv.pos);
             Value boxedVal;
-            if (valType && isAggregateType(valType)) {
+            if (valType && valType->isAggregate()) {
                 if (auto* reg = std::get_if<Register>(&flatVal)) {
                     boxedVal = emitBorrow(reg->name, true, kv.pos);
                 } else {
@@ -156,6 +156,73 @@ Value Builder::lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* reso
     }
 
     return obj;
+}
+
+Value Builder::lowerSumTypeLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType)
+{
+    SymID variantName = NoSymbol;
+    if (auto* namedTy = std::get_if<ast::NamedTypeExpr*>(&e->typeExpr)) {
+        if (namedTy && *namedTy && (*namedTy)->name) {
+            variantName = (*namedTy)->name->name;
+        }
+    }
+    const auto& sumPayload = std::get<types::SumPayload>(resolvedType->payload);
+    for (const auto& variant : sumPayload.variants) {
+        if (variant.name == variantName) {
+            SymID tmp = emitTemp(resolvedType);
+            push(AllocaInst { .dst = tmp, .type = resolvedType, .pos = e->pos });
+            Value basePtr = emitBorrow(tmp, true, e->pos);
+
+            const types::Type* i32Type = reg_.getPrimitive(types::TypeKind::I32);
+            Value discVal
+                = IntConstant { .value = variant.discriminant, .type = i32Type, .pos = e->pos };
+            storeField(
+                basePtr, resolvedType, discVal, sym_.intern("discriminant"), 0, i32Type, e->pos);
+
+            if (!e->elements.empty()) {
+                Value rawPayloadAddr = emitFieldAddr(basePtr, resolvedType, sym_.intern("payload"),
+                    1, reg_.getPrimitive(types::TypeKind::Unknown), e->pos);
+
+                SymID castTmp = newPtrTemp();
+                push(BitcastPtrInst { .dst = castTmp,
+                    .src = rawPayloadAddr,
+                    .type = reg_.getPrimitive(types::TypeKind::Ptr),
+                    .pos = e->pos });
+                Value typedPayloadPtr = Register {
+                    .name = castTmp, .type = reg_.getPrimitive(types::TypeKind::Ptr), .pos = e->pos
+                };
+
+                const types::Type* payloadStructType = reg_.getStruct(variant.name, variant.fields);
+
+                for (size_t i = 0; i < e->elements.size(); ++i) {
+                    const auto& elem = e->elements[i];
+                    int fieldIdx = -1;
+                    SymID fieldName = NoSymbol;
+                    const types::Type* fieldType = nullptr;
+
+                    if (auto idPtr = std::get_if<ast::Identifier*>(&elem.key)) {
+                        fieldName = (*idPtr)->name;
+                        for (size_t j = 0; j < variant.fields.size(); ++j) {
+                            if (variant.fields[j].name == fieldName) {
+                                fieldIdx = static_cast<int>(j);
+                                fieldType = variant.fields[j].type;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (fieldIdx >= 0 && fieldType) {
+                        Value flatVal = lowerExpr(elem.value);
+                        storeField(typedPayloadPtr, payloadStructType, flatVal, fieldName, fieldIdx,
+                            fieldType, elem.pos);
+                    }
+                }
+            }
+            return Register { .name = tmp, .type = resolvedType, .pos = e->pos };
+        }
+    }
+
+    return std::monostate {}; // <-- ADD THIS: Fallback return value when no variant matches
 }
 
 } // namespace maml::mir

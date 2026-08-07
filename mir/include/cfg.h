@@ -1,8 +1,10 @@
 #pragma once
 
+#include "ast.h"
 #include "mir.h"
 #include "sym.h"
 #include "types.h"
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <vector>

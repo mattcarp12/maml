@@ -2,6 +2,7 @@
 #include "cfg.h"
 #include "sym.h"
 #include "token.h"
+#include "type_registry.h"
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/ManagedStatic.h>
@@ -260,9 +261,9 @@ static std::unique_ptr<maml::mir::Program> runFrontendAndMiddleEnd(
 // Stage 3: LLVM Backend Code Generation & Emission
 // -----------------------------------------------------------------------------
 static bool runBackendCodegen(const CompilerOptions& opts, maml::mir::Program& mirProg,
-    maml::SymbolTable& sym, const std::string& llPath)
+    maml::SymbolTable& sym, maml::types::TypeRegistry& typeRegistry, const std::string& llPath)
 {
-    maml::CodegenContext ctx("maml_core_module", sym);
+    maml::CodegenContext ctx("maml_core_module", sym, typeRegistry);
     maml::compileProgram(ctx, mirProg);
 
     if (ctx.Error.hasErrors()) {
@@ -370,7 +371,7 @@ int main(int argc, char* argv[])
     std::string tempDir = std::filesystem::temp_directory_path().string();
     std::string tempLlPath = tempDir + "/maml_output.ll";
 
-    if (!runBackendCodegen(opts, *mirProg, ctx.symbols, tempLlPath)) {
+    if (!runBackendCodegen(opts, *mirProg, ctx.symbols, ctx.types.registry, tempLlPath)) {
         return 1;
     }
 

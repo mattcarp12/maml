@@ -1,11 +1,14 @@
 #include "ast.h"
+#include "capability.h"
 #include "compiler_context.h"
+#include "intrinsics.h"
 #include "passes.h"
 #include "semantic_tables.h"
 #include "sym.h"
 #include "token.h"
 #include "types.h"
 
+#include <cstddef>
 #include <format>
 #include <string_view>
 #include <variant>
@@ -54,50 +57,18 @@ void DesugarPass::visit(ast::FnDecl& fn)
 void DesugarPass::visit(ast::BlockStmt& block)
 {
     for (auto& stmt : block.statements) {
-        std::visit(overloaded { [](std::monostate) {},
-                       [this](ast::BlockStmt* b) {
-                           if (b)
-                               visit(*b);
-                       },
-                       [this](ast::DeclareStmt* d) {
-                           if (d)
-                               d->value = desugarExpr(d->value);
-                       },
-                       [this](ast::AssignStmt* a) {
-                           if (a) {
-                               a->lValue = desugarExpr(a->lValue);
-                               a->rValue = desugarExpr(a->rValue);
-                           }
-                       },
-                       [this](ast::ExprStmt* e) {
-                           if (e)
-                               e->value = desugarExpr(e->value);
-                       },
-                       [this](ast::ReturnStmt* r) {
-                           if (r)
-                               r->value = desugarExpr(r->value);
-                       },
-                       [this](ast::YieldStmt* y) {
-                           if (y)
-                               y->value = desugarExpr(y->value);
-                       },
-                       [this](ast::ForStmt* f) {
-                           if (f) {
-                               f->condition = desugarExpr(f->condition);
-                               if (f->body)
-                                   visit(*f->body);
-                           }
-                       },
-                       [this](ast::VecPushStmt* v) {
-                           if (v) {
-                               v->lValue = desugarExpr(v->lValue);
-                               v->rValue = desugarExpr(v->rValue);
-                           }
-                       },
-                       [](auto*) {} },
-            stmt);
+        stmt = desugarStmt(stmt);
     }
 }
+
+const types::Type* DesugarPass::typeOfExpr(const ast::Expr& expr)
+{
+    return std::visit(overloaded { [](std::monostate) -> const types::Type* { return nullptr; },
+                          [this](auto* node) -> const types::Type* {
+                              return node ? ctx_.semantic.typeOf(node) : nullptr;
+                          } },
+        expr);
+};
 
 // =============================================================================
 // In-Place Expression Desugaring Traversal
@@ -167,10 +138,16 @@ ast::Expr DesugarPass::desugarExpr(ast::Expr expr)
                 return fa;
             },
             [this](ast::IndexExpr* idx) -> ast::Expr {
-                if (idx) {
-                    idx->left = desugarExpr(idx->left);
-                    idx->index = desugarExpr(idx->index);
+                if (!idx)
+                    return std::monostate {};
+
+                const types::Type* sourceType = typeOfExpr(idx->left);
+                if (sourceType && sourceType->kind == types::TypeKind::Map) {
+                    return desugarMapGet(idx);
                 }
+
+                idx->left = desugarExpr(idx->left);
+                idx->index = desugarExpr(idx->index);
                 return idx;
             },
             [this](ast::SliceExpr* slice) -> ast::Expr {
@@ -362,22 +339,21 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
     if (!match)
         return std::monostate {};
 
-    const types::Type* originalSumType
+    const types::Type* originalSubjectType
         = std::visit(overloaded { [](std::monostate) -> const types::Type* { return nullptr; },
                          [this](auto* node) -> const types::Type* {
                              return node ? ctx_.semantic.typeOf(node) : nullptr;
                          } },
             match->subject);
 
-    if (!originalSumType || originalSumType->kind != types::TypeKind::Sum) {
+    if (!originalSubjectType) {
         return match;
     }
 
     ast::Expr subjectAST = desugarExpr(match->subject);
-
     const types::Type* matchRetType = ctx_.semantic.typeOf(match);
-    const auto& sumPayload = std::get<types::SumPayload>(originalSumType->payload);
 
+    // 1. Bind the match subject to a temporary variable: let __match_subj_N = subject;
     SymID subjSym = ctx_.symbols.intern(std::format("__match_subj_{}", matchSubjCounter_++));
     auto* subjDecl = ctx_.arena.make<ast::DeclareStmt>();
     subjDecl->pos = match->pos;
@@ -391,12 +367,13 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
         ident->pos = match->pos;
         ident->end = match->pos;
         ident->name = subjSym;
-        ctx_.semantic.setTypeOf(ident, originalSumType);
+        ctx_.semantic.setTypeOf(ident, originalSubjectType);
         return ident;
     };
 
     ast::BlockStmt* currentElse = nullptr;
 
+    // 2. Iterate backwards over match arms to build the nested if/else decision tree
     for (size_t i = match->arms.size(); i > 0; --i) {
         auto& arm = match->arms[i - 1];
 
@@ -409,50 +386,110 @@ ast::Expr DesugarPass::desugarMatchExpr(ast::MatchExpr* match)
             consequenceBlock = makeExprBlock(desugaredArmBody, matchRetType, arm.pos);
         }
 
-        SymID variantName = NoSymbol;
-        std::visit(overloaded { [](auto&&) {},
-                       [&](ast::IdentifierPattern* idPat) {
-                           if (idPat)
-                               variantName = idPat->name;
-                       },
-                       [&](ast::CompositePattern* compPat) {
-                           if (compPat) {
-                               if (auto* nte = std::get_if<ast::NamedTypeExpr*>(&compPat->typeExpr);
-                                   nte && *nte && (*nte)->name) {
-                                   variantName = (*nte)->name->name;
-                               }
-                           }
-                       } },
-            arm.pattern);
+        if (originalSubjectType->kind == types::TypeKind::Sum) {
+            SymID variantName = NoSymbol;
+            std::visit(
+                overloaded { [](auto&&) {},
+                    [&](ast::IdentifierPattern* idPat) {
+                        if (idPat)
+                            variantName = idPat->name;
+                    },
+                    [&](ast::CompositePattern* compPat) {
+                        if (compPat) {
+                            if (auto* nte = std::get_if<ast::NamedTypeExpr*>(&compPat->typeExpr);
+                                nte && *nte && (*nte)->name) {
+                                variantName = (*nte)->name->name;
+                            }
+                        }
+                    } },
+                arm.pattern);
 
-        int variantDiscriminant = 0;
-        int variantIndex = 0;
-        for (size_t v = 0; v < sumPayload.variants.size(); ++v) {
-            if (sumPayload.variants[v].name == variantName) {
-                variantDiscriminant = sumPayload.variants[v].discriminant;
-                variantIndex = static_cast<int>(v);
-                break;
+            const auto& sumPayload = std::get<types::SumPayload>(originalSubjectType->payload);
+            int variantIndex = 0;
+            for (size_t v = 0; v < sumPayload.variants.size(); ++v) {
+                if (sumPayload.variants[v].name == variantName) {
+                    variantIndex = static_cast<int>(v);
+                    break;
+                }
+            }
+
+            // Unpacks payload fields (e.g., let c = __match_subj_N.payload_0;) into
+            // consequenceBlock
+            extractPatternBindings(consequenceBlock, arm.pattern, makeSubjectRef(),
+                originalSubjectType, variantIndex, arm.pos);
+        } else {
+            // Also support catch-all identifier pattern bindings on non-Sum types (e.g., other =>
+            // ...)
+            if (auto* idPat = std::get_if<ast::IdentifierPattern*>(&arm.pattern); idPat && *idPat) {
+                auto* decl = ctx_.arena.make<ast::DeclareStmt>();
+                decl->pos = arm.pos;
+                decl->end = arm.pos;
+                decl->isMutable = false;
+                decl->name = (*idPat)->name;
+                decl->value = makeSubjectRef();
+                consequenceBlock->statements.insert(consequenceBlock->statements.begin(), decl);
             }
         }
 
-        // Extract pattern bindings into the consequence block for this arm
-        extractPatternBindings(consequenceBlock, arm.pattern, makeSubjectRef(), originalSumType,
-            variantIndex, arm.pos);
-
-        // --- THE CLEAN FIX ---
-        // Since ControlFlowPass guarantees exhaustiveness, the final arm in the match
-        // (whether wildcard '_' or the last variant) becomes our unconditional fallback 'else'
-        // block!
+        // The final arm (wildcard '_' or catch-all) becomes our unconditional fallback 'else' block
         if (i == match->arms.size()) {
             currentElse = consequenceBlock;
             continue;
         }
-        // ---------------------
+
+        ast::Expr condExpr = std::monostate {};
+
+        // --- Branch condition generation for Sum vs. Non-Sum types ---
+        if (originalSubjectType->kind == types::TypeKind::Sum) {
+            SymID variantName = NoSymbol;
+            std::visit(
+                overloaded { [](auto&&) {},
+                    [&](ast::IdentifierPattern* idPat) {
+                        if (idPat)
+                            variantName = idPat->name;
+                    },
+                    [&](ast::CompositePattern* compPat) {
+                        if (compPat) {
+                            if (auto* nte = std::get_if<ast::NamedTypeExpr*>(&compPat->typeExpr);
+                                nte && *nte && (*nte)->name) {
+                                variantName = (*nte)->name->name;
+                            }
+                        }
+                    } },
+                arm.pattern);
+
+            const auto& sumPayload = std::get<types::SumPayload>(originalSubjectType->payload);
+            int variantDiscriminant = 0;
+            for (size_t v = 0; v < sumPayload.variants.size(); ++v) {
+                if (sumPayload.variants[v].name == variantName) {
+                    variantDiscriminant = sumPayload.variants[v].discriminant;
+                    break;
+                }
+            }
+            condExpr = makeDiscriminantCheck(makeSubjectRef(), variantDiscriminant, arm.pos);
+        } else {
+            // For primitive/scalar types (integers, booleans, strings), compare via `==`
+            if (auto* litPatPtr = std::get_if<ast::LiteralPattern*>(&arm.pattern);
+                litPatPtr && *litPatPtr) {
+                auto* eqExpr = ctx_.arena.make<ast::InfixExpr>();
+                eqExpr->pos = arm.pos;
+                eqExpr->end = arm.end;
+                eqExpr->left = makeSubjectRef();
+                eqExpr->op = TokenType::EQ;
+                eqExpr->right = desugarExpr((*litPatPtr)->value);
+                ctx_.semantic.setTypeOf(
+                    eqExpr, ctx_.types.registry.getPrimitive(types::TypeKind::Bool));
+                ctx_.semantic.setValueCategory(eqExpr, ValueCategory::RValue);
+                condExpr = eqExpr;
+            } else {
+                condExpr = makeBoolLiteral(true, arm.pos);
+            }
+        }
 
         auto* ifExpr = ctx_.arena.make<ast::IfExpr>();
         ifExpr->pos = arm.pos;
         ifExpr->end = arm.end;
-        ifExpr->condition = makeDiscriminantCheck(makeSubjectRef(), variantDiscriminant, arm.pos);
+        ifExpr->condition = condExpr;
         ifExpr->consequence = consequenceBlock;
         ifExpr->alternative = currentElse;
 
@@ -497,6 +534,254 @@ ast::Expr DesugarPass::makeBoolLiteral(bool val, Position pos)
     boolLit->value = val;
     ctx_.semantic.setTypeOf(boolLit, ctx_.types.registry.getPrimitive(types::TypeKind::Bool));
     return boolLit;
+}
+
+ast::Stmt DesugarPass::desugarStmt(ast::Stmt stmt)
+{
+    return std::visit(overloaded { [](std::monostate) -> ast::Stmt { return std::monostate {}; },
+                          [this](ast::BlockStmt* b) -> ast::Stmt {
+                              if (b)
+                                  visit(*b);
+                              return b;
+                          },
+                          [this](ast::DeclareStmt* d) -> ast::Stmt {
+                              if (d)
+                                  d->value = desugarExpr(d->value);
+                              return d;
+                          },
+                          [this](ast::AssignStmt* a) -> ast::Stmt {
+                              if (!a)
+                                  return a;
+
+                              // --- MAP ASSIGNMENT INTERCEPTION ---
+                              if (auto** idxPtr = std::get_if<ast::IndexExpr*>(&a->lValue);
+                                  idxPtr && *idxPtr) {
+                                  ast::IndexExpr* idx = *idxPtr;
+                                  const types::Type* sourceType = typeOfExpr(idx->left);
+                                  if (sourceType && sourceType->kind == types::TypeKind::Map) {
+                                      return desugarMapAssign(a, idx);
+                                  }
+                              }
+
+                              a->lValue = desugarExpr(a->lValue);
+                              a->rValue = desugarExpr(a->rValue);
+                              return a;
+                          },
+                          [this](ast::ExprStmt* e) -> ast::Stmt {
+                              if (e)
+                                  e->value = desugarExpr(e->value);
+                              return e;
+                          },
+                          [this](ast::ReturnStmt* r) -> ast::Stmt {
+                              if (r)
+                                  r->value = desugarExpr(r->value);
+                              return r;
+                          },
+                          [this](ast::YieldStmt* y) -> ast::Stmt {
+                              if (y)
+                                  y->value = desugarExpr(y->value);
+                              return y;
+                          },
+                          [this](ast::ForStmt* f) -> ast::Stmt {
+                              if (f) {
+                                  f->init = desugarStmt(f->init);
+                                  f->condition = desugarExpr(f->condition);
+                                  f->post = desugarStmt(f->post);
+                                  if (f->body)
+                                      visit(*f->body);
+                              }
+                              return f;
+                          },
+                          [this](ast::VecPushStmt* v) -> ast::Stmt {
+                              if (v) {
+                                  v->lValue = desugarExpr(v->lValue);
+                                  v->rValue = desugarExpr(v->rValue);
+                              }
+                              return v;
+                          },
+                          [](auto* s) -> ast::Stmt { return s; } },
+        stmt);
+}
+
+ast::ExprStmt* DesugarPass::desugarMapAssign(ast::AssignStmt* assign, ast::IndexExpr* idx)
+{
+    // 1. Recursively desugar sub-expressions (in case of nested matches/lookups)
+    ast::Expr mapExpr = desugarExpr(idx->left);
+    ast::Expr keyExpr = desugarExpr(idx->index);
+    ast::Expr valExpr = desugarExpr(assign->rValue);
+
+    // 2. Create the identifier node for "__builtin_map_put"
+    auto* fnId = ctx_.arena.make<ast::Identifier>();
+    fnId->pos = assign->pos;
+    fnId->end = assign->pos;
+    fnId->name = ctx_.symbols.intern(intrinsics::MAP_PUT);
+
+    // 3. Construct the CallExpr: __builtin_map_put(m, key, val)
+    auto* call = ctx_.arena.make<ast::CallExpr>();
+    call->pos = assign->pos;
+    call->end = assign->end;
+    call->function = fnId;
+
+    // Arg 0: Map container
+    // We pass `m` with Capability::Mut so that MIR's CallExpr builder automatically
+    // invokes `addressOf(m)`, passing a pointer to the map struct to the runtime.
+    call->arguments.push_back(
+        ast::CallArg { .argument = mapExpr, .cap = Capability::Mut, .pos = assign->pos });
+
+    // Arg 1: Key
+    call->arguments.push_back(
+        ast::CallArg { .argument = keyExpr, .cap = Capability::Ro, .pos = assign->pos });
+
+    // Arg 2: Value
+    call->arguments.push_back(
+        ast::CallArg { .argument = valExpr, .cap = Capability::Own, .pos = assign->pos });
+
+    // 4. Decorate semantic tables: __builtin_map_put returns 'unit'
+    const types::Type* unitType = ctx_.types.registry.getPrimitive(types::TypeKind::Unit);
+    ctx_.semantic.setTypeOf(call, unitType);
+    ctx_.semantic.setValueCategory(call, ValueCategory::RValue);
+
+    // 5. Wrap the call in an ExprStmt and return it
+    auto* exprStmt = ctx_.arena.make<ast::ExprStmt>();
+    exprStmt->pos = assign->pos;
+    exprStmt->end = assign->end;
+    exprStmt->value = call;
+
+    return exprStmt;
+}
+
+ast::BlockStmt* DesugarPass::desugarMapGet(ast::IndexExpr* idx)
+{
+    // 1. Recursively desugar sub-expressions
+    ast::Expr mapExpr = desugarExpr(idx->left);
+    ast::Expr keyExpr = desugarExpr(idx->index);
+
+    // 2. Resolve semantic types
+    // const types::Type* sourceType = ctx_.semantic.typeOf(&(idx->left));
+    const types::Type* sourceType = typeOfExpr(idx->left);
+    const auto& mapPayload = std::get<types::MapPayload>(sourceType->payload);
+    const types::Type* valType = mapPayload.value;
+    const types::Type* optionType = ctx_.semantic.typeOf(idx); // Option<V>
+    const types::Type* ptrType = ctx_.types.registry.getPrimitive(types::TypeKind::Ptr);
+    const types::Type* boolType = ctx_.types.registry.getPrimitive(types::TypeKind::Bool);
+    const types::Type* i64Type = ctx_.types.registry.getPrimitive(types::TypeKind::I64);
+
+    // 3. Create a unique temporary variable name for the raw pointer
+    SymID rawPtrSym = ctx_.symbols.intern(std::format("__map_raw_ptr_{}", mapSubjCounter_++));
+
+    // 4. Build CallExpr: __builtin_map_get(m, key) -> ptr
+    auto* fnId = ctx_.arena.make<ast::Identifier>();
+    fnId->pos = idx->pos;
+    fnId->end = idx->pos;
+    fnId->name = ctx_.symbols.intern(intrinsics::MAP_GET);
+
+    auto* getCall = ctx_.arena.make<ast::CallExpr>();
+    getCall->pos = idx->pos;
+    getCall->end = idx->end;
+    getCall->function = fnId;
+    getCall->arguments.push_back(ast::CallArg { .argument = mapExpr,
+        .cap = Capability::Mut, // Triggers addressOf(m) automatically in MIR
+        .pos = idx->pos });
+    getCall->arguments.push_back(
+        ast::CallArg { .pos = idx->pos, .cap = Capability::Ro, .argument = keyExpr });
+    ctx_.semantic.setTypeOf(getCall, ptrType);
+    ctx_.semantic.setValueCategory(getCall, ValueCategory::RValue);
+
+    // 5. Build statement: let __map_raw_ptr_N = __builtin_map_get(m, key);
+    auto* declStmt = ctx_.arena.make<ast::DeclareStmt>();
+    declStmt->pos = idx->pos;
+    declStmt->end = idx->pos;
+    declStmt->isMutable = false;
+    declStmt->name = rawPtrSym;
+    declStmt->value = getCall;
+
+    // 6. Build condition: __map_raw_ptr_N != 0
+    auto* condId = ctx_.arena.make<ast::Identifier>();
+    condId->pos = idx->pos;
+    condId->end = idx->pos;
+    condId->name = rawPtrSym;
+    ctx_.semantic.setTypeOf(condId, ptrType);
+    ctx_.semantic.setValueCategory(condId, ValueCategory::RValue);
+
+    auto* zeroLit = ctx_.arena.make<ast::IntLiteral>();
+    zeroLit->pos = idx->pos;
+    zeroLit->end = idx->pos;
+    zeroLit->value = 0;
+    ctx_.semantic.setTypeOf(zeroLit, i64Type);
+    ctx_.semantic.setValueCategory(zeroLit, ValueCategory::RValue);
+
+    auto* condExpr = ctx_.arena.make<ast::InfixExpr>();
+    condExpr->pos = idx->pos;
+    condExpr->end = idx->pos;
+    condExpr->left = condId;
+    condExpr->op = TokenType::NOT_EQ;
+    condExpr->right = zeroLit;
+    ctx_.semantic.setTypeOf(condExpr, boolType);
+    ctx_.semantic.setValueCategory(condExpr, ValueCategory::RValue);
+
+    // 7. Build consequence: Some(__map_raw_ptr_N)
+    // NOTE: Setting the semantic type of `derefId` to `valType` triggers MIR's
+    // automatic pointer-dereferencing mechanism (`emitLoad`) when evaluated!
+    auto* derefId = ctx_.arena.make<ast::Identifier>();
+    derefId->pos = idx->pos;
+    derefId->end = idx->pos;
+    derefId->name = rawPtrSym;
+    ctx_.semantic.setTypeOf(derefId, valType); // <-- Key to auto-dereferencing!
+    ctx_.semantic.setValueCategory(derefId, ValueCategory::LValue);
+
+    auto* someId = ctx_.arena.make<ast::Identifier>();
+    someId->pos = idx->pos;
+    someId->end = idx->pos;
+    someId->name = ctx_.symbols.intern("Some");
+    ctx_.semantic.setTypeOf(someId, optionType);
+
+    auto* someCall = ctx_.arena.make<ast::CallExpr>();
+    someCall->pos = idx->pos;
+    someCall->end = idx->end;
+    someCall->function = someId;
+    someCall->arguments.push_back(
+        ast::CallArg { .pos = idx->pos, .cap = Capability::Own, .argument = derefId });
+    ctx_.semantic.setTypeOf(someCall, optionType);
+    ctx_.semantic.setValueCategory(someCall, ValueCategory::RValue);
+
+    ast::BlockStmt* consequenceBlock = makeExprBlock(someCall, optionType, idx->pos);
+
+    // 8. Build alternative: None
+    auto* noneId = ctx_.arena.make<ast::Identifier>();
+    noneId->pos = idx->pos;
+    noneId->end = idx->pos;
+    noneId->name = ctx_.symbols.intern("None");
+    ctx_.semantic.setTypeOf(noneId, optionType);
+    ctx_.semantic.setValueCategory(noneId, ValueCategory::RValue);
+
+    ast::BlockStmt* alternativeBlock = makeExprBlock(noneId, optionType, idx->pos);
+
+    // 9. Build IfExpr: if (cond) { Some(...) } else { None }
+    auto* ifExpr = ctx_.arena.make<ast::IfExpr>();
+    ifExpr->pos = idx->pos;
+    ifExpr->end = idx->end;
+    ifExpr->condition = condExpr;
+    ifExpr->consequence = consequenceBlock;
+    ifExpr->alternative = alternativeBlock;
+    ctx_.semantic.setTypeOf(ifExpr, optionType);
+    ctx_.semantic.setValueCategory(ifExpr, ValueCategory::RValue);
+
+    // 10. Wrap in enclosing block expression and return
+    auto* enclosingBlock = ctx_.arena.make<ast::BlockStmt>();
+    enclosingBlock->pos = idx->pos;
+    enclosingBlock->end = idx->end;
+    ctx_.semantic.setTypeOf(enclosingBlock, optionType);
+    ctx_.semantic.setValueCategory(enclosingBlock, ValueCategory::RValue);
+
+    enclosingBlock->statements.push_back(declStmt);
+
+    auto* trailingExprStmt = ctx_.arena.make<ast::ExprStmt>();
+    trailingExprStmt->pos = idx->pos;
+    trailingExprStmt->end = idx->end;
+    trailingExprStmt->value = ifExpr;
+    enclosingBlock->statements.push_back(trailingExprStmt);
+
+    return enclosingBlock;
 }
 
 } // namespace maml::sema

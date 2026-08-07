@@ -62,6 +62,9 @@ const Type* TypeResolver::resolve(const ast::TypeExpr& expr, Diagnostics& diags)
                 if (name == "Future" && arg->args.size() == 1) {
                     return registry_.getFuture(this->resolve(arg->args[0], diags));
                 }
+                if (name == "View" && arg->args.size() == 1) {
+                    return registry_.getView(this->resolve(arg->args[0], diags), false);
+                }
                 if (name == "Map" && arg->args.size() == 2) {
                     const Type* k = this->resolve(arg->args[0], diags);
                     const Type* v = this->resolve(arg->args[1], diags);

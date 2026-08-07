@@ -3,6 +3,7 @@
 
 #include "capability.h"
 #include "sym.h"
+#include "type_layout.h"
 #include "types.h"
 #include <algorithm>
 #include <cassert>
@@ -233,82 +234,80 @@ const Type* TypeRegistry::getFunction(
     return t;
 }
 
-size_t TypeRegistry::getTypeSize(const Type* type)
+// Internal helper to calculate size AND alignment
+static TypeLayout getLayout(const Type* type, TypeRegistry& reg)
 {
     if (!type)
-        return 0;
+        return { 0, 1 };
 
     switch (type->kind) {
-    case TypeKind::I8:
-    case TypeKind::U8:
-    case TypeKind::Bool:
-    case TypeKind::Char:
-        return 1;
-
-    case TypeKind::I16:
-    case TypeKind::U16:
-        return 2;
-
-    case TypeKind::I32:
-    case TypeKind::U32:
-    case TypeKind::F32:
-        return 4;
-
-    case TypeKind::I64:
-    case TypeKind::U64:
-    case TypeKind::F64:
-    case TypeKind::Ptr:
-    case TypeKind::View:
-    case TypeKind::Buffer:
-        return 8; // Assuming a 64-bit target architecture
-
-    case TypeKind::I128:
-    case TypeKind::U128:
-        return 16;
-
-    case TypeKind::Unit:
-    case TypeKind::Any:
-    case TypeKind::Unknown:
-        return 0;
-
     case TypeKind::Array: {
-        const auto& payload = std::get<ArrayPayload>(type->payload);
-        return payload.size * getTypeSize(payload.base);
+        const auto& p = std::get<ArrayPayload>(type->payload);
+        TypeLayout base = getLayout(p.base, reg);
+        return { .size = p.size * base.size, .alignment = base.alignment };
     }
 
     case TypeKind::Struct: {
-        const auto& payload = std::get<StructPayload>(type->payload);
-        size_t totalSize = 0;
-        for (const auto& field : payload.fields) {
-            // Note: For simplicity, this sums field sizes directly.
-            // If your ABI requires strict struct field alignment padding,
-            // align 'totalSize' to field alignment before adding.
-            totalSize += getTypeSize(field.type);
+        const auto& p = std::get<StructPayload>(type->payload);
+        size_t offset = 0;
+        size_t maxAlign = 1;
+
+        for (const auto& field : p.fields) {
+            TypeLayout fl = getLayout(field.type, reg);
+            offset = TargetABI::alignTo(offset, fl.alignment);
+            offset += fl.size;
+            maxAlign = std::max(maxAlign, fl.alignment);
         }
-        return totalSize;
+        // Final struct size must be a multiple of its maximum field alignment
+        return { .size = TargetABI::alignTo(offset, maxAlign), .alignment = maxAlign };
+    }
+
+    case TypeKind::String:
+    case TypeKind::View:
+    case TypeKind::Vector:
+    case TypeKind::Map: {
+        // Derive layout directly from the canonical container schema
+        auto fields = TargetABI::getBuiltinContainerFields(type->kind);
+        size_t offset = 0;
+        size_t maxAlign = 1;
+
+        for (TypeKind fk : fields) {
+            TypeLayout fl = TargetABI::getScalarLayout(fk);
+            offset = TargetABI::alignTo(offset, fl.alignment);
+            offset += fl.size;
+            maxAlign = std::max(maxAlign, fl.alignment);
+        }
+        return { .size = TargetABI::alignTo(offset, maxAlign), .alignment = maxAlign };
     }
 
     case TypeKind::Sum: {
-        // The size of a sum type is sizeof(i32) + max payload size
-        const auto& payload = std::get<SumPayload>(type->payload);
+        const auto& p = std::get<SumPayload>(type->payload);
         size_t maxPayloadSize = 0;
+        size_t maxAlign = 4; // At least i32 for discriminant
 
-        for (const auto& variant : payload.variants) {
-            size_t variantSize = 0;
+        for (const auto& variant : p.variants) {
+            size_t varSize = 0;
             for (const auto* tupleTy : variant.tupleTypes) {
-                variantSize += getTypeSize(tupleTy);
+                TypeLayout tl = getLayout(tupleTy, reg);
+                varSize = TargetABI::alignTo(varSize, tl.alignment) + tl.size;
+                maxAlign = std::max(maxAlign, tl.alignment);
             }
             for (const auto& field : variant.fields) {
-                variantSize += getTypeSize(field.type);
+                TypeLayout fl = getLayout(field.type, reg);
+                varSize = TargetABI::alignTo(varSize, fl.alignment) + fl.size;
+                maxAlign = std::max(maxAlign, fl.alignment);
             }
-            maxPayloadSize = std::max(maxPayloadSize, variantSize);
+            maxPayloadSize = std::max(maxPayloadSize, varSize);
         }
-        return 4 + maxPayloadSize; // 4 bytes for discriminant + payload
+        size_t total = TargetABI::alignTo(4, maxAlign) + maxPayloadSize;
+        return { .size = TargetABI::alignTo(total, maxAlign), .alignment = maxAlign };
     }
 
     default:
-        return 8; // Fallback default for handles/pointers
+        return TargetABI::getScalarLayout(type->kind);
     }
 }
+
+size_t TypeRegistry::getTypeSize(const Type* type) { return getLayout(type, *this).size; }
 
 } // namespace maml::types

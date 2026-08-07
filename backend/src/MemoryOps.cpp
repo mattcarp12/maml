@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <llvm/IR/Intrinsics.h>
 #include <string>
 
@@ -6,11 +7,13 @@
 #include "TypeLowering.hpp"
 #include "mir.h"
 #include "sym.h"
+#include "types.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/Alignment.h"
 
 namespace maml {
 
@@ -25,6 +28,7 @@ void handle(CodegenContext& ctx, const mir::AllocaInst& inst)
 
     llvm::AllocaInst* alloca
         = ctx.Builder->CreateAlloca(llvmTy, nullptr, ctx.Sym.resolve(inst.dst));
+    ctx.Builder->CreateStore(llvm::Constant::getNullValue(llvmTy), alloca);
     ctx.SymbolEnv.back()[inst.dst] = alloca;
     ctx.SymbolTypes[inst.dst] = llvmTy;
 }
@@ -118,16 +122,26 @@ void handle(CodegenContext& ctx, const mir::LoadPtrInst& inst)
 void handle(CodegenContext& ctx, const mir::StoreInst& inst)
 {
     llvm::Value* val = evaluateValue(ctx, inst.value);
-    // llvm::Value* dstPtr = evaluateValue(ctx, inst.dstPtr);
-
     llvm::Value* dstPtr = evaluateAddress(ctx, inst.dstPtr);
 
     if (!dstPtr) {
         ctx.Error.fatal("store: failed to evaluate destination pointer");
         return;
     }
+
     if (dstPtr->getType()->isPointerTy()) {
-        ctx.Builder->CreateStore(val, dstPtr);
+        // Check if we are storing an Array (which evaluateValue returns as a pointer to memory)
+        if (inst.type && inst.type->kind == types::TypeKind::Array) {
+            llvm::Type* allocTy = llvmTypeFor(ctx, inst.type);
+            const llvm::DataLayout& DL = ctx.Module->getDataLayout();
+            uint64_t sizeBytes = DL.getTypeAllocSize(allocTy);
+
+            // Copy the full array memory from 'val' (src pointer) to 'dstPtr'
+            ctx.Builder->CreateMemCpy(
+                dstPtr, llvm::MaybeAlign(), val, llvm::MaybeAlign(), sizeBytes);
+        } else {
+            ctx.Builder->CreateStore(val, dstPtr);
+        }
     }
 }
 

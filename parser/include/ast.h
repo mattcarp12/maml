@@ -184,7 +184,7 @@ struct BoolLiteral : NodeBase {
 };
 
 struct StringLiteral : NodeBase {
-    std::string_view value;
+    std::string value;
 };
 
 struct InfixExpr : NodeBase {

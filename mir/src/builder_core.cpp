@@ -275,64 +275,13 @@ Value Builder::emitBorrow(SymID src, bool isMut, Position pos)
 // Memory Transfer Operations
 // =============================================================================
 
-bool Builder::isAggregateType(const types::Type* t)
-{
-    if (!t)
-        return false;
-    switch (t->kind) {
-    case types::TypeKind::Struct:
-    case types::TypeKind::Array:
-    case types::TypeKind::Sum:
-    case types::TypeKind::String:
-    case types::TypeKind::Vector:
-    case types::TypeKind::Map:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool Builder::ownsHeapMemory(const types::Type* t) const
-{
-    if (!t)
-        return false;
-    switch (t->kind) {
-    case types::TypeKind::Vector:
-    case types::TypeKind::Map:
-    case types::TypeKind::String:
-        return true;
-    case types::TypeKind::Struct:
-        for (auto& f : std::get<types::StructPayload>(t->payload).fields) {
-            if (ownsHeapMemory(f.type))
-                return true;
-        }
-        return false;
-    case types::TypeKind::Array:
-        return ownsHeapMemory(std::get<types::ArrayPayload>(t->payload).base);
-    case types::TypeKind::Sum:
-        for (auto& v : std::get<types::SumPayload>(t->payload).variants) {
-            for (auto& f : v.fields) {
-                if (ownsHeapMemory(f.type))
-                    return true;
-            }
-            for (auto& tt : v.tupleTypes) {
-                if (ownsHeapMemory(tt))
-                    return true;
-            }
-        }
-        return false;
-    default:
-        return false;
-    }
-}
-
 void Builder::emitTransfer(SymID dst, Value val, Position pos)
 {
     if (locals_[dst]->kind == types::TypeKind::Unit)
         return;
 
     if (auto* reg = std::get_if<Register>(&val)) {
-        if (ownsHeapMemory(reg->type)) {
+        if (reg->type && reg->type->ownsHeapMemory()) {
             push(MoveInst { dst, reg->name, pos });
         } else {
             push(CopyInst { dst, reg->name, pos });
@@ -370,7 +319,7 @@ const types::Type* Builder::lowerParamType(const types::Type* t, Capability cap)
 {
     if (cap == Capability::Mut)
         return reg_.getPrimitive(types::TypeKind::Ptr);
-    if (cap == Capability::Ro && ownsHeapMemory(t))
+    if (cap == Capability::Ro && t->ownsHeapMemory())
         return reg_.getPrimitive(types::TypeKind::Ptr);
     return t;
 }

@@ -109,7 +109,8 @@ struct Type {
     [[nodiscard]] bool isInteger() const;
     [[nodiscard]] bool canRepresentInt(int64_t value) const;
     [[nodiscard]] bool isCopyable() const;
-
+    [[nodiscard]] bool isAggregate() const;
+    [[nodiscard]] bool ownsHeapMemory() const;
     [[nodiscard]] std::string toString(const SymbolTable& sym) const;
 };
 

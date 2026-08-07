@@ -36,9 +36,6 @@ void handle(CodegenContext& ctx, const mir::CoroPromisePtrInst& inst);
 
 void compileInstruction(CodegenContext& ctx, const mir::Instruction& inst)
 {
-    // -- ADD DEBUG PRINT --
-    // llvm::errs() << "[DEBUG compileInstruction] Line: " << getPosOf(inst).line
-    //              << " | Variant Index: " << inst.index() << "\n";
 
     std::visit(
         [&](auto&& arg) {
@@ -47,10 +44,6 @@ void compileInstruction(CodegenContext& ctx, const mir::Instruction& inst)
                 // Nothing to emit.
             } else if constexpr (std::is_same_v<T, mir::BorrowInst>
                 || std::is_same_v<T, mir::KeepAliveInst>) {
-                // These must have been eliminated by passes::lowerLinearTypes
-                // (BorrowInst -> AddressOfInst, KeepAliveInst dropped) before the
-                // MIR reaches the backend. Seeing one here means the pass
-                // pipeline ran out of order or was skipped.
                 ctx.Error.fatal("Internal error: BorrowInst/KeepAliveInst reached codegen; "
                                 "passes::lowerLinearTypes must run before compileProgram.");
             } else {
@@ -136,10 +129,12 @@ void compileTerminator(CodegenContext& ctx, const mir::Terminator& term)
                     ctx.Builder->CreateStore(retVal, typedPromise);
                 }
 
-                // 2. Execute a FINAL Suspend
+                // 2. Capture state with @llvm.coro.save so CoroSplit sets handle->resume = null
                 llvm::Function* saveFn
                     = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_save);
-                llvm::Value* coroState = ctx.Builder->CreateCall(saveFn, { ctx.CurrentCoroHandle });
+                llvm::Value* coroState
+                    = ctx.Builder->CreateCall(saveFn, { ctx.CurrentCoroHandle }, "coro.state");
+
                 llvm::Function* suspendFn
                     = llvm::Intrinsic::getDeclaration(Module, llvm::Intrinsic::coro_suspend);
                 llvm::Value* isFinal = llvm::ConstantInt::get(llvm::Type::getInt1Ty(Context), 1);

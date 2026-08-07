@@ -123,8 +123,6 @@ private:
         Value ptrVal, TokenType op, ast::Expr rhsExpr, const types::Type* elemType, Position pos);
 
     const types::Type* lowerParamType(const types::Type* t, Capability cap);
-    bool ownsHeapMemory(const types::Type* t) const;
-    static bool isAggregateType(const types::Type* t);
     Value boxScalar(Value val, const types::Type* t, Position pos);
     Value emitRuntimeCall(
         SymID funcSym, const types::Type* retType, const std::vector<Value>& args, Position pos);
@@ -145,6 +143,7 @@ private:
     // Composite literal lowering
     Value lowerVecLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType);
     Value lowerMapLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType);
+    Value lowerSumTypeLiteral(ast::CompositeLiteral* e, const types::Type* resolvedType);
     std::tuple<Value, Value, Value> lowerMapKey(ast::Expr keyExpr, Position pos);
 };
 

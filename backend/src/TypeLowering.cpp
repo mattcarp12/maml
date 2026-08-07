@@ -1,5 +1,6 @@
 #include "TypeLowering.hpp"
 #include "CodegenContext.hpp"
+#include "type_layout.h"
 #include "types.h"
 #include <cstdint>
 #include <llvm/IR/DataLayout.h>
@@ -10,26 +11,20 @@
 
 namespace maml {
 
-inline llvm::StructType* getStringType(llvm::LLVMContext& C)
+static llvm::StructType* getBuiltinLLVMStruct(
+    CodegenContext& ctx, types::TypeKind kind, const std::string& name)
 {
-    return llvm::StructType::get(C,
-        { llvm::PointerType::getUnqual(C), llvm::Type::getInt64Ty(C), llvm::Type::getInt1Ty(C) });
-}
-inline llvm::StructType* getVectorType(llvm::LLVMContext& C)
-{
-    return llvm::StructType::get(C,
-        { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
-            llvm::Type::getInt32Ty(C) });
-}
-inline llvm::StructType* getViewType(llvm::LLVMContext& C)
-{
-    return llvm::StructType::get(C, { llvm::PointerType::getUnqual(C), llvm::Type::getInt64Ty(C) });
-}
-inline llvm::StructType* getMapType(llvm::LLVMContext& C)
-{
-    return llvm::StructType::get(C,
-        { llvm::PointerType::getUnqual(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C),
-            llvm::Type::getInt32Ty(C), llvm::Type::getInt32Ty(C), llvm::Type::getInt1Ty(C) });
+    if (auto* existing = llvm::StructType::getTypeByName(ctx.Context, name)) {
+        return existing;
+    }
+
+    std::vector<llvm::Type*> llvmFields;
+    for (types::TypeKind fieldKind : types::TargetABI::getBuiltinContainerFields(kind)) {
+        // Recursively resolve each field through llvmTypeFor
+        llvmFields.push_back(llvmTypeFor(ctx, ctx.TypReg.getPrimitive(fieldKind)));
+    }
+
+    return llvm::StructType::create(ctx.Context, llvmFields, name);
 }
 
 llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
@@ -37,11 +32,6 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
     if (!type) {
         return llvm::Type::getVoidTy(ctx.Context);
     }
-
-    // -- DROP THIS DEBUG PRINT --
-    // llvm::errs() << "[DEBUG llvmTypeFor] Kind: " << static_cast<int>(type->kind)
-    //              << " | Name: " << type->toString(ctx.Sym) << "\n";
-    // ---------------------------
 
     switch (type->kind) {
     // --- Primitives ---
@@ -92,15 +82,15 @@ llvm::Type* llvmTypeFor(CodegenContext& ctx, const types::Type* type)
         ctx.Error.fatal("Unknown primitive type reached backend pipeline.");
         return nullptr;
 
-    // --- Runtime compound types ---
+        // --- Runtime compound types ---
     case types::TypeKind::String:
-        return getStringType(ctx.Context);
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.String");
     case types::TypeKind::View:
-        return getViewType(ctx.Context);
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.View");
     case types::TypeKind::Vector:
-        return getVectorType(ctx.Context);
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.Vector");
     case types::TypeKind::Map:
-        return getMapType(ctx.Context);
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.Map");
 
     // --- Composites ---
     case types::TypeKind::Array: {
@@ -185,14 +175,15 @@ llvm::Type* llvmLayoutTypeFor(CodegenContext& ctx, const types::Type* type)
         return nullptr;
     }
 
-    // Bypass the standard local-variable pointer resolution to fetch the raw StructType
     switch (type->kind) {
-    case types::TypeKind::Vector:
-        return getVectorType(ctx.Context);
-    case types::TypeKind::Map:
-        return getMapType(ctx.Context);
+    case types::TypeKind::String:
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.String");
     case types::TypeKind::View:
-        return getViewType(ctx.Context);
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.View");
+    case types::TypeKind::Vector:
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.Vector");
+    case types::TypeKind::Map:
+        return getBuiltinLLVMStruct(ctx, type->kind, "maml.Map");
     default:
         return llvmTypeFor(ctx, type);
     }

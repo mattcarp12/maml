@@ -98,6 +98,7 @@ void TypeResolutionPass::visit(ast::TypeDecl& node)
             sym.variantDiscriminant = v.discriminant;
 
             ctx_.globalScope->defineSymbol(v.name, sym);
+            ctx_.globalScope->defineType(v.name, shell);
         }
 
         ctx_.semantic.setTypeOf(&node, shell);

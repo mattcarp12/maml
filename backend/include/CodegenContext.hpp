@@ -12,6 +12,7 @@
 
 #include "mir.h"
 #include "sym.h"
+#include "type_registry.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
@@ -41,7 +42,8 @@ public:
     std::unique_ptr<llvm::Module> Module;
     std::unique_ptr<llvm::IRBuilder<>> Builder;
     ErrorHandler Error;
-    SymbolTable& Sym; // Reference to frontend symbol table
+    SymbolTable& Sym;
+    types::TypeRegistry& TypReg;
 
     // --- Observability & Tracking ---
     SymID CurrentFunctionName = NoSymbol;
@@ -59,7 +61,8 @@ public:
     llvm::BasicBlock* CoroCleanupBlock = nullptr;
     mir::BlockID CoroEntryBlockId = mir::InvalidBlock;
 
-    CodegenContext(const std::string& moduleName, SymbolTable& symTable);
+    CodegenContext(
+        const std::string& moduleName, SymbolTable& symTable, types::TypeRegistry& typeRegistry);
 
     void pushScope();
     void popScope();

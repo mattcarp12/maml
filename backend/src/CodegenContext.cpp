@@ -1,5 +1,6 @@
 #include "CodegenContext.hpp"
 #include "sym.h"
+#include "type_registry.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
@@ -55,8 +56,8 @@ void ErrorHandler::fatal(std::string_view message)
     llvm::report_fatal_error(llvm::StringRef(message.data(), message.size()), false);
 }
 
-CodegenContext::CodegenContext(const std::string& moduleName, SymbolTable& symTable)
-    : Sym(symTable)
+CodegenContext::CodegenContext(const std::string& moduleName, SymbolTable& symTable, types::TypeRegistry& typeRegistry)
+    : Sym(symTable), TypReg(typeRegistry)
 {
     Module = std::make_unique<llvm::Module>(moduleName, Context);
     Builder = std::make_unique<llvm::IRBuilder<>>(Context);

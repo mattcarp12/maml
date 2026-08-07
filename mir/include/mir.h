@@ -1,11 +1,10 @@
 #pragma once
 
-#include "ast.h"
 #include "sym.h"
 #include "token.h"
 #include "types.h"
 #include <cstdint>
-#include <string_view>
+#include <string>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -38,7 +37,7 @@ struct BoolConstant {
 };
 
 struct StringConstant {
-    std::string_view value;
+    std::string value;
     const types::Type* type = nullptr;
     Position pos;
 };

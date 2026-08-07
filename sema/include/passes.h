@@ -158,14 +158,18 @@ public:
     void visit(ast::BlockStmt& node) override;
 
     // In-place expression desugaring entry point
-    ast::Expr desugarExpr(ast::Expr expr);
 
 private:
     int matchSubjCounter_ = 0;
+    int mapSubjCounter_ = 0;
 
+    const types::Type* typeOfExpr(const ast::Expr& expr);
+    ast::Expr desugarExpr(ast::Expr expr);
     ast::Expr desugarInfixExpr(ast::InfixExpr* infix);
     ast::Expr desugarMatchExpr(ast::MatchExpr* match);
-
+    ast::Stmt desugarStmt(ast::Stmt stmt);
+    ast::ExprStmt* desugarMapAssign(ast::AssignStmt* assign, ast::IndexExpr* idx);
+    ast::BlockStmt* desugarMapGet(ast::IndexExpr* idx);
     ast::BlockStmt* makeExprBlock(ast::Expr expr, const types::Type* blockType, Position pos);
     ast::Expr makeBoolLiteral(bool val, Position pos);
     ast::Expr makeDiscriminantCheck(ast::Expr subjectRef, int discriminant, Position pos);
